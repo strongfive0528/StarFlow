@@ -721,7 +721,7 @@ In `values-zh/arrays.xml`, find and replace `manga_menu_items`:
     <item>字体大小设置</item>
     <item>开启自动翻译</item>
     <item>关闭悬浮球</item>
-    <item>回到萌译主界面</item>
+    <item>回到星译主界面</item>
 </string-array>
 ```
 
@@ -733,7 +733,7 @@ In `values/arrays.xml` and `values-en/arrays.xml`, find and replace `manga_menu_
     <item>Set Font Size</item>
     <item>Turn On Auto Translation</item>
     <item>Close Floating Ball</item>
-    <item>Return to MoeTranslate Main Page</item>
+    <item>Return to StarFlow Main Page</item>
 </string-array>
 ```
 
@@ -745,7 +745,7 @@ Also add a second array for when auto-translate is on. In `values-zh/arrays.xml`
     <item>字体大小设置</item>
     <item>关闭自动翻译</item>
     <item>关闭悬浮球</item>
-    <item>回到萌译主界面</item>
+    <item>回到星译主界面</item>
 </string-array>
 ```
 
@@ -757,7 +757,7 @@ In `values/arrays.xml` and `values-en/arrays.xml`:
     <item>Set Font Size</item>
     <item>Turn Off Auto Translation</item>
     <item>Close Floating Ball</item>
-    <item>Return to MoeTranslate Main Page</item>
+    <item>Return to StarFlow Main Page</item>
 </string-array>
 ```
 
