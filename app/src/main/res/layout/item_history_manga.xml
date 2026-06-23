@@ -26,8 +26,10 @@
             <ImageView
                 android:id="@+id/iv_thumbnail"
                 android:layout_width="match_parent"
-                android:layout_height="180dp"
-                android:scaleType="centerCrop" />
+                android:layout_height="wrap_content"
+                android:adjustViewBounds="true"
+                android:maxHeight="200dp"
+                android:scaleType="fitCenter" />
 
             <!-- 尺寸数量徽章 -->
             <TextView
