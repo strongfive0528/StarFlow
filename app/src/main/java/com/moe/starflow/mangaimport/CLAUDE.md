@@ -289,6 +289,11 @@
   ⚠️ 关闭后**拒绝重新打开**（`closed` 终态 + `PdfPageRenderer` 同样拒绝）：关闭发生在"退出阅读器"
   那一刻，而在途的 `loadFull` 可能还在跑（读的是关闭前捕获的 lambda）——允许重开就会把整本 PDF
   重新打开、而此后没人再关 → **每退出一次漏一个 FD**。合法重建路径都是**新建数据源**。
+  ⚠️ 终态的**精确语义**：**碰文件的一律拒绝**（`loadFull` / `loadThumb` / `loadWebtoon` /
+  `openEntry` / `pageBytes`），但**已经缓存过的几何尺寸仍会作答**（`originalWidth/Height` 是纯 map 查表，
+  不做 IO、不碰 FD）——阅读器 Webtoon 钉行高的代码可能在界面正在消失时还问一次，返回缓存值无害。
+  别把它"修"成返回 0（那会让正在绑定的那一行退回 `WRAP_CONTENT`，就是模块文档记过的「页面一直跳」）。
+  真机守卫：`PdfPageSourceProbe`（见下）。
 - PDF 页**没有**"原始条目字节流"：`openEntry` 只能现渲 + JPEG 编码（旧 zip 双语链路遇到 PDF
   不至于交白卷）；正式出口是 PDF 导出。
 
@@ -357,9 +362,18 @@
   流长度、退化页尺寸）、`PdfPageKeysTest`（合成 key → 单章 + 页序不被重排）、
   `PdfImportFailureClassifyTest`（PDF 的失败原因不会被吃成"不是压缩包"）、
   `ImportedMangaStoreTest`（`isPdf` 真 JSON 往返 + 老清单缺键回落 false）。
-- 真机验证不需要装 App：`tools/pdf-render-probe/`（`app_process` 一次性探针，已在真机核过
-  `render` 语义与"我们写出的 PDF 能被系统 `PdfRenderer` 打开"）+ `tools/make-sample-pdf.ps1`
-  （造 A5@300dpi 的样本 PDF，中日文台词；`tools/` 已 gitignore）。
+- 真机验证不需要装 App，一条命令跑完：`tools/verify-pdf-import.ps1`（4 段：真实类读+导出回环 /
+  **真实 `ReaderPageSource`** / `render` 语义 / 安装版 == 构建版）。它用 `app_process` 把
+  **App 自己的 dex**（构建出的 APK）挂在 runtime classpath 上跑三个探针，所以验的是**出货代码**、
+  不是重写实现：
+  - `PdfReadPathProbe`：页 key / 权威尺寸 / 逐页渲染 / Webtoon 采样 / 缩略图 / 导出回环（系统 `PdfRenderer` 读回）
+  - `PdfPageSourceProbe`：**真实 `ReaderPageSource`** —— 页数、单章（章号 1）、key、
+    `originalWidth/Height`、逐页 `loadFull`（尺寸 == 权威尺寸且有墨）、`loadThumb`、`loadWebtoon`、
+    `pageBytes==0`、`openEntry` 是 JPEG、`close()` 后文件类访问一律拒绝且可重复调用
+  - `PdfRenderProbe`：`transform=null` 与带缩放矩阵两种渲染的 PNG **逐字节相同**（分辨率只由位图尺寸决定）
+  - 另外 `tools/make-sample-pdf.ps1` 造 A5@300dpi 样本 PDF（中日文台词）。`tools/` 已 gitignore。
+  ⚠️ 写 `.ps1` 时**只用 ASCII**：Windows PowerShell 5.1 把无 BOM 的脚本按 ANSI 解码，
+  CJK 注释会吞掉后一个换行（曾把一条赋值吞进注释里，脚本静默走错分支）。
 
 
 ### 章节批量翻译：应用级后台任务 + 并发流水线（2026-10 大改，改动前必读）
