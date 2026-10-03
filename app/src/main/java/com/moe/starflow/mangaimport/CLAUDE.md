@@ -39,6 +39,8 @@
   | 原文（已有） | 全部页 | archive 直接复制原 zip；目录包扁平名 |
   | 译文 | **只有已成功翻译的页**（失败/未译不导出） | `<原目录>/<原名主干>.jpg`（统一 JPEG 95） |
   | 双语 | 每个已翻译页**两个条目**：原文原文 + 译文 | 原文用**原名原扩展名**，译文 `<主干>_译文.jpg`，同层混放 |
+  ⚠️ **PDF 书例外**：PDF 的下载出口是 **PDF**（原文=复制原文件 / 译文=全页回填 / 双语=原图页+译图页），
+  走 `ReaderPdfExport` + `PdfJpegWriter`，不套用下面这一整套 zip 命名规则 —— 见「PDF 导入」一节 ⑤。
   - ⚠️ **命名一律沿用原压缩包的序号**，绝不按「第几个已翻译页」重编号：原包 1..10 只翻了 1/2/5/6 → 导出就是 `001/002/005/006`，不是 `1/2/3/4`。规则收在 `ExportNaming`（纯函数，`ExportNamingTest` 12 例覆盖）
   - ⚠️ **条目名必须保留原目录前缀**（`ch1/005.jpg` → `ch1/005.jpg`）：zip 里重名会让 `ZipOutputStream.putNextEntry` 抛 `ZipException: duplicate entry`，**整个导出直接失败**（子目录漫画 `ch1/005` 与 `ch2/005` 会撞）
   - ⚠️ 双语包的原文条目走 `ReaderPageSource.openEntry` **原样搬运字节**，不能 `loadFull` + 重新编码 —— 原图多是 JPEG，解成 Bitmap 再压回去是二次有损压缩（掉画质、体积还可能更大）
@@ -213,6 +215,129 @@
     （正按钮 = 只翻未完成 → 系统默认聚焦它 = 默认不覆盖，用户口径）。
   - **清除本章**：删该章区间内所有翻译行 + **三个渲染缓存**（`renderLru` 三态 / `PARTIAL` /
     `webtoonLru`）+ 内存行，带误删确认弹窗；**不做整本清理入口**（用户口径）。
+
+
+### PDF 导入（2026-10，改动前必读）
+
+> 用户口径：漫画要能**直接导入 PDF**（含扫描 PDF），「你要清楚找到分页的位置」；
+> 方案由用户在三个选项里选定：**保留 PDF + 按需栅格化**（不是导入即转图，也不是转图后删 PDF）。
+
+**① 分页真值 = PDF 的 page tree**（`PdfRenderer.pageCount`）
+- PDF 的「页」是文件内部的 page tree（每页一个对象），**与有没有文本层无关**。
+  扫描 PDF 只是每页内容是一整张位图，页边界照样由 page tree 给出 ——
+  所以分页**不需要**解析文件名、不需要文本层、不依赖扩展名。
+- 章节：framework **不**暴露 PDF 目录（outline）→ 整本 = **1 章**（`MangaChapter(number=1, title="")`
+  → 界面显示「第1章」，与单章漫画同一条路）。`MangaChapterMigrator` 对 PDF **直接跳过**
+  （`localRoot` 是文件，按目录枚举永远为空）。
+- 识别按**魔数**（`ArchiveTypes`，不看扩展名）：`%PDF-` 允许出现在**前 1KB 内任意位置**
+  （`SNIFF_BYTES = 1024`）——只比对第 0 字节会把带 BOM/注释的正常文件判成 UNKNOWN。
+
+**② 存储：保留原 PDF，页图**只在内存里按需生成**（`PdfPageRenderer`）**
+- 为什么不做「导入即转图」（rar/7z 那条路）：rar/7z **没有中央目录**、随机读一页要顺序扫整包，
+  所以解压 + 删原包是对的；PDF 恰好相反 —— **页码索引 + 随机渲染是 pdfium 的原生能力**。
+  转图的代价是存储 ×2~3、导入从秒级变分钟级，还把分辨率**焊死在导入那一刻**
+  （以后想提高 OCR 分辨率就得整本重导）。
+- 而且本项目**译文从来不落图**（只存气泡 + 文本，显示时 `renderOverlay` 实时渲）→
+  「按需栅格化」与既有架构同构，不是新发明。
+- 导入只做三件事：`pageCount` 探页数、渲第 1 页当封面、算好章节表。**不写任何页图**
+  （守卫 `PdfImportWiringTest` 断言 importPdf 里没有 `FileOutputStream`/`compress(`）。
+
+**③ 像素空间只有一个来源：`PdfRasterPolicy`（300 DPI + 上限）**
+- 图片有文件里写死的原生尺寸，**PDF 没有** —— 像素尺寸是**我们自己选的**。
+  于是「同一页 pt 尺寸 → 永远同一个像素尺寸」必须由**一处纯函数**保证：
+  `loadFull` / `loadWebtoon` / `loadThumb` / `originalWidth/Height` / 导出页尺寸**全都调它**。
+  两处算法不一致 = 气泡框画在别处（看起来像随机错位，极难排查）。
+- `RASTER_DPI = 300` 是**钉死的基线**（A5≈1750×2479、B5≈2150×3033）：
+  改它等于改所有 PDF 页的坐标空间、老译文全废 → `PdfRasterPolicyTest` 直接锁住这个数字。
+- 上限：长边 `MAX_LONG_SIDE=4096`、总像素 `MAX_PIXELS=12M`（与 `computeSample` 同口径）；
+  下限 `MIN_LONG_SIDE=600`（异常小的页面也要能 OCR）。Webtoon/缩略图**在目标尺寸上直接光栅化**
+  （**分辨率只由目标位图的尺寸决定**，`render` 的 `transform` 传 `null`，见 ④ 的实测结论）。
+- **采样判据也只有一处**：`PdfRasterPolicy.sampleFor`（目标宽 + 12:1 高宽比 + 12M 像素），
+  图片路径的 `ReaderPageSource.computeSample` 已改成**委托**它 —— 两边各写一份就会出现
+  "同一页在原图/Webtoon 下算出不同尺寸"，气泡缩放系数随之对不上。
+- ⚠️ **权威位图缓存的预算必须 ≥ 单页上限**（`CANONICAL_CACHE_BUDGET_BYTES = 64MB` ≥ `MAX_PIXELS×4B = 48MB`）：
+  `LruCache` 对"单条比 maxSize 还大"的条目会在 `put` 之后**立刻把自己挤出去** → 缓存恒不命中，
+  同一页在一次"显示 + OCR + 超分 + 导出"里被重渲 2~4 次（每次 300~600ms）还每次抢渲染锁。
+  曾经写 32MB，而**最常见的 A4 页恰好要 34.8MB**（2480×3508）—— 正好落在这个坑里。
+  守卫：`PdfRasterPolicyTest.theCacheBudgetCanHoldTheLargestPage`。
+
+**④ `ReaderPageSource` 的 PDF 分支（7 个方法全接）**
+- 页 key 由页数生成（`PdfPageKeys.of(i)` = `page_0001.jpg`）：页序就是 page tree 顺序，**不需要按文件名猜**，
+  `MangaChapterSplitter` 拿到它自然得到「单章 + 顺序页」。key 规则是**纯函数**（`PdfPageKeys`），
+  守卫 `PdfPageKeysTest`：零填充 → 自然排序 = 页号升序、`of(-5)` 不产出 `page_0000`、
+  `all(n)` 喂给切分器必须得到「恰好 1 章、章号 1、页序不变」（10005 页那条覆盖补零变宽）。
+- ⚠️ **`private val pdf: PdfPageRenderer?` 必须声明在 `rawKeys` 之前**：
+  `rawKeys` 的初始化器要读 `pdf.pageCount`，而 Kotlin 属性初始化**按声明顺序**执行 ——
+  声明晚了就是 PDF 书一打开就 NPE（表现为「文件丢失」）。守卫会核这个先后顺序。
+- ⚠️ **尺寸查询用独立的第二个渲染器 `pdfGeometry`**：`ReaderAdapters` 在 **onBindViewHolder（主线程）**
+  里查 `originalWidth/Height`（Webtoon 钉行高），而渲染在 IO 上跑、**整个 native 渲染期间都持着
+  渲染器那把锁**（真机实测一页 80~275ms）。共用一个实例 = 主线程整整阻塞一次渲染 → 滑 Webtoon 连续掉帧。
+  已排除的两个反面方案：①构造期一次性预取全部页尺寸（实测高密度页 27ms/页 → 几百页就是秒级，
+  全落在"打开阅读器"那一下）；②查不到就返回 0（Webtoon 行高退回 `WRAP_CONTENT` = 模块文档记过的
+  「页面一直跳」）。代价：一个 PDF 数据源占 2 个 FD。
+- ⚠️ **权威尺寸位图的缓存不许外借**：`loadFull` 的契约是"调用方拥有的新位图"（调用方会 `recycle`），
+  所以缓存命中时返回 `cached.copy(...)`；额度取 `PdfRasterPolicy.CANONICAL_CACHE_BUDGET_BYTES`（64MB，
+  见 ③ 的"必须 ≥ 单页上限"）。峰值 = 渲染中 + 缓存 + 副本 ≈ 3 页（与 `renderLru` 100MB 叠加，
+  低端机要留意，这是刻意的权衡）。**不要在 `entryRemoved` 里 `recycle`**：挤出瞬间另一线程可能正在
+  `copy()` 它 → `IllegalStateException`（被 runCatching 吞成"那一页白屏"，偶发且难复现）。
+- ⚠️ **`pageBytes` 对 PDF 恒返回 0**：PDF 里没有"某一页的字节数"（页是矢量/图像对象的组合），
+  编一个"平均每页大小"比 0 更糟（超分面板会把它显示得像真数据）。0 → 面板显示 `-`。
+- ⚠️ **FD 生命周期（close 是终态）**：`PdfRenderer` 持有 `ParcelFileDescriptor`，一个 PDF 数据源 2 个。
+  `ReaderPageSource.close()` 由**两处**调用：阅读器 `onDestroy`（Activity 自持那份）与控制器
+  `shutdownAll()`（`ownSource`；判据 `ownSourceCreated` —— 直接 `close()` 会触发 lazy 初始化，
+  等于**进程收尾时白解析整本 PDF 再立刻关掉**）。
+  ⚠️ 关闭后**拒绝重新打开**（`closed` 终态 + `PdfPageRenderer` 同样拒绝）：关闭发生在"退出阅读器"
+  那一刻，而在途的 `loadFull` 可能还在跑（读的是关闭前捕获的 lambda）——允许重开就会把整本 PDF
+  重新打开、而此后没人再关 → **每退出一次漏一个 FD**。合法重建路径都是**新建数据源**。
+- PDF 页**没有**"原始条目字节流"：`openEntry` 只能现渲 + JPEG 编码（旧 zip 双语链路遇到 PDF
+  不至于交白卷）；正式出口是 PDF 导出。
+
+**⑤ 导出 PDF：自己写、JPEG 直嵌（`PdfJpegWriter`）**
+- 三种出口（PDF 书）：**原文** = 原样复制那个 PDF（不重新生成 —— 那会丢矢量/文本层、体积还涨）；
+  **译文** = 全页（已译页出译图，**未译页回填原图** —— PDF 少页会让页码错位，比"某几页还是原文"难用）；
+  **双语** = 已译页「原图页 + 译图页」成对，未译页只出原图页（页数 = `N + 已译页数`，不是 `2N`）。
+- ⚠️ **三条出口都直写 `MediaStore`（`streamToDownloads`），不落 `cacheDir` 临时文件**：
+  PDF 书动辄 100MB~1GB，先写临时文件再复制 = 同一份数据占两次盘（还要 2~3 倍瞬时空间），
+  失败时只能报一句「导出失败」。直写之后"写坏了"与"没写"是同一件事 —— 删掉那条记录即可，
+  绝不会在下载目录留一个打不开的文件。zip 那条链路仍走临时文件（`writeToDownloads`，未改动）。
+- ⚠️ **只有真的写完 trailer 才算成功**（`completed` 标志）：中途 IOException 产生的截断 PDF
+  **没有 xref、阅读器根本打不开**，不能被当成"部分成功"交付（zip 截断还能解开一部分，PDF 不能）。
+- ⚠️ **导出途中译文被删也要如实计数**：`translated` 是导出开始时的快照，而 `renderForExport` 现读载荷
+  （用户完全可能中途"删除该页译文 / 清空本章"）→ 拿不到就记 `skipped++` 并落日志。
+  不记的话双语包会只剩原图页、`skipped` 还是 0，用户以为整本都翻了。
+- ⚠️ **不用 `android.graphics.pdf.PdfDocument`**：Skia 的 PDF 后端对整页位图走**无损**压缩
+  （FlateDecode），一页 300DPI 图压完仍有十几 MB → 300 页的译文 PDF 能到几个 GB。
+  `PdfJpegWriter` 把**已经编码好的 JPEG 原样嵌入**（`/Filter /DCTDecode`），体积 ≈ 各页 JPEG 之和。
+- ⚠️ PDF 是**靠字节偏移**定位对象的：xref 每条必须**恰好 20 字节**（偏移 >10GB 会变 21 字节 → 表错位 → 文件读不了，
+  所以写入器直接 `check` 报错而不是写坏）、xref 条目数必须等于 trailer 的 `/Size`、
+  每个偏移必须正落在 `N 0 obj` 上、`startxref` 指向 `xref`、流的 `/Length` 必须等于真实字节数
+  （**内容流和图像流都要**）。这些由 `PdfJpegWriterTest` 把写出来的字节**当 PDF 解析一遍**逐条核
+  （0 页 / 1 页 / N 页都测）。
+- 页的**点尺寸**由像素尺寸按 `PdfRasterPolicy.RASTER_DPI` 反推（= 原页面尺寸），
+  所以导出 PDF 的"纸"和原书一致；进度按**原书页**上报（双语下一页可能写两张）。
+
+**⑥ 打不开的两种原因（`ImportFailureReason.PDF_ENCRYPTED / PDF_INVALID`）**
+- `PdfRenderer` **没有密码接口** → 加密 PDF 只能请用户先解密；
+  它与"损坏"都抛 `IOException/SecurityException`、没有错误码，只能**嗅探异常文本**
+  （message/类名里带 password/encrypt → 加密，其余 → 损坏）。判不出来按损坏处理，
+  文案里两种可能都写上。`FileNotFoundException/SecurityException` → 复用 `UNREADABLE`。
+- 文件选择器的 mime 列表要显式带上 `application/pdf`（SAF 按 mime 过滤，不给就选不中）。
+
+**⑦ 留给以后的口子（用户口径：复杂图表类 PDF 之后走"全新 PDF 导入页 + PDFMathTranslate 式路线"）**
+- 现在**只做 OCR 路线**：页图渲出来交给既有 OCR/气泡/覆盖层管线，扫描件与电子版同一条路。
+- 已知的下一步入口：**API 35 的 `PdfRenderer.Page.getTextContents()` 直接给「文本 + RectF 坐标」**
+  → 数字版 PDF 可以完全跳过 OCR（省时且更准）。minSdk 29 → 低版本必须回退 OCR，
+  所以那时应当引入**独立的 PDF 导入页/解析器**（参考 PDFMathTranslate：抽文本层 → 版面分析 →
+  在 PDF 里重排文字，适合论文/图表类），而**不是**把气泡管线改成两种模式。
+  `PdfPageRenderer` 是**唯一**的页面渲染入口 —— 新路线接在它旁边即可，别散落在 ReaderPageSource 里。
+- 守卫：`PdfImportWiringTest`（接线 +「不批量转图」+「像素口径单一」+ FD 释放/终态关闭）、
+  `PdfRasterPolicyTest`（几何 + 缓存预算 ≥ 单页上限）、`PdfJpegWriterTest`（PDF 结构：0/1/N 页、xref、`/Size`、
+  流长度、退化页尺寸）、`PdfPageKeysTest`（合成 key → 单章 + 页序不被重排）、
+  `PdfImportFailureClassifyTest`（PDF 的失败原因不会被吃成"不是压缩包"）、
+  `ImportedMangaStoreTest`（`isPdf` 真 JSON 往返 + 老清单缺键回落 false）。
+- 真机验证不需要装 App：`tools/pdf-render-probe/`（`app_process` 一次性探针，已在真机核过
+  `render` 语义与"我们写出的 PDF 能被系统 `PdfRenderer` 打开"）+ `tools/make-sample-pdf.ps1`
+  （造 A5@300dpi 的样本 PDF，中日文台词；`tools/` 已 gitignore）。
 
 
 ### 章节批量翻译：应用级后台任务 + 并发流水线（2026-10 大改，改动前必读）

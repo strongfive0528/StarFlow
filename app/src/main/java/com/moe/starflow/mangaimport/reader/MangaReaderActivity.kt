@@ -85,6 +85,10 @@ class MangaReaderActivity : AppCompatActivity() {
         private const val PANEL_PUSH_MIN_MS = 300L
         const val EXTRA_MANGA_ID = "manga_id"
 
+        /** 导出落盘用的 MIME（`writeToDownloads` 写错类型会让部分文件管理器打不开/不认后缀）。 */
+        private const val ZIP_MIME = "application/zip"
+        private const val PDF_MIME = "application/pdf"
+
         /** 通知栏点进来时带的目标页（该章第一页）；不传 = 按断点续读。 */
         const val EXTRA_START_PAGE = "start_page"
 
@@ -223,7 +227,7 @@ class MangaReaderActivity : AppCompatActivity() {
         val id = intent.getLongExtra(EXTRA_MANGA_ID, -1L)
         manga = ImportedMangaStore.load(this).firstOrNull { it.id == id }
             ?: run { finish(); return }
-        source = ReaderPageSource(manga.isArchive, manga.localRoot)
+        source = ReaderPageSource(manga.isArchive, manga.localRoot, isPdf = manga.isPdf)
         if (source.size == 0) {
             // 本地文件已丢失/损坏（可能被手动删除）：不再展示空白阅读器。
             // ⚠️ 走「短时报错」：这里紧跟着就 finish()，`onDestroy` 那次浮层清屏会吃掉普通提示，
@@ -630,6 +634,9 @@ class MangaReaderActivity : AppCompatActivity() {
         if (wasActive && !pausedToManualNotified) {
             notifyUser(getString(R.string.reader_translate_force_stopped_to_manual))
         }
+        // ⚠️ 释放本 Activity 自持的页数据源：PDF 的 `PdfRenderer` 占着 FD（有限资源）。
+        //    控制器那份是**另一个实例**（它自己的 ownSource），在 `shutdownAll` 里释放 —— 两边各关各的。
+        runCatching { source.close() }
         super.onDestroy()
     }
 
@@ -2428,7 +2435,10 @@ class MangaReaderActivity : AppCompatActivity() {
         }
         notifyUser(getString(R.string.reader_download_started))
         exportJob = lifecycleScope.launch {
-            val name = withContext(Dispatchers.IO) { exportOriginalZip() }
+            val name = withContext(Dispatchers.IO) {
+                // PDF 书：原文 = **原样复制**那个 PDF（重新生成会丢矢量/文本层，体积也涨）
+                if (manga.isPdf) exportOriginalPdf() else exportOriginalZip()
+            }
             if (name != null) {
                 notifyUser(getString(R.string.reader_download_done, name))
             } else {
@@ -2455,8 +2465,8 @@ class MangaReaderActivity : AppCompatActivity() {
             return
         }
         notifyUser(getString(R.string.reader_download_started))
+        val isPdf = manga.isPdf
         exportJob = lifecycleScope.launch {
-            val tmp = File(cacheDir, "manga_export_${System.currentTimeMillis()}.zip")
             val overlay = TranslationStatusOverlay.getInstance(this@MangaReaderActivity)
             val showProgress = statusOverlayEnabled()
             // 「我到底显示过没有」：dismiss 只能按这个判据，不能只看开关。
@@ -2467,23 +2477,35 @@ class MangaReaderActivity : AppCompatActivity() {
             // lifecycleScope 上**跨 onStop 继续跑**的任务（翻译队列 onStop 会暂停，导出不会）——
             // 不在前台还继续 showImmediate，就会把「正在导出」芯片重新贴到别的应用上挂到导出结束。
             fun progressVisible() = showProgress && lifecycle.currentState.isAtLeast(Lifecycle.State.STARTED)
+            val denominator = if (isPdf) source.size else total
             if (progressVisible()) {
                 progressShown = true
-                overlay.showImmediate(getString(R.string.reader_download_progress, 0, total), autoDismiss = false)
+                overlay.showImmediate(getString(R.string.reader_download_progress, 0, denominator), autoDismiss = false)
             }
+            // zip 需要临时文件；PDF 直写 Downloads（不落第二份，见 streamToDownloads 的说明）
+            var tmp: File? = null
             try {
-                val outcome = ReaderExport.exportTranslated(
-                    source = source,
-                    controller = controller,
-                    both = both,
-                    // 后缀随界面语言（中文 `_译文` / 英文 `_translated`），不在导出层硬编码
-                    translatedSuffix = getString(R.string.reader_export_suffix_translated),
-                    tempFile = tmp,
-                ) { done, sum ->
+                fun onStep(done: Int, sum: Int) {
                     if (progressVisible()) {
                         progressShown = true
                         overlay.showImmediate(getString(R.string.reader_download_progress, done, sum), autoDismiss = false)
                     }
+                }
+                // PDF 书出 PDF（`ReaderPdfExport`，全页口径），其余照旧出 zip（`ReaderExport`，只出已译页）
+                val outcome = if (isPdf) {
+                    exportPdfToDownloads(controller, both, ::onStep)
+                } else {
+                    val zipTmp = File(cacheDir, "manga_export_${System.currentTimeMillis()}.zip")
+                    tmp = zipTmp
+                    ReaderExport.exportTranslated(
+                        source = source,
+                        controller = controller,
+                        both = both,
+                        // 后缀随界面语言（中文 `_译文` / 英文 `_translated`），不在导出层硬编码
+                        translatedSuffix = getString(R.string.reader_export_suffix_translated),
+                        tempFile = zipTmp,
+                        onProgress = ::onStep,
+                    )
                 }
                 // ⚠️ 只在自己显示过时才 dismiss（progressShown，不是开关）：浮层是共享单例且
                 // dismiss() 清空**全部**堆叠消息，开关开着但没显示过时静默收尾会误伤别的芯片
@@ -2494,13 +2516,45 @@ class MangaReaderActivity : AppCompatActivity() {
             } finally {
                 // ⚠️ 清理必须在 finally：导出中途退出阅读器会取消 lifecycleScope，上面所有
                 // delete 都跑不到 —— 几百 MB 的临时包会一直躺在 cacheDir 里没人清
-                tmp.delete()
+                tmp?.delete()
             }
         }
     }
 
     /**
+     * PDF 书的译文/双语导出：**边生成边写进下载目录**（不落临时文件 —— PDF 动辄几百 MB~1GB，
+     * 在 `cacheDir` 再存一份等于同一份数据占两次空间，还可能是 2~3 倍瞬时占用）。
+     *
+     * ⚠️ 失败（insert 失败 / 写一半抛异常 / **没写完 trailer**）→ 由 [streamToDownloads] 删掉那条
+     * MediaStore 记录并返回 false：截断的 PDF 没有 xref，阅读器根本打不开，绝不能当成功交付
+     * （zip 截断至少还能解开一部分，PDF 不能）。
+     */
+    private suspend fun exportPdfToDownloads(
+        controller: ReaderTranslationController,
+        both: Boolean,
+        onProgress: (done: Int, total: Int) -> Unit,
+    ): ExportOutcome {
+        val display = displayNameFor(both)
+        var outcome: ExportOutcome = ExportOutcome.Failed
+        val ok = streamToDownloads(display, PDF_MIME) { out ->
+            outcome = ReaderPdfExport.export(
+                source = source,
+                controller = controller,
+                both = both,
+                out = out,
+                onProgress = onProgress,
+            )
+            // 只有真的写完 trailer（Done）才算成功：Failed/Empty 都要让 streamToDownloads 删行
+            outcome is ExportOutcome.Done
+        }
+        return if (ok) outcome else ExportOutcome.Failed
+    }
+
+    /**
      * 导出结束后的用户可见结果：区分「没得导」「失败」「成功但跳过了页」。
+     *
+     * [tmp] = null 表示**内容已经写进下载目录了**（PDF 直写路径），这里只剩措辞；
+     * 非 null 表示还要把临时 zip 搬进下载目录（zip 路径）。
      *
      * 文案带上「是不是报错」：调用方要据此选红底芯片还是普通芯片（阅读器的提示全部走
      * [notifyUser]）。别在调用方拿文案去和 `reader_download_failed` 比字符串 ——
@@ -2508,7 +2562,11 @@ class MangaReaderActivity : AppCompatActivity() {
      */
     private data class ExportNotice(val text: String, val isError: Boolean)
 
-    private suspend fun exportMessage(outcome: ExportOutcome, both: Boolean, tmp: File): ExportNotice = when (outcome) {
+    private suspend fun exportMessage(
+        outcome: ExportOutcome,
+        both: Boolean,
+        tmp: File?,
+    ): ExportNotice = when (outcome) {
         ExportOutcome.Empty -> ExportNotice(getString(R.string.reader_download_nothing), false)
         ExportOutcome.Failed -> ExportNotice(getString(R.string.reader_download_failed), true)
         is ExportOutcome.Done -> {
@@ -2517,7 +2575,10 @@ class MangaReaderActivity : AppCompatActivity() {
                 ExportNotice(getString(R.string.reader_download_failed), true)
             } else {
                 val display = displayNameFor(both)
-                val saved = withContext(Dispatchers.IO) { writeToDownloads(display, tmp) }
+                // tmp == null → PDF 内容已在流里落盘，不需要再搬一次（zip 才走 writeToDownloads）
+                val saved = tmp == null || withContext(Dispatchers.IO) {
+                    writeToDownloads(display, tmp, ZIP_MIME)
+                }
                 when {
                     !saved -> ExportNotice(getString(R.string.reader_download_failed), true)
                     // 跳过的页必须说出来：包不完整时用户得知道
@@ -2530,9 +2591,14 @@ class MangaReaderActivity : AppCompatActivity() {
         }
     }
 
-    /** 下载文件名：书名（已过滤非法字符）+ 后缀（后缀随界面语言，见 strings）。 */
+    /** 下载文件名：书名（已过滤非法字符）+ 后缀（后缀随界面语言与**导出格式**，见 strings）。 */
     private fun displayNameFor(both: Boolean): String = safeTitle() + getString(
-        if (both) R.string.reader_export_zip_suffix_both else R.string.reader_export_zip_suffix_translated
+        when {
+            manga.isPdf && both -> R.string.reader_export_pdf_suffix_both
+            manga.isPdf -> R.string.reader_export_pdf_suffix_translated
+            both -> R.string.reader_export_zip_suffix_both
+            else -> R.string.reader_export_zip_suffix_translated
+        }
     )
 
     /**
@@ -2541,6 +2607,25 @@ class MangaReaderActivity : AppCompatActivity() {
      */
     private fun safeTitle(): String =
         manga.title.replace(Regex("[\\\\/:*?\"<>|\\p{Cntrl}]"), "_").ifBlank { "manga" }
+
+    /**
+     * 原文导出（**PDF 书**）：原样复制那个 PDF。
+     *
+     * ⚠️ 不重新生成为"图片 PDF"：原文件带矢量/文本层/原始压缩，复制是零损失且瞬时；
+     * 重新生成既掉画质又涨体积（见 [ReaderPdfExport] 的说明）。
+     *
+     * ⚠️ **也不经过 `cacheDir`**：先用临时文件再复制 = 同一份数据在磁盘上出现两次，
+     * 几百 MB~1GB 的书很容易在"空间不足"上翻车，而且失败时只报一句「导出失败」。
+     */
+    private suspend fun exportOriginalPdf(): String? {
+        val display = safeTitle() + getString(R.string.reader_export_pdf_suffix_original)
+        // 流式直写（见 streamToDownloads）——调用方在 IO 协程里，所以直接调 suspend 版本
+        val ok = streamToDownloads(display, PDF_MIME) { out ->
+            File(manga.localRoot).inputStream().use { it.copyTo(out) }
+            true
+        }
+        return if (ok) display else null
+    }
 
     private fun exportOriginalZip(): String? {
         val display = safeTitle() + getString(R.string.reader_export_zip_suffix_original)
@@ -2572,10 +2657,51 @@ class MangaReaderActivity : AppCompatActivity() {
         }
     }
 
-    private fun writeToDownloads(displayName: String, file: File): Boolean {
+    /**
+     * 建 MediaStore 记录 → 打开输出流 → 交给 [write] 边写边落盘 → 失败就删掉那条记录。
+     *
+     * ⚠️ **大文件（PDF）不落临时副本**：先在 `cacheDir` 写一份再复制到 Downloads 等于同一份数据
+     * 占两次空间（大书还要 2~3 倍瞬时空间），而失败只能用「导出失败」一句话搪塞用户。
+     * 直写之后，"写坏了"与"没写"是同一件事 —— 删行即可，绝不会在下载目录留一个打不开的文件。
+     *
+     * ⚠️ `insert` 与 `openOutputStream` **都必须在 try 内**：MediaProvider 不可用（存储未挂载/受限）
+     * 会抛 SecurityException / IllegalArgumentException，而调用方多是协程 —— 抛出去就是进程崩溃。
+     *
+     * @return 是否成功落盘（失败时已尽力回滚，返回值不会说谎）
+     */
+    private suspend fun streamToDownloads(
+        displayName: String,
+        mime: String,
+        write: suspend (java.io.OutputStream) -> Boolean,
+    ): Boolean {
         val values = ContentValues().apply {
             put(MediaStore.Downloads.DISPLAY_NAME, displayName)
-            put(MediaStore.Downloads.MIME_TYPE, "application/zip")
+            put(MediaStore.Downloads.MIME_TYPE, mime)
+            put(MediaStore.Downloads.RELATIVE_PATH, Environment.DIRECTORY_DOWNLOADS)
+        }
+        var uri: Uri? = null
+        return try {
+            uri = contentResolver.insert(MediaStore.Downloads.EXTERNAL_CONTENT_URI, values)
+            val ok = uri?.let { target ->
+                contentResolver.openOutputStream(target)?.use { out ->
+                    // 写完才 flush：flush 抛异常也算失败（下面统一删行）
+                    write(out).also { success -> if (success) out.flush() }
+                } ?: false
+            } ?: false
+            if (!ok) uri?.let { runCatching { contentResolver.delete(it, null, null) } }
+            ok
+        } catch (e: Exception) {
+            // 半截文件必须删：截断的 PDF 没有 xref，阅读器打不开，留着就是"看得见用不了"
+            LogCollector.e("MangaReader", "streamToDownloads failed name=$displayName", e)
+            uri?.let { runCatching { contentResolver.delete(it, null, null) } }
+            false
+        }
+    }
+
+    private fun writeToDownloads(displayName: String, file: File, mime: String = ZIP_MIME): Boolean {
+        val values = ContentValues().apply {
+            put(MediaStore.Downloads.DISPLAY_NAME, displayName)
+            put(MediaStore.Downloads.MIME_TYPE, mime)
             put(MediaStore.Downloads.RELATIVE_PATH, Environment.DIRECTORY_DOWNLOADS)
         }
         var uri: Uri? = null

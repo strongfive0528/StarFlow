@@ -15,7 +15,7 @@
     <string name="display_options">Display</string>
     <string name="import_manga_empty_hint">Tap + to import manga</string>
     <string name="import_manga_deleted">Deleted</string>
-    <string name="import_manga_option_files">Import files (zip/cbz/cbr/7z)</string>
+    <string name="import_manga_option_files">Import files (zip/cbz/cbr/7z/pdf)</string>
     <string name="import_manga_option_single_dir">Import folder (whole folder = one manga)</string>
     <string name="import_folder_hint">Tip: some devices only allow choosing a newly-created folder. If blocked, create a folder in the picker first.</string>
     <string name="import_storage_hint">Stored to app\'s internal storage:&#10;%1$s</string>
@@ -78,6 +78,8 @@
     <string name="import_result_failed_title">Import failed</string>
     <string name="import_result_failed_msg">%1$s: %2$s</string>
     <string name="import_fail_not_archive">not a valid zip/cbz archive, or the file is damaged</string>
+    <string name="import_fail_pdf_encrypted">this PDF is password-protected. Remove the password (export a decrypted copy) and import again</string>
+    <string name="import_fail_pdf_invalid">cannot open this PDF — the file is damaged, or it is not a PDF this device can render</string>
     <string name="import_fail_unreadable">cannot read the file (permission denied, or the file has moved)</string>
     <string name="import_fail_directory">cannot read the selected folder (permission denied, or it has moved)</string>
     <string name="import_fail_unknown">unknown error — see the log for details</string>
@@ -1322,6 +1324,9 @@
     <string name="reader_export_zip_suffix_original">-original.zip</string>
     <string name="reader_export_zip_suffix_translated">-translated.zip</string>
     <string name="reader_export_zip_suffix_both">-bilingual.zip</string>
+    <string name="reader_export_pdf_suffix_original">-original.pdf</string>
+    <string name="reader_export_pdf_suffix_translated">-translated.pdf</string>
+    <string name="reader_export_pdf_suffix_both">-bilingual.pdf</string>
     <string name="reader_color_title">Color correction</string>
     <string name="reader_color_custom">Custom</string>
     <string name="reader_brightness">Brightness</string>
@@ -1727,7 +1732,7 @@
     <string name="import_already_done">That import already finished</string>
 
     <!-- ===== 导入弹窗的选项说明（措辞与 koto 统一；只保留「文件」「文件夹(单部)」，不含多部入口）===== -->
-    <string name="import_desc_files_manga">Pick one or more CBZ/ZIP/CBR/7z files. Each file becomes one manga; its subfolders become chapters.</string>
+    <string name="import_desc_files_manga">Pick one or more CBZ/ZIP/CBR/7z/PDF files. Each file becomes one manga; subfolders become chapters (a PDF is read page by page, without extra copies).</string>
     <string name="import_desc_dir_manga">Pick a folder holding a single manga. Its subfolders become chapters; loose images in the root become chapter 0.</string>
     <string name="import_desc_files_novel">Pick one or more EPUB or TXT files. Each file is imported as one novel.</string>
     <string name="import_desc_dir_novel">Pick a folder holding a single novel. TXT files inside become chapters; each EPUB becomes a volume and keeps its own chapters.</string>

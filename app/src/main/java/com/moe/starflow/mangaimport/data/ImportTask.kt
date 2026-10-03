@@ -69,7 +69,31 @@ data class ImportTask(
 }
 
 /** 导入失败原因。数据层只给原因，文案由 UI 层映射（避免 data 包依赖具体资源）。 */
-enum class ImportFailureReason { NOT_ARCHIVE, UNREADABLE, DIRECTORY, UNKNOWN }
+enum class ImportFailureReason {
+    NOT_ARCHIVE,
+    UNREADABLE,
+    DIRECTORY,
+
+    /** PDF 需要密码（Android 的 `PdfRenderer` 没有密码接口 → 只能请用户先解密）。 */
+    PDF_ENCRYPTED,
+
+    /** PDF 损坏 / 不是有效 PDF / pdfium 不支持。 */
+    PDF_INVALID,
+
+    UNKNOWN
+}
+
+/**
+ * PDF 打不开。
+ *
+ * 单独一个类型而不是复用 `IllegalArgumentException`：后者在 `classifyArchive` 里被归成
+ * NOT_ARCHIVE（"不是压缩包"），而 PDF 的问题**不是格式不认识**，是"这个 PDF 本身打不开"，
+ * 提示语完全不同。
+ */
+class PdfImportException(
+    val reason: ImportFailureReason,
+    message: String
+) : IllegalStateException(message)
 
 /**
  * 导入结果事件（UI 用内置弹窗消费）。

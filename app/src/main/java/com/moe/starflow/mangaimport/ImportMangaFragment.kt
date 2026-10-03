@@ -136,8 +136,8 @@ class ImportMangaFragment : Fragment() {
         binding.fabImport.setOnClickListener {
             ImportDialog.show(
                 requireContext(),
-                // mime 列表要显式带上 rar/7z：SAF 选择器按 mime 过滤，只给 zip 的话
-                // .cbr/.7z 会被置灰选不中（octet-stream 只兜「未知类型」那一部分）
+                // mime 列表要显式带上 rar/7z/pdf：SAF 选择器按 mime 过滤，只给 zip 的话
+                // .cbr/.7z/.pdf 会被置灰选不中（octet-stream 只兜「未知类型」那一部分）
                 onPickFiles = {
                     pickFilesLauncher.launch(
                         arrayOf(
@@ -149,6 +149,7 @@ class ImportMangaFragment : Fragment() {
                             "application/x-cbr",
                             "application/vnd.comicbook-rar",
                             "application/x-7z-compressed",
+                            "application/pdf",
                             "application/octet-stream"
                         )
                     )
@@ -641,6 +642,9 @@ class ImportMangaFragment : Fragment() {
                             ImportFailureReason.NOT_ARCHIVE -> R.string.import_fail_not_archive
                             ImportFailureReason.UNREADABLE -> R.string.import_fail_unreadable
                             ImportFailureReason.DIRECTORY -> R.string.import_fail_directory
+                            // PDF 打不开要分开说：加密有明确的解法（先解密），损坏只能重下
+                            ImportFailureReason.PDF_ENCRYPTED -> R.string.import_fail_pdf_encrypted
+                            ImportFailureReason.PDF_INVALID -> R.string.import_fail_pdf_invalid
                             ImportFailureReason.UNKNOWN -> R.string.import_fail_unknown
                         }
                     )

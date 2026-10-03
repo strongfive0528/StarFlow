@@ -987,7 +987,18 @@ class ReaderTranslationController(
      * 阅读器一关这个 lambda 就指向已销毁的 Activity（既拿不到图、又把 Activity 泄漏住）。
      * 后台任务改成用这条**自持**数据源后，OCR 阶段与 UI 完全解耦。
      */
-    private val ownSource: ReaderPageSource by lazy { ReaderPageSource(manga.isArchive, manga.localRoot) }
+    private val ownSource: ReaderPageSource by lazy {
+        ownSourceCreated = true
+        ReaderPageSource(manga.isArchive, manga.localRoot, isPdf = manga.isPdf)
+    }
+
+    /**
+     * 自持数据源**有没有被创建过**。
+     *
+     * ⚠️ 收尾时不能直接 `ownSource.close()`：那会触发 lazy 初始化 —— 对 PDF 是"白解析整本 PDF
+     * 只为立刻关掉它"，对目录/zip 是白列一次目录。只在真用过时才关。
+     */
+    @Volatile private var ownSourceCreated = false
 
     /**
      * 阅读区宽度（px）。**0 = 未知**（未绑定 / 已解绑）→ [renderScaleFor] 退化成 1f。
@@ -1172,6 +1183,12 @@ class ReaderTranslationController(
         setPageModeBusy(false)
         version.value += 1
         unbindUi()
+        // ⚠️ 数据源自持的文件句柄要一起释放：PDF 的 `PdfRenderer` 占着一个 FD（有限资源），
+        //    而控制器是**应用级缓存**（`ReaderTranslationHub`），不关就会随"开过的书"一路累积。
+        //    放在 `unbindUi()` 之后：那里刚把 loadFull 换回 ownSource，先关再换就白关了。
+        //    ⚠️ 只在**真创建过**时才关（见 [ownSourceCreated]）：直接 close() 会触发 lazy 初始化，
+        //       对 PDF 等于"进程收尾时白解析整本 PDF 再立刻关掉"。
+        if (ownSourceCreated) runCatching { ownSource.close() }
     }
 
     /**

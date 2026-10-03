@@ -143,6 +143,8 @@ object MangaImporter {
                 ArchiveKind.ZIP -> importZipArchive(context, archiveFile, id, title)
                 ArchiveKind.RAR, ArchiveKind.SEVEN_ZIP ->
                     importExtractedArchive(context, archiveFile, destDir, id, title, onProgress)
+                // ⚠️ PDF **不转图**：原文件就是页源，页图按需栅格化（见 importPdf 的注释）
+                ArchiveKind.PDF -> importPdf(context, archiveFile, id, title)
                 ArchiveKind.UNKNOWN -> throw IllegalArgumentException("不支持的压缩包格式: $name")
             }
         } catch (e: Exception) {
@@ -150,6 +152,66 @@ object MangaImporter {
             destDir.deleteRecursively()
             LogCollector.e(TAG, "导入压缩包失败，已清理 $destDir: ${e.message}", e)
             throw e
+        }
+    }
+
+    // ===== 导入 PDF（漫画扫描件 / 电子版） =====
+
+    /**
+     * PDF：**保留原文件、不做任何转换**，页图在阅读/翻译/导出时按需栅格化。
+     *
+     * ## 分页在哪（这是 PDF 与压缩包最大的差别）
+     * PDF 的页是文件内部的 **page tree**（每页一个对象），与"有没有文本层"无关 ——
+     * 扫描 PDF 只是每页内容是一整张位图，页边界照样由 page tree 给出。
+     * 所以页数由 `PdfRenderer.pageCount` **权威给出**，不需要解析文件名、也不需要文本层。
+     * 章节同理：framework 不暴露 PDF 目录（outline），整本 = 1 章（与单章漫画同一条路）。
+     *
+     * ## 为什么不在这里转成图片（与 rar/7z 的处理刻意不同）
+     * - rar/7z 解压是因为它们**没有中央目录**，随机读一页要顺序扫整包；
+     *   PDF 恰好相反：页码索引 + 随机渲染是 pdfium 的原生能力
+     * - 导入即转图 = 存储 ×2~3（原 PDF + 几百张页图）、导入从秒级变分钟级，
+     *   而且把分辨率**焊死在导入那一刻**（以后想提高 OCR 分辨率就得整本重导）
+     * - 译文本来就不落图（只存气泡 + 文本，显示时实时渲染），PDF 的"按需栅格化"与这套架构同构
+     *
+     * @throws PdfImportException 打不开（加密 / 损坏）——由 [ImportManager] 转成用户提示
+     */
+    private fun importPdf(context: Context, pdfFile: File, id: Long, title: String): ImportedManga {
+        val renderer = PdfPageRenderer(pdfFile)
+        try {
+            val pageCount = renderer.pageCount
+            if (pageCount <= 0) {
+                val reason = when (renderer.openError) {
+                    PdfOpenError.ENCRYPTED -> ImportFailureReason.PDF_ENCRYPTED
+                    PdfOpenError.IO -> ImportFailureReason.UNREADABLE
+                    else -> ImportFailureReason.PDF_INVALID
+                }
+                throw PdfImportException(reason, "PDF 打不开（${renderer.openError}）: ${pdfFile.name}")
+            }
+            // 封面 = 阅读顺序的第一页（PDF 第 1 页），与 zip/目录同一条口径
+            val coverPath = renderer.renderCanonical(0)
+                ?.let { bmp -> try { extractThumbnail(context, bmp, id) } finally { bmp.recycle() } }
+            LogCollector.i(TAG, "导入 PDF 完成: $title（$pageCount 页，按需栅格化）")
+            return ImportedManga(
+                id = id,
+                title = title,
+                localRoot = pdfFile.absolutePath,
+                isArchive = false,
+                isPdf = true,
+                coverPath = coverPath,
+                pageCount = pageCount,
+                addedAt = freshAddedAt(context),
+                sizeBytes = pdfFile.length(),
+                // PDF 没有 ComicInfo.xml / meta.json，简介留空（用户可手改）
+                description = "",
+                // 整本一章：章标题留空 → 显示「第1章」（与单章漫画一致的显示规则）
+                chapters = listOf(
+                    MangaChapter(number = 1, title = "", startPage = 0, pageCount = pageCount)
+                ),
+            )
+        } finally {
+            // ⚠️ 导入只是探页数 + 渲一张封面，用完必须关：FD 是有限资源，
+            //    阅读器那边会自己再开一份（`ReaderPageSource` 持有）
+            renderer.close()
         }
     }
 

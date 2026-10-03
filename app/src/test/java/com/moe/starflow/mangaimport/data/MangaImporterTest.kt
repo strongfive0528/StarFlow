@@ -30,8 +30,15 @@ class MangaImporterTest {
         ImportedMangaStore.save(
             context,
             listOf(
-                ImportedManga(3, "a", "/x", false, null, 1, 1L),
-                ImportedManga(7, "b", "/y", true, null, 1, 1L)
+                // ⚠️ 用具名参数：ImportedManga 会随功能加字段（如 isPdf），位置参数一加就静默错位/编译不过
+                ImportedManga(
+                    id = 3, title = "a", localRoot = "/x", isArchive = false,
+                    coverPath = null, pageCount = 1, addedAt = 1L,
+                ),
+                ImportedManga(
+                    id = 7, title = "b", localRoot = "/y", isArchive = true,
+                    coverPath = null, pageCount = 1, addedAt = 1L,
+                )
             )
         )
         assertEquals(8L, MangaImporter.nextId(context))
