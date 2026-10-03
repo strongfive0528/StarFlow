@@ -71,11 +71,19 @@ class SrRecordSystemWiringTest {
 
     @Test
     fun theNewTableHasBothAnEntityAndAMigration() {
-        assertTrue("DB 要升到 19", db.contains("version = 19"))
         assertTrue("要注册新实体", db.contains("ImportedPageSr::class"))
         assertTrue("必须有 18→19 迁移（漏写 = 升级用户整库被删）", db.contains("MIGRATION_18_19"))
-        assertTrue("迁移要挂进 addMigrations", db.contains("MIGRATION_17_18, MIGRATION_18_19"))
+        assertTrue(
+            "迁移要挂进 addMigrations",
+            Regex("addMigrations\\([^)]*MIGRATION_18_19").containsMatchIn(db),
+        )
         assertTrue("纯新增 + 幂等", db.contains("CREATE TABLE IF NOT EXISTS imported_page_sr"))
+        // ⚠️ **别把版本号写死**（2026-10-03 修）：旧断言写的是 `version = 19`，而 DB 每加一列就 +1
+        //    （20 加了 processing_state、21 加了 ocrModel）→ 断言必然变红，但那是**断言过期**、
+        //    不是代码坏了（红过一次就会被人当成"守卫可以忽略"）。这里改成"版本号 ≥ SR 表引入的 19"，
+        //    真正的迁移链完整性由 Room 自己的 schema 校验 + 迁移测试负责。
+        val version = Regex("""version\s*=\s*(\d+)""").find(db)?.groupValues?.get(1)?.toInt() ?: 0
+        assertTrue("DB 版本必须 ≥ 19（SR 表在 19 引入，当前 = $version）", version >= 19)
     }
 
     // ───────────── 同模型不重超 ─────────────
@@ -217,7 +225,10 @@ class SrRecordSystemWiringTest {
         // 宿主接线 + 数据源口径
         assertTrue(
             "宿主要把「已成功的超分页」喂给进度条",
-            activity.contains("setSrPages(translationController?.srPages()"),
+            // ⚠️ 别按字面量匹配 `setSrPages(translationController?.srPages()`：宿主后来把控制器
+            //    提到了局部变量 `c`（`setSrPages(c?.srPages() ?: emptySet())`）→ 旧断言直接失配变红。
+            //    这里只要求"参数里出现 srPages()"。
+            Regex("setSrPages\\([^)]*srPages\\(\\)").containsMatchIn(activity),
         )
         assertTrue(
             "数据源只算 STATE_SUCCESS（RUNNING/FAILED 不该在进度条上留痕，否则失败后紫条不退）",

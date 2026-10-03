@@ -403,8 +403,9 @@ class MangaReaderActivity : AppCompatActivity() {
         // 会在后台整段跑，且常驻状态芯片（系统窗口）会一直盖在别的应用上
         translationController?.pauseForBackground()
         TranslationStatusOverlay.getInstance(this@MangaReaderActivity).dismiss()
-        // 恢复提示条的默认顶距（进程级单例：不清的话别的页面也跟着偏移）
-        TranslationStatusOverlay.getInstance(this@MangaReaderActivity).setTopScreenY(null)
+        // ⚠️ **不复位顶距**（用户口径 2026-10-03：「整个提示系统顶部就固定在当前计算过尺寸的位置，
+        //    不管是阅读器还是截屏位置固定在这个位置」）——复位就等于回到"两条链路两个位置"。
+        //    顶距留在单例里，下一屏（游戏/截屏）的提示也落在同一条线上。
     }
 
     /**
@@ -596,6 +597,9 @@ class MangaReaderActivity : AppCompatActivity() {
         pendingRealignPage = currentPage
         applyBackground()
         applyAnimation()
+        // ⚠️ 旋转/分屏会改变浮层窗口的系统栏内缩量，而**胶囊高度可能一点没变** → 不主动重推的话
+        //    浮层那边没有重新校准的机会（提示条会带着旧内缩量偏上去压住胶囊，2026-10-03 修）
+        pushNoticeTopBelowPill()
         // 横竖屏都是单页、翻译也不再按朝向禁用 → 旋转后无需重建 adapter，也不用停翻译队列
         refreshTranslationChrome()
     }
@@ -1565,14 +1569,17 @@ class MangaReaderActivity : AppCompatActivity() {
         if (!::binding.isInitialized) return
         val pill = binding.tvPageIndicator
         val density = resources.displayMetrics.density
-        val screenBottom = if (pill.height > 0) {
-            val loc = IntArray(2)
-            pill.getLocationOnScreen(loc)
-            loc[1] + pill.height
-        } else {
-            (TranslationStatusOverlay.READER_TOP_OFFSET_DP * density).toInt()
+        val overlay = TranslationStatusOverlay.getInstance(this)
+        // 胶囊还没布局（刚进阅读器 / 刚重建）→ 先用**全局固定值**；布局完成后下面那个
+        // 「高度变化」回调会推一次实测值，此后一直用它。
+        // ⚠️ 不做"每条提示都重新量"（用户口径 2026-10-03：顶距固定下来就行，别把通知系统搞复杂）。
+        if (pill.height <= 0) {
+            overlay.setTopScreenY((TranslationStatusOverlay.READER_TOP_OFFSET_DP * density).toInt())
+            return
         }
-        TranslationStatusOverlay.getInstance(this).setTopScreenY(screenBottom + (2 * density).toInt())
+        val loc = IntArray(2)
+        pill.getLocationOnScreen(loc)
+        overlay.setTopScreenY(loc[1] + pill.height + (2 * density).toInt())
     }
 
     private fun startChapterBatch(chapterIndex: Int, pages: List<Int>) {
