@@ -211,7 +211,7 @@ Robolectric 的文本引擎是**桩**：`Paint.breakText` 不按宽度换行、�
 **两条"提示"通道别搞混（用户 2026-10-04 明确纠正过）**：
 | 用户说的 | 实际指 | 实现 |
 |---|---|---|
-| 「**app 的通知系统**」 | 应用内的**状态浮层**（`TranslationStatusOverlay` 的芯片） | 自动/增量 → 队列状态 `showImmediate`「正在翻译 · 第 X/Y 页」；**整章 → `showRunning` 常驻芯片**「整章翻译中 · 第 N 章 x/y 批」（`NovelReaderActivity.refreshChapterJobChips`，与别的芯片并存、可按句柄移除） |
+| 「**app 的通知系统**」 | 应用内的**状态浮层**（`TranslationStatusOverlay` 的芯片） | **等页面稳定那一拍 → 「等待页面稳定…」**（队列阶段 `WAITING_STABLE`，此刻还没发请求、也没有黄底）；自动/增量翻译中 → `showImmediate`「正在翻译 · 第 X/Y 页」；**整章 → `showRunning`「整章翻译中 · 第 N 章 x/y 批」**（`NovelReaderActivity.refreshChapterJobChips`，与别的提示并存、可按句柄移除） |
 | 「通知」（系统通知栏） | Android 通知（**要下拉状态栏**才看得到） | 整章 = `TranslationJobService` 每章一条（id 10000+）；阅读器队列 = `ReaderTranslationNotify`（id 9997）。通道 `translation_progress`（DEFAULT 重要度） |
 
 **通知栏（用户口径 2026-10-03：翻译过程的提示**必须进通知系统**，不只是面板徽章）**：

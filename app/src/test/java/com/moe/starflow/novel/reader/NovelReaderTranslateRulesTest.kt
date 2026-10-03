@@ -76,6 +76,14 @@ class NovelReaderTranslateRulesTest {
         assertTrue("在飞清零的判据是 inflight.isEmpty()", q.contains("inflight.isEmpty()"))
         assertTrue("等待期间要留日志（用户要能对上时间）", q.contains("页面稳定等待"))
         assertTrue(
+            "等待期间要有独立阶段（界面上才能显示「等待页面稳定…」）",
+            q.contains("phase = NovelQueuePhase.WAITING_STABLE"),
+        )
+        assertTrue(
+            "界面上要把这一态显示出来",
+            activity().contains("R.string.novel_queue_waiting_stable"),
+        )
+        assertTrue(
             "翻屏时把不在本屏的在飞批从高亮里摘掉（用户口径：一直翻页不该有黄底）",
             q.contains("cur.copy(batchParaIndexes = shown)"),
         )

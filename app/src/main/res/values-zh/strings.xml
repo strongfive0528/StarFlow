@@ -1653,6 +1653,8 @@
     <string name="novel_translate_mode">翻译模式</string>
     <string name="novel_translate_debounce">等待页面稳定</string>
     <string name="novel_translate_debounce_hint">页面停下来（不再翻页 / 滚动）满这么久才算「稳定」，稳定之后才开始翻译；没稳定之前一个请求都不发、也不会出现翻译中的黄底。自动与增量共用同一套。</string>
+    <!-- 队列处于「等页面稳定」那一拍时的浮层提示（这段时间还没发请求） -->
+    <string name="novel_queue_waiting_stable">等待页面稳定…</string>
     <string name="novel_translate_debounce_value">%1$d 毫秒</string>
     <string name="novel_translate_ahead_hint">增量模式往后翻多少批（此值 × 每批段数 = 一次前移的段数）；翻完停下，翻页后窗口自己前移。</string>
     <string name="novel_translate_ahead">启动增量翻译向后</string>

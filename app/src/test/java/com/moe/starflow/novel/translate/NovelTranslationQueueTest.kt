@@ -446,6 +446,34 @@ class NovelTranslationQueueTest {
         q.stop()
     }
 
+    /**
+     * **等页面稳定期间要有明确的阶段**（用户口径 2026-10-04：「我没看到任何等待页面稳定…的相关提示信息」）。
+     *
+     * 这一拍**还没发请求**，所以：阶段 = `WAITING_STABLE`、**高亮段为空**（不画黄底）；
+     * 稳定期满、真的为这一屏发出请求时才转 `TRANSLATING`。
+     */
+    @Test
+    fun `等页面稳定期间是 WAITING_STABLE 且没有高亮`() = runTest {
+        // 批要"跑"一会儿：否则它瞬间收尾，又会立刻排下一拍等待（阶段在两种态间来回跳，测不出东西）
+        val t = FakeTranslator().apply { holdMs = 3_000 }
+        val q = queue(
+            backgroundScope, t, mutableSetOf(), page = { listOf(0, 1) },
+            chapterSize = 4, batchSize = 2, debounce = 500,
+        )
+
+        q.start(book(), NovelTranslateMode.AUTO, currentChapter = { 0 }) { _, _ -> }
+
+        advanceTimeBy(100)   // 还在"等页面稳定"窗口里
+        assertEquals(NovelQueuePhase.WAITING_STABLE, q.state.value.phase)
+        assertTrue("等待期间还没发请求 → 不该有黄底段", q.state.value.batchParaIndexes.isEmpty())
+
+        advanceTimeBy(500)   // t=600：稳定期满 → 认领这一屏
+        assertEquals(NovelQueuePhase.TRANSLATING, q.state.value.phase)
+        assertEquals(listOf(listOf(0, 1)), t.batches)
+        assertEquals("认领后才有黄底（这几段真在飞）", listOf(0, 1), q.state.value.batchParaIndexes)
+        q.stop()
+    }
+
     /** 没有可翻的段（页内全翻完）→ 停在 DRAINED，而不是空转刷状态。 */
     @Test
     fun `没有待翻的段时停在 DRAINED`() = runTest {

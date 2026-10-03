@@ -20,6 +20,14 @@ enum class NovelQueuePhase {
     IDLE,
     /** 抢翻译锁中（漫画/悬浮窗翻译在跑时会出现）。 */
     WAITING_LOCK,
+    /**
+     * **等页面稳定**（2026-10-04 用户口径）：翻屏之后、或上一批收尾之后的那一拍 —— 页面还没停满
+     * 「等待页面稳定」那么久，**一个请求都还没发**。
+     *
+     * ⚠️ 必须单独成态而不是沿用 `TRANSLATING`：界面要能明确告诉用户"在等你停下来"，
+     * 而且这一态**不画黄底**（黄底 = 真在飞的段，这一态还没有在飞的请求）。
+     */
+    WAITING_STABLE,
     /** 正在翻某一批。 */
     TRANSLATING,
     /** 当前页翻完、配额用尽或章末 —— 停下等用户翻页/切模式。 */
@@ -310,6 +318,13 @@ class NovelTranslationQueue(
                 val bySettle = settled.getAndSet(false)
                 if (bySpan || bySettle) {
                     val ms = debounceMs().toLong()
+                    // ⚠️ **进"等页面稳定"态**：界面靠它显示「等待页面稳定…」（用户口径 2026-10-04：
+                    // 「现在我没看到任何等待页面稳定…的相关提示信息」），并且这一态**不画黄底** ——
+                    // 此刻还没有任何请求发出去。计数/配额沿用当前状态，只把阶段与批次并集换掉。
+                    _state.value = _state.value.copy(
+                        phase = NovelQueuePhase.WAITING_STABLE,
+                        batchParaIndexes = emptyList(),
+                    )
                     LogCollector.d(
                         TAG,
                         "页面稳定等待 ${ms}ms（${if (bySpan) "翻屏，页面刚变" else "上批收尾"}）",

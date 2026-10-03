@@ -2307,6 +2307,12 @@ class NovelReaderActivity : AppCompatActivity() {
                     NovelQueuePhase.TRANSLATING -> showOverlay(
                         queuePositionText(st), autoDismiss = false,
                     )
+                    // ⚠️ **等页面稳定要有明文提示**（用户口径 2026-10-04：「我没看到任何等待页面稳定…
+                    // 的相关提示信息」）—— 这一态**还没有发请求**，所以黄底是空的，
+                    // 只靠"没有黄底"用户不知道是在等自己停下来。
+                    NovelQueuePhase.WAITING_STABLE -> showOverlay(
+                        getString(R.string.novel_queue_waiting_stable), autoDismiss = false,
+                    )
                     NovelQueuePhase.WAITING_LOCK -> showOverlay(
                         getString(R.string.novel_translate_busy), autoDismiss = false
                     )
