@@ -78,12 +78,17 @@ class ImportedMangaStoreTest {
             isArchive = false,
             isPdf = true,
             localRoot = "/data/manga_import/1/book.pdf",
+            // PDF 的章节表在导入时就算好（整本一章），也要一起活过 JSON 往返
+            chapters = listOf(MangaChapter(number = 1, title = "", startPage = 0, pageCount = 3)),
         )
         ImportedMangaStore.save(context, listOf(pdf))
 
         val loaded = ImportedMangaStore.load(context).single()
         assertEquals("isPdf 没落盘 → PDF 书会被当成目录枚举（0 页）", true, loaded.isPdf)
         assertEquals(false, loaded.isArchive)
+        assertEquals(1, loaded.chapters.size)
+        assertEquals(3, loaded.chapters[0].pageCount)
+        assertEquals("整本一章的章号必须是 1（不是第0章）", 1, loaded.chapters[0].number)
     }
 
     /** 老清单里**没有** `isPdf` 这个键 → 读回 false（不能因为缺键就崩或读成 true）。 */
