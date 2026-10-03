@@ -1,6 +1,8 @@
 package com.moe.starflow.mangaimport.data
 
 import org.junit.Assert.assertEquals
+import org.junit.Assert.assertNotNull
+import org.junit.Assert.assertNull
 import org.junit.Test
 
 /**
@@ -67,5 +69,49 @@ class PdfPageKeysTest {
         assertEquals(1, split.chapters.size)
         assertEquals(10_005, split.chapters[0].pageCount)
         assertEquals(keys, split.keys)
+    }
+
+    /**
+     * **PDF 永远不需要页序迁移**。
+     *
+     * `MangaPageOrder.legacyToNewPlan` 是给"章节系统上线前按完整路径排序"的老书用的置换。
+     * PDF 的 key **没有目录**（全是 `page_0001.jpg` 这种平名）→ 切分器顺序 == 自然排序顺序，
+     * rawKeys 与权威页序完全相同 → 必须得到 null（不迁移）。
+     * 一旦哪天有人把 PDF 的 key 生成改成带目录/带序号以外的东西，译文与气泡就会整体挂错页，
+     * 而这个用例会立刻变红。
+     */
+    @Test
+    fun `pdfPageKeysNeverNeedMigration`() {
+        listOf(1, 3, 240).forEach { count ->
+            val keys = PdfPageKeys.all(count)
+            assertEquals(
+                "切分器不得重排 PDF 页序（count=$count）",
+                keys,
+                MangaChapterSplitter.split(keys).keys,
+            )
+            assertNull(
+                "PDF 的 rawKeys 与权威页序必须完全相同（count=$count）→ 不该产生任何置换",
+                MangaPageOrder.legacyToNewPlan(keys, keys),
+            )
+        }
+    }
+
+    /**
+     * 反证：**判据本身是有效的** —— 真正需要迁移的形态（最外层散图 + 子目录，散图会被排到最前）
+     * 必须算得出置换。少了这条，上面那个 `assertNull` 可能只是因为函数恒返回 null 而"假绿"。
+     */
+    @Test
+    fun `theMigrationRuleStillDetectsARealReorder`() {
+        val raw = listOf("z.jpg", "ch1/a.jpg")
+        val splitKeys = MangaChapterSplitter.split(raw).keys
+        assertEquals(
+            "根散图应被排到子目录章之前（这正是老书需要迁移的原因）",
+            listOf("z.jpg", "ch1/a.jpg"),
+            splitKeys,
+        )
+        assertNotNull(
+            "这种形态必须算得出置换，否则 PDF 那条 assertNull 说明不了任何事",
+            MangaPageOrder.legacyToNewPlan(raw, splitKeys),
+        )
     }
 }
