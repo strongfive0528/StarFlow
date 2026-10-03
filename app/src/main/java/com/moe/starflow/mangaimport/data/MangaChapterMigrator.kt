@@ -26,7 +26,8 @@ object MangaChapterMigrator {
         var changed = false
         val list = ImportedMangaStore.load(context)
         for (manga in list) {
-            if (manga.chapters.isNotEmpty() || manga.pageCount <= 0 || manga.importing) continue
+            // PDF 的章节在导入时就按页数算好了，列目录永远为空（localRoot 是文件不是目录）
+            if (manga.chapters.isNotEmpty() || manga.isPdf || manga.pageCount <= 0 || manga.importing) continue
             val root = File(manga.localRoot)
             if (!root.exists()) continue
             val raw = try {

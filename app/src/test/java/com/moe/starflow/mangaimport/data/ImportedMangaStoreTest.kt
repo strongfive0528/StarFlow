@@ -64,6 +64,36 @@ class ImportedMangaStoreTest {
         assertEquals(updated, loaded.single())
     }
 
+    /**
+     * **PDF 标记必须能落盘**（2026-10 PDF 导入）。
+     *
+     * `isPdf` 决定阅读器走哪条读页链路（按需栅格化 vs zip/目录），丢了它的后果是
+     * "PDF 书被当成目录枚举 → 0 页 → 打开就提示文件丢失"。
+     * ⚠️ 用**真 JSON 往返**（Robolectric 的 `org.json` 是真实现）而不是 grep 源码里的键名：
+     * 键写对了但拼错/漏读的情况 grep 是抓不到的（`pageOrderVersion` 就栽过一次）。
+     */
+    @Test
+    fun saveThenLoad_keepsPdfFlag() {
+        val pdf = sample(1).copy(
+            isArchive = false,
+            isPdf = true,
+            localRoot = "/data/manga_import/1/book.pdf",
+        )
+        ImportedMangaStore.save(context, listOf(pdf))
+
+        val loaded = ImportedMangaStore.load(context).single()
+        assertEquals("isPdf 没落盘 → PDF 书会被当成目录枚举（0 页）", true, loaded.isPdf)
+        assertEquals(false, loaded.isArchive)
+    }
+
+    /** 老清单里**没有** `isPdf` 这个键 → 读回 false（不能因为缺键就崩或读成 true）。 */
+    @Test
+    fun load_legacyEntryWithoutPdfFlagDefaultsToFalse() {
+        val legacy = sample(1).copy(isArchive = true, isPdf = false)
+        ImportedMangaStore.save(context, listOf(legacy))
+        assertEquals(false, ImportedMangaStore.load(context).single().isPdf)
+    }
+
     @Test
     fun load_emptyWhenNeverSaved() {
         ImportedMangaStore.save(context, emptyList())

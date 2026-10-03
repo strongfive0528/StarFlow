@@ -4,7 +4,10 @@ package com.moe.starflow.mangaimport.data
  * 一部导入的漫画。
  *
  * @param localRoot app 内绝对路径（复制后的），不是 SAF uri
- * @param isArchive true=复制后的 zip/cbz，false=复制后的图片目录
+ * @param isArchive true=复制后的 zip/cbz，false=复制后的图片目录（见 [isPdf]）
+ * @param isPdf 是不是 PDF（漫画扫描件 / 电子版）。**与 [isArchive] 互斥**：PDF 保留原文件，
+ *              但既不按 zip 随机读、也不在导入时转图 —— 页图由 `PdfPageRenderer` 按需栅格化，
+ *              分辨率口径收在 `PdfRasterPolicy`（那两处是 PDF 的读取真值，别在别处另算一套）
  * @param coverPath 封面缩略图绝对路径 filesDir/covers/<id>_<ts>.jpg，可为 null
  * @param sizeBytes 本地副本总大小（zip=文件大小，目录=图片总大小）
  * @param description 用户添加的简介/备注，可为空
@@ -26,6 +29,8 @@ data class ImportedManga(
     val title: String,
     val localRoot: String,
     val isArchive: Boolean,
+    /** 见类文档 [isPdf]：PDF 与 [isArchive] 互斥。 */
+    val isPdf: Boolean = false,
     val coverPath: String?,
     val pageCount: Int,
     val addedAt: Long,

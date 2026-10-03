@@ -86,6 +86,8 @@ object ImportedMangaStore {
         put("title", title)
         put("localRoot", localRoot)
         put("isArchive", isArchive)
+        // PDF 标记：老清单没有这个键 → 读回 false（旧条目本来也不可能是 PDF）
+        put("isPdf", isPdf)
         put("coverPath", coverPath ?: JSONObject.NULL)
         put("pageCount", pageCount)
         put("addedAt", addedAt)
@@ -109,6 +111,7 @@ object ImportedMangaStore {
         title = getString("title"),
         localRoot = getString("localRoot"),
         isArchive = getBoolean("isArchive"),
+        isPdf = optBoolean("isPdf", false),
         coverPath = if (isNull("coverPath")) null else getString("coverPath"),
         pageCount = getInt("pageCount"),
         addedAt = getLong("addedAt"),

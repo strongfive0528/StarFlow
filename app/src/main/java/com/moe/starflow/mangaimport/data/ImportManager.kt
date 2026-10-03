@@ -213,7 +213,17 @@ object ImportManager {
         }
     }
 
-    private fun classifyArchive(e: Throwable): ImportFailureReason = when (e) {
+    /**
+     * 把导入异常翻成用户可读的失败原因。
+     *
+     * ⚠️ `PdfImportException` 必须**排在** `IllegalArgumentException` 之前的分支里：
+     * 它继承的是 `IllegalStateException`，而 PDF 的问题不是"格式不认识"，
+     * 是"这个 PDF 本身打不开"（加密/损坏）—— 顺序调换就静默退化成"不是压缩包"文案。
+     * 可见性提到 `internal` 是为了让单测能直接断言这个分类（仓库里 `NovelImportManager.classify` 同款）。
+     */
+    internal fun classifyArchive(e: Throwable): ImportFailureReason = when (e) {
+        // PDF 打不开要单独说清（加密 / 损坏），别混进"不是压缩包"
+        is PdfImportException -> e.reason
         // ZipFile 对非 zip 与损坏包抛 ZipException；魔数认不出的包由 MangaImporter 抛
         // IllegalArgumentException；rar/7z 解压失败由 libarchive 抛 ArchiveException
         is ZipException, is IllegalArgumentException -> ImportFailureReason.NOT_ARCHIVE

@@ -15,7 +15,7 @@
     <string name="display_options">显示选项</string>
     <string name="import_manga_empty_hint">点击右下角 + 导入漫画</string>
     <string name="import_manga_deleted">已删除</string>
-    <string name="import_manga_option_files">导入文件（zip/cbz/cbr/7z）</string>
+    <string name="import_manga_option_files">导入文件（zip/cbz/cbr/7z/pdf）</string>
     <string name="import_manga_option_single_dir">导入文件夹（整个文件夹 = 一部漫画）</string>
     <string name="import_folder_hint">提示：部分机型系统文件选择器只允许选择「新建的文件夹」，若无法选择请先在系统选择器里新建一个文件夹</string>
     <string name="import_storage_hint">已导入的漫画保存在应用专属目录（Android/data 下，可通过文件管理器 / 数据线访问）：&#10;%1$s</string>
@@ -78,6 +78,8 @@
     <string name="import_result_failed_title">导入失败</string>
     <string name="import_result_failed_msg">%1$s：%2$s</string>
     <string name="import_fail_not_archive">不是有效的 zip/cbz 压缩包，或文件已损坏</string>
+    <string name="import_fail_pdf_encrypted">这个 PDF 已加密，请先去掉密码（另存为无密码副本）再导入</string>
+    <string name="import_fail_pdf_invalid">PDF 无法打开：文件已损坏，或本机渲染器不支持</string>
     <string name="import_fail_unreadable">无法读取文件（权限不足或文件已被移动）</string>
     <string name="import_fail_directory">无法读取所选文件夹（权限不足或已被移动）</string>
     <string name="import_fail_unknown">未知错误，详情见日志</string>
@@ -1300,6 +1302,9 @@
     <string name="reader_export_zip_suffix_original">-原文.zip</string>
     <string name="reader_export_zip_suffix_translated">-译文.zip</string>
     <string name="reader_export_zip_suffix_both">-双语.zip</string>
+    <string name="reader_export_pdf_suffix_original">-原文.pdf</string>
+    <string name="reader_export_pdf_suffix_translated">-译文.pdf</string>
+    <string name="reader_export_pdf_suffix_both">-双语.pdf</string>
     <string name="reader_color_title">颜色矫正</string>
     <string name="reader_color_custom">自定义</string>
     <string name="reader_brightness">亮度</string>
@@ -1780,7 +1785,7 @@
     <string name="import_already_done">这次导入已经完成了</string>
 
     <!-- ===== 导入弹窗的选项说明（措辞与 koto 统一；只保留「文件」「文件夹(单部)」，不含多部入口）===== -->
-    <string name="import_desc_files_manga">选择一个或多个 CBZ/ZIP/CBR/7z 文件，每个文件导入为一本漫画，夹内的子文件夹将作为章节。</string>
+    <string name="import_desc_files_manga">选择一个或多个 CBZ/ZIP/CBR/7z/PDF 文件，每个文件导入为一本漫画，夹内的子文件夹将作为章节（PDF 按页读取，不会额外复制一份）。</string>
     <string name="import_desc_dir_manga">选择一个包含单部漫画的文件夹，子文件夹将作为章节，最外层散图作为第0章。</string>
     <string name="import_desc_files_novel">选择一个或多个 EPUB 或 TXT 文件，每个文件导入为一部小说。</string>
     <string name="import_desc_dir_novel">选择一个包含单部小说的文件夹。内部 TXT 文件会作为章节导入；每个 EPUB 文件会作为一个分卷导入，并保留其内部章节。</string>

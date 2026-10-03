@@ -6,17 +6,28 @@ import android.util.LruCache
 import com.moe.starflow.mangaimport.data.ArchivedMangaReader
 import com.moe.starflow.mangaimport.data.MangaChapter
 import com.moe.starflow.mangaimport.data.MangaChapterSplitter
+import com.moe.starflow.mangaimport.data.PdfPageKeys
+import com.moe.starflow.mangaimport.data.PdfPageRenderer
+import com.moe.starflow.mangaimport.data.PdfRasterPolicy
 import java.io.File
 import java.util.concurrent.ConcurrentHashMap
 import com.moe.starflow.utils.LogCollector
 import java.util.zip.ZipFile
 
 /**
- * 阅读器页面数据源：页解析（zip / 目录）+ 全图 / 缩略图加载。
+ * 阅读器页面数据源：页解析（zip / 目录 / PDF）+ 全图 / 缩略图加载。
  *
  * - 全图：完整解码（ViewPager2 页显示）
  * - 缩略图：按目标尺寸降采样解码，带 LruCache（进度条/预览网格用，避免重复解大图）
- * 统一处理 zip（ZipFile 读 entry）与目录（File 枚举）两种存储源。
+ * 统一处理 zip（ZipFile 读 entry）、目录（File 枚举）与 **PDF（按需栅格化）** 三种存储源。
+ *
+ * ## PDF 源的三条硬约束（改动前必读）
+ * 1. **页 = PDF page tree 里的页**（`PdfPageRenderer.pageCount`），与有没有文本层无关；
+ *    扫描 PDF 只是每页内容是一整张位图，分页口径完全一样。
+ * 2. **像素尺寸必须由 `PdfRasterPolicy` 给出**：图片有文件里写死的原生尺寸，PDF 没有 ——
+ *    是我们自己选的。`originalWidth/Height`、`loadFull`、`loadWebtoon`、`loadThumb`、导出
+ *    必须调同一个口径，否则气泡坐标会画在别处（而且看起来像随机错位）。
+ * 3. **不落盘**：PDF 页图只在内存里按需生成（译文本来也不落图），原 PDF 是唯一事实来源。
  */
 private const val TAG = "ReaderPageSource"
 
@@ -32,8 +43,40 @@ private const val ENHANCE_CACHE_PIXEL_BUDGET = 24 * 1024 * 1024
 
 class ReaderPageSource(
     private val isArchive: Boolean,
-    private val localRoot: String
+    private val localRoot: String,
+    /** 见 [ImportedManga.isPdf]：PDF 源按需栅格化，不读 zip、不枚举目录。 */
+    private val isPdf: Boolean = false
 ) {
+
+    /**
+     * PDF 渲染器（见类文档）。非 PDF 源恒为 null。
+     *
+     * ⚠️ **必须声明在 [rawKeys] 之前**：`rawKeys` 的初始化器要读它的 `pageCount`
+     *    （Kotlin 属性初始化按**声明顺序**执行，声明晚了读到的就是未初始化字段 → NPE）。
+     *    构造本身**不打开文件**（`PdfPageRenderer` 首次使用时才开 FD），所以这里代价为 0。
+     */
+    private val pdf: PdfPageRenderer? = if (isPdf) PdfPageRenderer(File(localRoot)) else null
+
+    /**
+     * **只用来查页面尺寸**的第二个渲染器（同一个文件的另一份 FD）。
+     *
+     * ⚠️ 为什么值得多开一份：`ReaderAdapters` 在 **onBindViewHolder（主线程）** 里查
+     * `originalWidth/Height`（Webtoon 要按原始宽高比钉死行高），而渲染在 IO 上跑、且**整个
+     * native 渲染期间都持着渲染器那把锁**（真机实测一页 300dpi 渲染 80~275ms）。共用一个渲染器
+     * 时主线程会整整阻塞一次渲染 —— Webtoon 快速滑动时连续掉帧，最坏 ANR。
+     * 尺寸查询走独立实例后，两边互不阻塞，只剩 `openPage` 本身的开销
+     * （实测 A5 页 0.9ms / 高密度页 27ms，每页只查一次并进 map 缓存）。
+     *
+     * 反面方案已排除：**构造期一次性预取全部页尺寸**（真机实测高密度页 27ms/页 → 几百页就是秒级，
+     * 而且全落在"打开阅读器"那一下）。任何"查不到就返回 0"的写法也不行 ——
+     * 那会让 Webtoon 行高退回 `WRAP_CONTENT`（模块文档里记过的「页面一直跳」）。
+     */
+    private val pdfGeometry: PdfPageRenderer? by lazy(LazyThreadSafetyMode.SYNCHRONIZED) {
+        if (isPdf) PdfPageRenderer(File(localRoot)) else null
+    }
+
+    /** 关闭 = **终态**（见 [close]）：之后所有读取直接返回空，不再打开文件。 */
+    @Volatile private var closed = false
 
     /**
      * 页序 + 章节表：**由实际文件推导**（不与清单里存的那份对比，文件才是事实来源）。
@@ -92,6 +135,60 @@ class ReaderPageSource(
         }
     }
 
+    // ── PDF 源（`isPdf`）──
+    //
+    // PDF 没有"文件里写死的像素尺寸"，页图要现渲（一次性 ~100-500ms/页）。所以：
+    // ① 渲染器只开一份（`PdfRenderer` 同一时刻只能开一个 Page，且 FD 是有限资源）；
+    // ② 渲出来的**权威尺寸**位图进一个小 LRU 缓存 —— 同一页在一次翻译里会被要 2~4 次
+    //    （显示 / OCR / 超分输入 / 导出渲染），缓存后只需要渲一次、其余给副本。
+    //
+    // ⚠️ **缓存里的位图绝不外借**：`loadFull` 的契约是"调用方拥有的新位图"（调用方会 recycle），
+    //    直接把缓存实例交出去会被回收成废图 → 一律返回 `copy()`。
+    // ⚠️ 缓存预算只放得下 1~2 页（一页 300DPI 的 A5 ≈ 17MB、B5 ≈ 26MB），这是**故意**的：
+    //    阅读是顺序的，留太多页等于和 `renderLru`(100MB) 抢内存。
+    private val pdfFullCache = object : LruCache<Int, Bitmap>(PdfRasterPolicy.CANONICAL_CACHE_BUDGET_BYTES) {
+        override fun sizeOf(key: Int, value: Bitmap) =
+            value.allocationByteCount.coerceAtLeast(value.rowBytes * value.height)
+        // ⚠️ **刻意不在 entryRemoved 里 recycle**：被挤出的那一瞬间，另一个线程可能正在
+        //    `copy()` 它（缓存命中 → 复制出借）。`copy()` 撞上 recycle 会抛
+        //    IllegalStateException（被 runCatching 吞掉 → 那一页白屏），是偶发且难复现的坑。
+        //    位图像素在 Java 堆上（API 26+），交给 GC 回收即可；LruCache 的额度仍然有效。
+    }
+
+    /** PDF 该页的权威像素尺寸（`[宽, 高]`）；不是 PDF / 取不到返回 null。走**独立**渲染器，见 [pdfGeometry]。 */
+    private fun pdfCanonicalSize(position: Int): IntArray? {
+        if (closed) return null
+        return pdfGeometry?.canonicalSize(position)?.takeIf { it[0] > 0 && it[1] > 0 }
+    }
+
+    /** PDF 全尺寸页图：缓存优先，未命中才真渲。返回**副本**（调用方拥有，负责 recycle）。 */
+    private fun pdfLoadFull(position: Int): Bitmap? {
+        if (closed) return null
+        pdfFullCache.get(position)?.takeIf { !it.isRecycled }?.let { cached ->
+            return runCatching { cached.copy(Bitmap.Config.ARGB_8888, false) }.getOrNull()
+        }
+        val rendered = pdf?.renderCanonical(position) ?: return null
+        pdfFullCache.put(position, rendered)
+        return runCatching { rendered.copy(Bitmap.Config.ARGB_8888, false) }.getOrNull()
+    }
+
+    /**
+     * PDF 按采样尺寸渲染（缩略图 / Webtoon 采样图）：在**目标尺寸**上直接光栅化，不是先渲大再缩。
+     *
+     * ⚠️ 尺寸计算收在 `PdfPageRenderer` 里（一次 `openPage` 内算完就渲）——
+     *    在这里先查 `pdfCanonicalSize` 再渲染会多开一次页（真机实测 0.9~27ms/页）。
+     */
+    private fun pdfRenderSampled(position: Int, sample: Int): Bitmap? {
+        if (closed) return null
+        return pdf?.renderScaledBySample(position, sample)
+    }
+
+    /** PDF Webtoon 采样图（按屏宽）。 */
+    private fun pdfRenderToWidth(position: Int, targetWidth: Int): Bitmap? {
+        if (closed) return null
+        return pdf?.renderSampledToWidth(position, targetWidth)
+    }
+
     val size: Int get() = pageKeys.size
 
     /** 某页对应的存储 key（zip 内 entry 名 / 目录相对路径），供导出等场景。 */
@@ -106,11 +203,16 @@ class ReaderPageSource(
             LogCollector.w(TAG, "loadFull: 页号越界 position=$position（size=${pageKeys.size}）")
             return null
         }
+        // 关闭后一律不服务（终态，见 close()）：既防 FD 复活，也让"退出后还在跑的调用"自然落空
+        if (closed) return null
         // ⚠️ 这里**不再有超分缓存快路径**：v2 架构把超分整体移出了 loadFull
         //    （主线程推理会 ANR；且用户口径是「OCR 永远在原图上做，超分只做显示底图」）。
         //    合并时 master 侧的 enhanceCachedOrNull 调用随已删除的实现一起作废。
         return try {
-            val bmp = if (isArchive) {
+            val bmp = if (isPdf) {
+                // PDF：按 `PdfRasterPolicy` 的权威尺寸现渲（缓存命中则给副本）
+                pdfLoadFull(position)
+            } else if (isArchive) {
                 // 复用缓存的 ZipFile（与 openEntry 同一条路径）：每次新开都要重读中央目录，
                 // 大包上尤其亏（原来这里每次 loadFull 都 new 一个）
                 val zip = zip()
@@ -140,9 +242,16 @@ class ReaderPageSource(
      *
      * ⚠️ 走原始字节而不是 [loadFull] + 重新编码：原图多是 JPEG，解成 Bitmap 再压回去就是**二次
      * 有损压缩**（画质掉一档、体积还可能更大），而这里只是原样搬运。
+     *
+     * ⚠️ **PDF 是例外**：PDF 里没有"这一页的原始字节流"（页是矢量/图像对象的组合），
+     * 只能现渲再编码成 JPEG。所以 PDF 的"原名原文条目"精度等同于渲染结果 ——
+     * PDF 的正式导出出口是 PDF（见 `ReaderPdfExport`），这里只是保证旧链路（zip 双语包）
+     * 遇到 PDF 时不至于交白卷。
      */
     fun openEntry(position: Int): java.io.InputStream? {
+        if (closed) return null
         val key = pageKeys.getOrNull(position) ?: return null
+        if (isPdf) return pdfEntryStream(position)
         return try {
             if (isArchive) {
                 val zip = zip() ?: return null
@@ -157,8 +266,24 @@ class ReaderPageSource(
         }
     }
 
+    /** PDF：把该页渲成等价于原图的 JPEG 字节流（见 [openEntry] 的 ⚠️）。 */
+    private fun pdfEntryStream(position: Int): java.io.InputStream? {
+        val bmp = pdfLoadFull(position) ?: return null
+        return try {
+            val out = java.io.ByteArrayOutputStream()
+            if (!bmp.compress(Bitmap.CompressFormat.JPEG, PDF_ENTRY_JPEG_QUALITY, out)) return null
+            java.io.ByteArrayInputStream(out.toByteArray())
+        } catch (e: Exception) {
+            LogCollector.w(TAG, "openEntry(PDF): 编码失败 position=$position（${e.message}）")
+            null
+        } finally {
+            bmp.recycle()
+        }
+    }
+
     /** 载入缩略图（应在 IO 线程调用），缓存命中直接返回。 */
     fun loadThumb(position: Int): Bitmap? {
+        if (closed) return null
         thumbCache.get(position)?.let { return it }
         val bmp = decodeThumb(position) ?: return null
         thumbCache.put(position, bmp)
@@ -175,6 +300,7 @@ class ReaderPageSource(
     var webtoonWidth = 0
 
     fun loadWebtoon(position: Int, targetWidth: Int): Bitmap? {
+        if (closed) return null
         webtoonCache.get(position)?.let { return it }
         val bmp = decodeWebtoon(position, targetWidth)
         if (bmp != null) webtoonCache.put(position, bmp)
@@ -186,6 +312,7 @@ class ReaderPageSource(
      * 缓存未命中时**同步解码兜底**（每页仅一次，随后命中缓存）→ 翻起区一定有下一页，不黑屏。
      */
     fun peekWebtoon(position: Int): Bitmap? {
+        if (closed) return null
         webtoonCache.get(position)?.let { return it }
         if (webtoonWidth <= 0) return null
         val bmp = decodeWebtoon(position, webtoonWidth)
@@ -195,8 +322,13 @@ class ReaderPageSource(
 
     private fun decodeWebtoon(position: Int, targetWidth: Int): Bitmap? {
         val key = pageKeys.getOrNull(position) ?: return null
+        if (closed) return null
         return try {
-            if (isArchive) {
+            if (isPdf) {
+                // ⚠️ 采样口径复用**同一套**判据（目标宽 + 12:1 高宽比 + 12M 像素，见 PdfRasterPolicy.sampleFor），
+                //    尺寸计算在渲染器内部一次 openPage 内完成
+                pdfRenderToWidth(position, targetWidth)
+            } else if (isArchive) {
                 val zip = zip() ?: return null
                 val entry = zip.getEntry(key) ?: return null
                 val bounds = BitmapFactory.Options().apply { inJustDecodeBounds = true }
@@ -234,9 +366,15 @@ class ReaderPageSource(
      * 用途：超分面板的「详情」要对比「原始 / 超分后」的大小（用户口径 2026-10）。
      * ⚠️ zip 走**中央目录里记的** `entry.size`（不解压）；目录导入走 `File.length()`。
      * 两者都是"文件的大小"，不是"解码后占的内存"—— 这正是用户要看的东西。
+     *
+     * ⚠️ **PDF 恒为 0**：PDF 里没有"某一页的文件字节数"（页是矢量/图像对象的组合，
+     * 还常与其他页共用资源流）——不编一个"平均每页大小"这种看着像真数据的假值。
+     * 0 → 面板显示 `-`（`ReaderSrStateAdapter.fmtBytes` 的既有口径）。
      */
     fun pageBytes(position: Int): Long {
+        if (closed) return 0L
         val key = pageKeys.getOrNull(position) ?: return 0L
+        if (isPdf) return 0L
         return try {
             if (isArchive) zip()?.getEntry(key)?.size ?: 0L
             else File(localRoot, key).length()
@@ -260,10 +398,22 @@ class ReaderPageSource(
     @Synchronized
     private fun ensureOriginalSize(position: Int) {
         if (originalWidths.containsKey(position)) return
+        if (closed) return
         val key = pageKeys.getOrNull(position) ?: return
         var w = 0
         var h = 0
         try {
+            if (isPdf) {
+                // ⚠️ PDF 的"原生尺寸"就是 PdfRasterPolicy 的权威像素尺寸 ——
+                //    适配器钉行高、译图缩放、气泡坐标都靠这一个数字。
+                //    走 [pdfGeometry]（**独立渲染器**）：主线程会调到这里，不能和 IO 上的渲染抢锁。
+                val size = pdfCanonicalSize(position)
+                w = size?.get(0) ?: 0
+                h = size?.get(1) ?: 0
+                originalWidths[position] = w
+                originalHeights[position] = h
+                return
+            }
             val bounds = BitmapFactory.Options().apply { inJustDecodeBounds = true }
             if (isArchive) {
                 val zip = zip()
@@ -286,27 +436,19 @@ class ReaderPageSource(
         originalHeights[position] = h
     }
 
-    /** 采样率：按目标宽度适配 + 限制超高页 + 限制总像素（防超大页 OOM 卡死）。 */
-    private fun computeSample(boundsW: Int, boundsH: Int, targetWidth: Int): Int {
-        val w = boundsW.coerceAtLeast(1)
-        val h = boundsH.coerceAtLeast(1)
-        val target = targetWidth.coerceAtLeast(1)
-        val maxHeight = target * 12          // 高宽比上限 ~12:1
-        val maxArea = 12_000_000            // 单幅像素上限 ~48MB
-        var sample = 1
-        while (true) {
-            val sw = w / sample
-            val sh = h / sample
-            if (sw <= target && sh <= maxHeight && sw * sh <= maxArea) break
-            sample *= 2
-        }
-        return sample
-    }
+    /** 采样率：按目标宽度适配 + 限制超高页 + 限制总像素（防超大页 OOM 卡死）。
+     *
+     *  ⚠️ 判据**只有一份**（[PdfRasterPolicy.sampleFor]）：图片路径与 PDF 路径共用它，
+     *     各写一份就会出现"同一页在原图/Webtoon 下算出不同尺寸"，气泡缩放系数随之对不上。 */
+    private fun computeSample(boundsW: Int, boundsH: Int, targetWidth: Int): Int =
+        PdfRasterPolicy.sampleFor(boundsW, boundsH, targetWidth)
 
     private fun decodeThumb(position: Int): Bitmap? {
         val key = pageKeys.getOrNull(position) ?: return null
         return try {
-            if (isArchive) {
+            if (isPdf) {
+                pdfRenderSampled(position, THUMB_SAMPLE)
+            } else if (isArchive) {
                 ZipFile(File(localRoot)).use { zip ->
                     decodeZipEntry(zip, key, THUMB_SAMPLE)
                 }
@@ -343,6 +485,17 @@ class ReaderPageSource(
 
     /** 枚举原始页 key（未排序：排序与分章都由 [MangaChapterSplitter] 一处负责）。 */
     private fun resolveRawPages(): List<String> {
+        // PDF：页序就是 page tree 的顺序（**权威且固定**，不需要按文件名猜顺序），
+        // 所以直接按页数生成合成 key（规则见 [PdfPageKeys]，纯函数、有单测）。
+        if (isPdf) {
+            val count = pdf?.pageCount ?: 0
+            if (count <= 0) {
+                // 打不开/文件丢了：返回空页表，由阅读器侧走「文件丢失」提示，而不是崩溃
+                LogCollector.w(TAG, "PDF 打不开或 0 页: $localRoot")
+                return emptyList()
+            }
+            return PdfPageKeys.all(count)
+        }
         return if (isArchive) {
             val out = mutableListOf<String>()
             try {
@@ -363,10 +516,34 @@ class ReaderPageSource(
         }
     }
 
+    /**
+     * 释放持有的文件句柄（PDF 的 FD / 缓存的 ZipFile）与缓存。
+     *
+     * ⚠️ **这是终态**：之后所有读取都返回 null/空（[closed]），**不会再重新打开文件**。
+     * 原因是"关闭"发生在退出阅读器 / 控制器被回收的那一刻，而在途的 `loadFull` 可能还在跑
+     * （读的是关闭前捕获的 lambda）—— 允许重开的话那次调用会重新打开整本 PDF，而这个数据源
+     * 此后再也没人关 → 每退出一次漏一个 FD。合法用法的重建路径都是**新建数据源**
+     * （阅读器重进、控制器重建），不需要"复活"。
+     *
+     * ⚠️ 必须有人调：`PdfRenderer` 持有一个 `ParcelFileDescriptor`，FD 是有限资源；
+     * 阅读器 `onDestroy` 与控制器回收（`ReaderTranslationHub.releaseIfIdle`）各调一次。
+     */
+    @Synchronized
+    fun close() {
+        closed = true
+        runCatching { pdf?.close() }
+        runCatching { pdfGeometry?.close() }
+        runCatching { cachedZip?.close() }
+        cachedZip = null
+        runCatching { pdfFullCache.evictAll() }
+    }
+
     private companion object {
         const val THUMB_SAMPLE = 4
         const val MAX_THUMBS = 48
         // Webtoon 采样缓存像素预算（~60MB，约覆盖十几屏）
         const val WEBTOON_CACHE_PIXEL_BUDGET = 60 * 1024 * 1024
+        // PDF 走旧 zip 链路导出原文时的 JPEG 质量（正式出口是 PDF，见 ReaderPdfExport）
+        const val PDF_ENTRY_JPEG_QUALITY = 92
     }
 }
