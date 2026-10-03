@@ -1189,6 +1189,14 @@
     <string name="chapter_translate_notify_paused">已暂停 · %1$d/%2$d 页</string>
     <string name="chapter_translate_notify_summary_title">章节翻译</string>
     <string name="chapter_translate_notify_summary">%1$d 个章节正在后台翻译</string>
+    <!-- 通知通道名（所有翻译进度通知共用；改通道 id 时它会重新出现在系统设置里） -->
+    <string name="translate_notify_channel_name">翻译进度</string>
+    <!-- 阅读器前台队列（手动/自动/增量）的通知第二行：%1$s 是"第 X/Y 页"那类进度 -->
+    <string name="novel_translate_notify_line">%1$s · 已翻 %2$d 批</string>
+    <!-- 仅 OCR 执行模式：通知栏也必须是 OCR 口径（那时一页都没在翻译） -->
+    <string name="chapter_translate_notify_progress_ocr">正在OCR %1$d/%2$d 页</string>
+    <string name="chapter_translate_notify_summary_title_ocr">章节OCR</string>
+    <string name="chapter_translate_notify_summary_ocr">%1$d 个章节正在后台OCR</string>
     <string name="reader_translate_chapter_clear">清空</string>
     <string name="reader_translate_chapter_running">正在翻译本章 %1$d/%2$d</string>
     <!-- 章节批量翻译的并发度（漫画：OCR 串行，调高主要加快翻译请求） -->
@@ -1643,8 +1651,8 @@
     <string name="novel_display_original">原文</string>
     <string name="novel_display_bilingual">双语</string>
     <string name="novel_translate_mode">翻译模式</string>
-    <string name="novel_translate_debounce">启动延迟</string>
-    <string name="novel_translate_debounce_hint">翻页后停留这么久才开始翻（防抖），自动与增量共用；调小更跟手，但连续翻页时会白翻几页。</string>
+    <string name="novel_translate_debounce">等待页面稳定</string>
+    <string name="novel_translate_debounce_hint">页面停下来（不再翻页 / 滚动）满这么久才算「稳定」，稳定之后才开始翻译；没稳定之前一个请求都不发、也不会出现翻译中的黄底。自动与增量共用同一套。</string>
     <string name="novel_translate_debounce_value">%1$d 毫秒</string>
     <string name="novel_translate_ahead_hint">增量模式往后翻多少批（此值 × 每批段数 = 一次前移的段数）；翻完停下，翻页后窗口自己前移。</string>
     <string name="novel_translate_ahead">启动增量翻译向后</string>
@@ -1661,6 +1669,8 @@
     <string name="novel_empty_chapter">本章没有可阅读的正文</string>
     <string name="novel_first_chapter">已经是第一章</string>
     <string name="novel_last_chapter">已经是最后一章</string>
+    <string name="novel_chapter_first_page">已是本章第一页</string>
+    <string name="novel_chapter_last_page">已是本章最后一页</string>
     <string name="novel_back">返回</string>
     <string name="novel_prev_chapter">上一章</string>
     <string name="novel_next_chapter">下一章</string>
@@ -1669,17 +1679,23 @@
     <!-- ===== 单批超长预警（一批合并文本估算超过阈值 → 弹窗问「继续 / 取消这次翻译」） ===== -->
     <string name="novel_translate_warn">单批预警阈值</string>
     <string name="novel_translate_warn_hint">一批的原文估算超过这个长度时先问一次「是否继续」（同一轮只问一次）。设大一点可以少打扰，但单次请求太长时模型容易漏译或截断。</string>
-    <string name="novel_translate_oversize_title">单次请求内容超长</string>
-    <string name="novel_translate_oversize_msg">这一批合并文本约 %1$d tokens，超过你设的 %2$d。内容过长时翻译效果可能变差，是否继续？</string>
-    <string name="novel_translate_oversize_continue">继续</string>
-    <string name="novel_translate_oversize_skip">取消这次翻译</string>
-    <string name="novel_translate_oversize_skipped">已跳过这一批（内容超长）</string>
+    <string name="novel_translate_oversize_title">单批超过上限</string>
+    <string name="novel_translate_oversize_msg">这一批约 %1$d（上限 %2$d）。建议降低上一行的「每批段数」。\n\n取消本次翻译会关闭当前翻译进程并回退手动模式。</string>
+    <string name="novel_translate_oversize_continue">忽略并继续</string>
+    <string name="novel_translate_oversize_cancel">取消本次翻译</string>
+    <string name="novel_translate_oversize_cancelled">已取消本次翻译（回退手动模式）</string>
+    <string name="novel_translate_oversize_timeout">等待超时，已自动继续翻译</string>
     <!-- ===== 同时 API 请求数（文本翻译；本地引擎固定 1） ===== -->
     <string name="novel_translate_concurrency">翻译模型最大同时请求数</string>
     <string name="novel_translate_concurrency_hint">整章/增量翻译同时发出的请求上限；本地模型固定为 1。超出的按阅读顺序排队。</string>
     <!-- ===== 章卡片：后台章节任务的进度（单位是**批**，不是页） ===== -->
     <string name="novel_chapter_running_batches">翻译中 %1$d/%2$d 批</string>
+    <!-- 整章任务的**浮层常驻芯片**（app 内的"通知系统"，用户口径 2026-10-04） -->
+    <string name="novel_chapter_overlay_running">整章翻译中 · 第 %1$d 章 %2$d/%3$d 批</string>
+    <string name="novel_chapter_overlay_paused">整章已暂停 · 第 %1$d 章 %2$d/%3$d 批</string>
     <string name="novel_chapter_paused_batches">已暂停 %1$d/%2$d 批</string>
+    <string name="novel_chapter_running_split">成功 %1$d · 失败 %2$d · 共 %3$d 批</string>
+    <string name="novel_chapter_paused_split">已暂停 · 成功 %1$d · 失败 %2$d · 共 %3$d 批</string>
     <!-- 章卡片第二行：这一章还有多少批排在队里（纯内存态） -->
     <string name="novel_chapter_active_batches">正在翻译 %1$d 批</string>
     <string name="novel_chapter_active_waiting_batches">正在翻译 %1$d 批 · 等待 %2$d 批</string>

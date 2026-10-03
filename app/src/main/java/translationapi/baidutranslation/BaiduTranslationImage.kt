@@ -17,6 +17,8 @@
 
 package translationapi.baidutranslation
 
+import translationapi.InFlightRequests
+
 import android.graphics.Bitmap
 import com.moe.starflow.translate.TranslationPicAPI
 import com.moe.starflow.translate.TranslationResult
@@ -57,7 +59,7 @@ class BaiduTranslationImage(
 ) : TranslationPicAPI {
     // 创建协程作用域
     private val coroutineScope = CoroutineScope(Dispatchers.IO + SupervisorJob())
-    private var currentJob: Job? = null
+    private val inFlight = InFlightRequests()
 
     private val TRANS_API_HOST = "https://fanyi-api.baidu.com/api/trans/sdk/picture"
     private val SOCKET_TIMEOUT = 10L // 10秒
@@ -76,10 +78,7 @@ class BaiduTranslationImage(
         targetLanguage: String,
         callback: (TranslationResult) -> Unit
     ) {
-        // 取消之前的任务（如果存在）
-        currentJob?.cancel()
-
-        currentJob = coroutineScope.launch {
+        inFlight.track(coroutineScope) {
             try {
                 // 创建临时文件
                 val tempFile = File.createTempFile("translate_", ".jpg")
@@ -230,8 +229,7 @@ class BaiduTranslationImage(
     }
 
     override fun cancelTranslation() {
-        currentJob?.cancel()
-        currentJob = null
+        inFlight.cancelAll()
     }
 
     override fun release() {

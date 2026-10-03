@@ -187,6 +187,19 @@ adb devices
 每个子目录实现 `TranslationTextAPI` 接口：`openaitranslation/`、`bingtranslation/`、`nllbtranslation/`、`niutrans/`、`volctranslation/`、`deepltranslation/`、`baidutranslation/`、`tencentcloud/`、`azuretranslation/`、`customtranslation/`、`doubaotranslation/`、`llamacpp/`
 - `llamacpp/` — **LlamaCpp 本地引擎的 JNI 门面**，只有一个 `LlamaCppNative.kt`（`external` 方法 + `LlamaCppStreamCallback` 接口）；引擎实现（模型清单/导入/翻译/提示词）在 `com.moe.starflow.llamacpp/`，原生代码在 **`:llamacpp` 模块**。`nllbtranslation/` 同属本地引擎类
 - ⚠️ **本包是历史遗留的独立顶层包，不在 `com.moe.starflow` 命名空间内，保持现状勿移动**：JNI 符号（`:llamacpp` 的 `llamacpp_bridge.cpp` → `Java_translationapi_llamacpp_LlamaCppNative_*` + `cpp/src/SentencePieceProcessorInterface.cpp` 的 SentencePieceProcessorJava 6 个）与 `proguard-rules.pro` 的 `LlamaCppStreamCallback` keep 规则都硬编码 `translationapi.*` 包名，移动即 UnsatisfiedLinkError。详见 `TranslatorFactory.kt` 顶部注释。
+- ⚠️ **一个引擎实例上可以并发 N 个请求：绝不许「发新请求就把上一个取消」**（2026-10-03 真机事故，6 个实现都踩过）。
+  小说（默认 3 并发）/漫画（默认 3 并发）都是**同一个引擎实例上并发 N 批**，而这 6 个实现原来都在
+  `getTranslation` 开头写 `currentJob?.cancel()` + 单值 `currentJob`：第 2 批一发出就把第 1 批的协程取消掉，
+  取消路径走 `catch (CancellationException) { throw e }` → **永远不回调** → 那一批永久挂起
+  （不入库、不报错、并发槽位不释放、界面一直显示「翻译中」）。
+  真机日志特征：**只有最后发出的那个批能回来**，前面几个一直没有 Response。
+  现在统一走 `translationapi/InFlightRequests`（每个请求一个自己的 Job；`cancelTranslation()` = 取消该实例上
+  **所有**在飞请求），守卫 `translationapi/InFlightRequestsTest`（行为）+
+  `TranslationEngineRequestCancelGuardTest`（源码级：禁止 `currentJob?.cancel()` 写回来）。
+  ⚠️ 推论：**`cancelTranslation()` 不是「取消某一次请求」** —— 接口层没有请求句柄，一取消就是全部。
+  所以「这一次请求的调用方不要结果了」**不能**再转成引擎取消（会连带杀掉同实例上其它并发批），
+  消费侧改用明确的整体中止语义（小说侧 `NovelBatchTranslator.abortAll` / `NovelTextTranslator.abortInFlight`，
+  只在**退出阅读器 / 停任务**时调用）。
 
 **LlamaCpp 本地引擎关键机制（`translationapi/llamacpp/` 门面 + `com.moe.starflow.llamacpp/` 实现 + `:llamacpp` 原生模块）：**
 

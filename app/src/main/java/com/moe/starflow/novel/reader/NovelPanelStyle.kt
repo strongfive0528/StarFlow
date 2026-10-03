@@ -341,13 +341,28 @@ object NovelPanelStyle {
 
     // ===== 翻译 =====
 
-    /** 每批段数：默认 3，范围 1–10（用户明确要求：一次翻一批）。 */
+    /** 每批段数：默认 **2**（2026-10-03 用户口径，原 3），范围 1–10。 */
     const val BATCH_MIN = 1
     const val BATCH_MAX = 10
-    const val BATCH_DEFAULT = 3
+    const val BATCH_DEFAULT = 2
 
+    /** ⚠️ 旧默认值：与 [BATCH_DEFAULT] 的当前值必须**不同**（[migrateBatchDefaults] 的判据）。 */
+    private const val BATCH_DEFAULT_LEGACY = 3
+
+    /**
+     * ⚠️ **启动延迟（防抖）范围 200–5000ms、默认 1200ms**（2026-10-04 用户口径修）。
+     *
+     * 原来是 200–2000 / 默认 500 —— 用户真机上「防抖完全没用……根本没等」：**500ms 在"上一批
+     * 译完"和"翻页之后"这两个点上几乎看不出来**（请求本身要 4~8 秒，500ms 的间隔像是立刻）。
+     * 现在默认拉到 1.2 秒、上限放到 5 秒，用户想要更长的停顿自己拖（面板上显示的是毫秒数）。
+     */
     const val DEBOUNCE_MIN = 200
-    const val DEBOUNCE_MAX = 2000
+    const val DEBOUNCE_MAX = 5000
+    const val DEBOUNCE_DEFAULT = 1200
+
+    /** ⚠️ 旧默认值（500）：[migrateDebounce] 靠它识别"还停在旧默认的人"，必须与上面不同。 */
+    private const val DEBOUNCE_DEFAULT_LEGACY = 500
+    private const val KEY_DEBOUNCE_VERSION = "novel_debounce_version"
 
     private const val KEY_TRANSLATE_MODE = "novel_translate_mode"
     private const val KEY_DEBOUNCE = "novel_translate_debounce"
@@ -380,11 +395,27 @@ object NovelPanelStyle {
             },
         ).apply()
 
-    fun debounceMs(prefs: SharedPreferences): Int =
-        prefs.getInt(KEY_DEBOUNCE, 500).coerceIn(DEBOUNCE_MIN, DEBOUNCE_MAX)
+    fun debounceMs(prefs: SharedPreferences): Int {
+        migrateDebounce(prefs)
+        return prefs.getInt(KEY_DEBOUNCE, DEBOUNCE_DEFAULT).coerceIn(DEBOUNCE_MIN, DEBOUNCE_MAX)
+    }
 
     fun setDebounceMs(prefs: SharedPreferences, v: Int) =
         prefs.edit().putInt(KEY_DEBOUNCE, v.coerceIn(DEBOUNCE_MIN, DEBOUNCE_MAX)).apply()
+
+    /**
+     * 「启动延迟 500 → 1200ms」的一次性迁移（2026-10-04）。
+     *
+     * 与 [migrateConcurrency] / [migrateBatchDefaults] 同一套：**只挪"还停在旧默认值"的人**，
+     * 自己拖过滑块的不动。版本键保证只跑一次。
+     */
+    private fun migrateDebounce(prefs: SharedPreferences) {
+        if (prefs.getInt(KEY_DEBOUNCE_VERSION, 0) >= 1) return
+        prefs.edit().putInt(KEY_DEBOUNCE_VERSION, 1).apply()
+        if (prefs.getInt(KEY_DEBOUNCE, DEBOUNCE_DEFAULT_LEGACY) == DEBOUNCE_DEFAULT_LEGACY) {
+            prefs.edit().putInt(KEY_DEBOUNCE, DEBOUNCE_DEFAULT).apply()
+        }
+    }
 
     /** 增量模式下自动向后翻的**批**数：默认 5，范围 2–10。 */
     fun aheadBatches(prefs: SharedPreferences): Int =
@@ -393,9 +424,11 @@ object NovelPanelStyle {
     fun setAheadBatches(prefs: SharedPreferences, v: Int) =
         prefs.edit().putInt(KEY_AHEAD_BATCHES, v.coerceIn(NovelQuota.MIN, NovelQuota.MAX)).apply()
 
-    /** 每批段数：默认 3，范围 1–10。 */
-    fun batchSize(prefs: SharedPreferences): Int =
-        prefs.getInt(KEY_BATCH, BATCH_DEFAULT).coerceIn(BATCH_MIN, BATCH_MAX)
+    /** 每批段数：默认 **2**，范围 1–10。 */
+    fun batchSize(prefs: SharedPreferences): Int {
+        migrateBatchDefaults(prefs)
+        return prefs.getInt(KEY_BATCH, BATCH_DEFAULT).coerceIn(BATCH_MIN, BATCH_MAX)
+    }
 
     fun setBatchSize(prefs: SharedPreferences, v: Int) =
         prefs.edit().putInt(KEY_BATCH, v.coerceIn(BATCH_MIN, BATCH_MAX)).apply()
@@ -403,20 +436,45 @@ object NovelPanelStyle {
     /**
      * **单批超长预警阈值**（token 粗估）：一批合并文本估算超过它 → 弹窗问「继续 / 取消这次翻译」。
      *
-     * 档位与默认值都在 [NovelBatchWarning]（默认 4096），这里只负责读写。
+     * 档位与默认值都在 [NovelBatchWarning]（默认 **2048**），这里只负责读写。
      * 存的可能是老值/手改值 → 一律 [NovelBatchWarning.normalize] 收敛到档位上，
      * 免得"面板滑块显示 A、判据用 B"。
      */
     private const val KEY_BATCH_WARN = "novel_translate_batch_warn"
 
-    fun batchWarnThreshold(prefs: SharedPreferences): Int =
-        NovelBatchWarning.normalize(prefs.getInt(KEY_BATCH_WARN, NovelBatchWarning.DEFAULT_THRESHOLD))
+    fun batchWarnThreshold(prefs: SharedPreferences): Int {
+        migrateBatchDefaults(prefs)
+        return NovelBatchWarning.normalize(prefs.getInt(KEY_BATCH_WARN, NovelBatchWarning.DEFAULT_THRESHOLD))
+    }
 
     fun setBatchWarnThreshold(prefs: SharedPreferences, v: Int) =
         prefs.edit().putInt(KEY_BATCH_WARN, NovelBatchWarning.normalize(v)).apply()
 
+    private const val KEY_BATCH_DEFAULTS_VERSION = "novel_batch_defaults_version"
+
     /**
-     * 「同时 API 请求数」**用户设的值**（1–10，默认 5）。
+     * 「每批段数 3 → 2」「单批预警 4096 → 2048」的一次性迁移（用户口径 2026-10-03）。
+     *
+     * 与 [migrateConcurrency] / [migrateLineSpacing] 同一套：**只挪「还停在旧默认值」的人**，
+     * 自己拖过滑块的不动 —— 用户显式设过的值不能被偷偷改掉。版本键保证只跑一次。
+     */
+    private fun migrateBatchDefaults(prefs: SharedPreferences) {
+        if (prefs.getInt(KEY_BATCH_DEFAULTS_VERSION, 0) >= 1) return
+        prefs.edit().putInt(KEY_BATCH_DEFAULTS_VERSION, 1).apply()
+        val edit = prefs.edit()
+        if (prefs.getInt(KEY_BATCH, BATCH_DEFAULT_LEGACY) == BATCH_DEFAULT_LEGACY) {
+            edit.putInt(KEY_BATCH, BATCH_DEFAULT)
+        }
+        if (prefs.getInt(KEY_BATCH_WARN, NovelBatchWarning.LEGACY_DEFAULT_THRESHOLD) ==
+            NovelBatchWarning.LEGACY_DEFAULT_THRESHOLD
+        ) {
+            edit.putInt(KEY_BATCH_WARN, NovelBatchWarning.DEFAULT_THRESHOLD)
+        }
+        edit.apply()
+    }
+
+    /**
+     * 「同时 API 请求数」**用户设的值**（1–10，默认 3）。
      *
      * ⚠️ 传进来的必须是**默认 SharedPreferences**（`PreferenceManager.getDefaultSharedPreferences`）——
      * 这个键（`TranslationConcurrency.KEY_NOVEL`）与文本翻译引擎配置放在一起，**不在** [PREFS_NAME] 里。
@@ -426,6 +484,7 @@ object NovelPanelStyle {
      * 面板显示用户设的值 + 一句「本地引擎固定串行」的提示，所以两者不一致也不奇怪。
      */
     fun storedConcurrency(prefs: SharedPreferences): Int {
+        migrateConcurrency(prefs)
         val stored = try {
             prefs.getInt(TranslationConcurrency.KEY_NOVEL, TranslationConcurrency.NOVEL_DEFAULT)
         } catch (e: Exception) {
@@ -434,6 +493,32 @@ object NovelPanelStyle {
                 ?: TranslationConcurrency.NOVEL_DEFAULT
         }
         return stored.coerceIn(TranslationConcurrency.NOVEL_MIN, TranslationConcurrency.NOVEL_MAX)
+    }
+
+    private const val KEY_CONCURRENCY_VERSION = "novel_concurrency_version"
+
+    /** ⚠️ 旧默认值：与 [TranslationConcurrency.NOVEL_DEFAULT] 的当前值必须**不同**（迁移的判据）。 */
+    private const val CONCURRENCY_DEFAULT_LEGACY = 5
+
+    /**
+     * 「同时 API 请求数」默认值 **5 → 3** 的一次性迁移（用户口径 2026-10-03）。
+     *
+     * 与 [migrateLineSpacing] 同一套思路：**只挪「还停在旧默认值」的人**，自己拖过滑块的不动
+     * —— 用户显式设过的值不能被偷偷改掉。版本键保证只跑一次。
+     */
+    private fun migrateConcurrency(prefs: SharedPreferences) {
+        if (prefs.getInt(KEY_CONCURRENCY_VERSION, 0) >= 1) return
+        prefs.edit().putInt(KEY_CONCURRENCY_VERSION, 1).apply()
+        val cur = try {
+            prefs.getInt(TranslationConcurrency.KEY_NOVEL, CONCURRENCY_DEFAULT_LEGACY)
+        } catch (e: Exception) {
+            return
+        }
+        if (cur == CONCURRENCY_DEFAULT_LEGACY) {
+            prefs.edit()
+                .putInt(TranslationConcurrency.KEY_NOVEL, TranslationConcurrency.NOVEL_DEFAULT)
+                .apply()
+        }
     }
 
     fun setConcurrency(prefs: SharedPreferences, v: Int) = prefs.edit()

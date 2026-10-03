@@ -45,6 +45,9 @@ class NovelPageAdapter : RecyclerView.Adapter<NovelPageAdapter.VH>() {
     /** 正在翻译 / 刚翻完的段（琥珀高亮底）。 */
     private var activeBatch: Set<Int> = emptySet()
 
+    /** 翻失败了的段（淡红高亮底）。 */
+    private var failedBatch: Set<Int> = emptySet()
+
     class VH(val curl: CurlPageView, val page: NovelPageView) : RecyclerView.ViewHolder(curl)
 
     fun submit(content: ChapterContent, style: NovelTextStyle, textColor: Int, backgroundColor: Int) {
@@ -82,6 +85,13 @@ class NovelPageAdapter : RecyclerView.Adapter<NovelPageAdapter.VH>() {
         notifyItemRangeChanged(0, itemCount)
     }
 
+    /** 「翻失败了」高亮变化（只重画）。 */
+    fun setFailedBatch(sel: Set<Int>) {
+        if (failedBatch == sel) return
+        failedBatch = sel
+        notifyItemRangeChanged(0, itemCount)
+    }
+
     override fun onCreateViewHolder(parent: ViewGroup, viewType: Int): VH {
         val curl = CurlPageView(parent.context)
         // ViewPager2 的页面就用 RecyclerView.LayoutParams（它的 LayoutParams 未公开）
@@ -115,7 +125,7 @@ class NovelPageAdapter : RecyclerView.Adapter<NovelPageAdapter.VH>() {
         holder.curl.setPageBackground(backgroundColor)
         val c = content ?: return
         val page = c.pages.getOrNull(position) ?: return
-        holder.page.bind(c, page, style, textColor, selected, activeBatch)
+        holder.page.bind(c, page, style, textColor, selected, activeBatch, failedBatch)
     }
 
     companion object {

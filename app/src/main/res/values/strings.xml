@@ -1256,6 +1256,14 @@
     <string name="chapter_translate_notify_paused">Paused · %1$d/%2$d pages</string>
     <string name="chapter_translate_notify_summary_title">Chapter translation</string>
     <string name="chapter_translate_notify_summary">%1$d chapter(s) translating in background</string>
+    <!-- 通知通道名（所有翻译进度通知共用；改通道 id 时它会重新出现在系统设置里） -->
+    <string name="translate_notify_channel_name">Translation progress</string>
+    <!-- 阅读器前台队列（手动/自动/增量）的通知第二行：%1$s 是"第 X/Y 页"那类进度 -->
+    <string name="novel_translate_notify_line">%1$s · %2$d batch(es) translated</string>
+    <!-- 仅 OCR 执行模式：通知栏也必须是 OCR 口径（那时一页都没在翻译） -->
+    <string name="chapter_translate_notify_progress_ocr">OCRing %1$d/%2$d pages</string>
+    <string name="chapter_translate_notify_summary_title_ocr">Chapter OCR</string>
+    <string name="chapter_translate_notify_summary_ocr">%1$d chapter(s) OCRing in background</string>
     <string name="reader_translate_chapter_clear">Clear</string>
     <string name="reader_translate_chapter_running">Translating chapter %1$d/%2$d</string>
     <!-- 章节批量翻译的并发度（漫画：OCR 串行，调高主要加快翻译请求） -->
@@ -1642,8 +1650,8 @@
     <string name="novel_display_original">Original</string>
     <string name="novel_display_bilingual">Bilingual</string>
     <string name="novel_translate_mode">Translation mode</string>
-    <string name="novel_translate_debounce">Start delay</string>
-    <string name="novel_translate_debounce_hint">How long to wait after a page turn before translating (debounce), used by auto and incremental modes. Smaller feels snappier but wastes a few pages while you keep turning.</string>
+    <string name="novel_translate_debounce">Wait for a stable page</string>
+    <string name="novel_translate_debounce_hint">The page must stay put (no page turns / scrolling) for this long before it counts as stable — only then does translation start. Nothing is sent and no highlight appears until then. Shared by auto and incremental modes.</string>
     <string name="novel_translate_debounce_value">%1$d ms</string>
     <string name="novel_translate_ahead_hint">How many batches to run ahead in incremental mode (this × paragraphs per batch = paragraphs per window). It stops when the window is done and moves on as you turn pages.</string>
     <string name="novel_translate_ahead">Incremental look-ahead</string>
@@ -1660,6 +1668,8 @@
     <string name="novel_empty_chapter">This chapter has no readable text.</string>
     <string name="novel_first_chapter">Already at the first chapter</string>
     <string name="novel_last_chapter">Already at the last chapter</string>
+    <string name="novel_chapter_first_page">Already at the first page of this chapter</string>
+    <string name="novel_chapter_last_page">Already at the last page of this chapter</string>
     <string name="novel_back">Back</string>
     <string name="novel_prev_chapter">Previous chapter</string>
     <string name="novel_next_chapter">Next chapter</string>
@@ -1668,17 +1678,23 @@
     <!-- ===== 单批超长预警（一批合并文本估算超过阈值 → 弹窗问「继续 / 取消这次翻译」） ===== -->
     <string name="novel_translate_warn">Batch warning threshold</string>
     <string name="novel_translate_warn_hint">Ask once before sending a batch whose source text is estimated above this length (only asked once per run). A larger value means fewer prompts, but overly long requests are more likely to be truncated or mistranslated.</string>
-    <string name="novel_translate_oversize_title">Batch is very long</string>
-    <string name="novel_translate_oversize_msg">This batch is about %1$d tokens, above the %2$d you set. Very long input can make the translation worse. Continue?</string>
-    <string name="novel_translate_oversize_continue">Continue</string>
-    <string name="novel_translate_oversize_skip">Skip this batch</string>
-    <string name="novel_translate_oversize_skipped">Skipped the over-long batch</string>
+    <string name="novel_translate_oversize_title">Batch is over the limit</string>
+    <string name="novel_translate_oversize_msg">This batch is about %1$d, over the %2$d limit. Lowering “paragraphs per batch” above is recommended.\n\nCancelling stops the current translation and switches back to manual mode.</string>
+    <string name="novel_translate_oversize_continue">Ignore and continue</string>
+    <string name="novel_translate_oversize_cancel">Cancel this translation</string>
+    <string name="novel_translate_oversize_cancelled">Translation cancelled (back to manual mode)</string>
+    <string name="novel_translate_oversize_timeout">Timed out waiting; continuing automatically</string>
     <!-- ===== 同时 API 请求数（文本翻译；本地引擎固定 1） ===== -->
     <string name="novel_translate_concurrency">Max concurrent translation requests</string>
     <string name="novel_translate_concurrency_hint">Max concurrent requests for whole-chapter and incremental translation; local models stay at 1. The rest queue in reading order.</string>
     <!-- ===== 章卡片：后台章节任务的进度（单位是**批**，不是页） ===== -->
     <string name="novel_chapter_running_batches">Translating %1$d/%2$d batches</string>
+    <!-- 整章任务的**浮层常驻芯片**（app 内的"通知系统"，用户口径 2026-10-04） -->
+    <string name="novel_chapter_overlay_running">Translating whole chapter · ch %1$d %2$d/%3$d batches</string>
+    <string name="novel_chapter_overlay_paused">Whole chapter paused · ch %1$d %2$d/%3$d batches</string>
     <string name="novel_chapter_paused_batches">Paused · %1$d/%2$d batches</string>
+    <string name="novel_chapter_running_split">Success %1$d · Failed %2$d · Total %3$d</string>
+    <string name="novel_chapter_paused_split">Paused · Success %1$d · Failed %2$d · Total %3$d</string>
     <!-- 章卡片第二行：这一章还有多少批排在队里（纯内存态） -->
     <string name="novel_chapter_active_batches">%1$d batch(es) in flight</string>
     <string name="novel_chapter_active_waiting_batches">%1$d in flight · %2$d waiting</string>

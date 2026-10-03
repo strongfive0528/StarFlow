@@ -53,6 +53,50 @@ class NovelBatchPlannerTest {
         )
     }
 
+    /**
+     * ⚠️ **本页一个可翻译段都没有**（图片页 / 整页都是 <4 字的短行 / 段落都在别页）时，
+     * 增量**不能**直接停住：那时窗口起点由「当前页全部段」给出（`aheadStartPara`），从它往后接着翻。
+     *
+     * 原来的 `pageParaIndexes.maxOrNull() ?: return null` 会让增量永远停在
+     * 「已向后翻完 0 批 · 翻页继续」，用户不翻页就一动不动
+     * （2026-10 用户报的「当前页段数不足时增量/自动无法翻译、始终 0 批」）。
+     */
+    @Test
+    fun `增量在本页无可翻译段时从窗口起点继续向后`() {
+        val emptyPage = emptyList<Int>()
+        assertEquals(
+            4,
+            NovelBatchPlanner.anchorForMode(
+                NovelTranslateMode.AHEAD, emptyPage, chapter, setOf(0, 1, 2, 3),
+                aheadLimitPara = 8, aheadStartPara = 4,
+            ),
+        )
+        // 自动模式不受影响：本页没得翻就停（等用户翻页）—— 既有口径没变
+        assertNull(
+            NovelBatchPlanner.anchorForMode(
+                NovelTranslateMode.AUTO, emptyPage, chapter, setOf(0, 1, 2, 3),
+                aheadLimitPara = 8, aheadStartPara = 4,
+            ),
+        )
+    }
+
+    /** 空页且窗口内没有未翻段 / 起点已在右边界之外 → 仍然停下（章末与窗口尾即停，不越界）。 */
+    @Test
+    fun `增量在空页且窗口内没有未翻段时停下`() {
+        assertNull(
+            NovelBatchPlanner.anchorForMode(
+                NovelTranslateMode.AHEAD, emptyList(), chapter, (4..7).toSet(),
+                aheadLimitPara = 8, aheadStartPara = 4,
+            ),
+        )
+        assertNull(
+            NovelBatchPlanner.anchorForMode(
+                NovelTranslateMode.AHEAD, emptyList(), chapter, setOf(0, 1, 2, 3),
+                aheadLimitPara = 8, aheadStartPara = 9,
+            ),
+        )
+    }
+
     /** 手动/自动的锚点**只看当前页**：本页之前的段没翻也不管。 */
     @Test
     fun `手动与自动的锚点都只看当前页`() {

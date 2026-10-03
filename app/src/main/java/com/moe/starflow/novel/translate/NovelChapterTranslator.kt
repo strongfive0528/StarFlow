@@ -24,6 +24,15 @@ interface NovelBatchTranslator {
         targetLang: String,
         translatorName: String,
     ): NovelBatchResult
+
+    /**
+     * **中止该引擎实例上所有在飞请求**（阅读器退出 / 打开面板 / 强制退出时用）。
+     *
+     * ⚠️ 与「某一次请求被取消」不同：接口层没有请求句柄，一取消就是取消全部 ——
+     * 这里要的正是全停（退出阅读器 = 这一次自动/增量翻译就此结束）。
+     * 默认空实现：纯逻辑单测的 Fake 不受影响。
+     */
+    fun abortAll() {}
 }
 
 /**
@@ -223,6 +232,11 @@ class NovelChapterTranslator(
         // 新版本的行 `insertIgnore` 静默写不进去（分母补不齐、「翻译中」标不上）。
         // 放在进入阅读器时做，和 resetTranslating 同一个理由（进程被杀时"退出时清理"不会执行）。
         dao.deleteOtherVersions(book.id, book.translationKey, splitVersion)
+    }
+
+    /** 见 [NovelBatchTranslator.abortAll]：整批任务/阅读器退出时把在途请求真的掐掉。 */
+    override fun abortAll() {
+        engine.abortInFlight()
     }
 
     /**

@@ -10,7 +10,7 @@ import org.junit.Test
  * 单批超长预警的**判据守卫**（纯 JVM）。
  *
  * 钉死三件事：
- * 1. 档位与默认值（默认 4096、档位都是较大的值、**单射**且默认值落在格点上）——
+ * 1. 档位与默认值（默认 **2048**、档位都是较大的值、**单射**且默认值落在格点上）——
  *    漫画调试面板曾因为"位置 ↔ 取值"写了两套互逆公式而出现「默认值不在格点上」
  * 2. 判据是 **`estimate > threshold`**（等于不算超）；阈值 <= 0 = 关闭
  * 3. 「同一轮只打扰一次」：用户拒过一次之后，同轮后续超长批不再弹窗
@@ -19,7 +19,7 @@ class NovelBatchWarningTest {
 
     @Test
     fun `档位是较大值且默认值落在格点上`() {
-        assertEquals(4096, NovelBatchWarning.DEFAULT_THRESHOLD)
+        assertEquals("默认阈值 = 2048（用户口径 2026-10-03）", 2048, NovelBatchWarning.DEFAULT_THRESHOLD)
         assertTrue("档位不小于 2048（太小会逢批必弹）", NovelBatchWarning.tiers.all { it >= 2048 })
         assertEquals("档位必须严格递增", NovelBatchWarning.tiers.sorted(), NovelBatchWarning.tiers)
         assertEquals("档位不能重复（单射）", NovelBatchWarning.tiers.size, NovelBatchWarning.tiers.toSet().size)
@@ -27,6 +27,11 @@ class NovelBatchWarningTest {
             "默认值必须是一个档位，否则滑块与判据对不上",
             NovelBatchWarning.DEFAULT_THRESHOLD,
             NovelBatchWarning.thresholdAt(NovelBatchWarning.defaultIndex),
+        )
+        assertEquals(
+            "旧默认值必须与当前默认值不同（NovelPanelStyle.migrateBatchDefaults 的判据）",
+            false,
+            NovelBatchWarning.LEGACY_DEFAULT_THRESHOLD == NovelBatchWarning.DEFAULT_THRESHOLD,
         )
     }
 

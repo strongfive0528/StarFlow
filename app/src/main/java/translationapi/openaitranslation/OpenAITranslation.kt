@@ -17,6 +17,8 @@
 
 package translationapi.openaitranslation
 
+import translationapi.InFlightRequests
+
 import android.content.Context
 import com.moe.starflow.R
 import com.moe.starflow.me.apiconfig.OpenAIProviderConfig
@@ -101,7 +103,7 @@ class OpenAITranslation(
 
     // 创建协程作用域
     private val coroutineScope = CoroutineScope(Dispatchers.IO + SupervisorJob())
-    private var currentJob: Job? = null
+    private val inFlight = InFlightRequests()
 
     private val JSON = "application/json; charset=utf-8".toMediaType()
 
@@ -128,10 +130,7 @@ class OpenAITranslation(
         targetLanguage: String,
         callback: (TranslationResult) -> Unit
     ) {
-        // 取消之前的任务（如果存在）
-        currentJob?.cancel()
-
-        currentJob = coroutineScope.launch {
+        inFlight.track(coroutineScope) {
             try {
                 val result = translate(text, sourceLanguage, targetLanguage)
                 withContext(Dispatchers.Main) {
@@ -346,8 +345,7 @@ class OpenAITranslation(
     }
 
     override fun cancelTranslation() {
-        currentJob?.cancel()
-        currentJob = null
+        inFlight.cancelAll()
     }
 
     override fun release() {

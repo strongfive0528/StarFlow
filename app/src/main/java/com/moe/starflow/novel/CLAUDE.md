@@ -75,12 +75,33 @@ Robolectric 的文本引擎是**桩**：`Paint.breakText` 不按宽度换行、�
 
 **翻译口径（别再改错，有测试钉着）**：
 
-- **批 = 连续 N 段**（默认 3，范围 1–10），**不跨章**
+- **批 = 连续 N 段**（默认 **2**（2026-10-03 用户口径，原 3），范围 1–10），**不跨章**
 - **手动**：当前页第一段没翻的段起，翻**一批**
-- **自动**：盯着**当前页**一批批翻，本页翻完就停（等翻页）
-- **增量**：自动 + 不受当前页限制，从**当前页第一段**往后翻「向后批数 × 每批段数」段（**滑动窗口**，不是一次性额度：窗口翻完停下，用户翻页窗口自己前移、接着翻；章末即停）
-- 面板打开 / 双击翻译按钮 = 暂停并**回退手动**；**退出阅读器只暂停、不改模式**（回来按原模式接着翻）
-- 守卫：`NovelBatchPlannerTest`、`NovelTranslationQueueTest`（三种模式怎么推进）
+- **自动**：盯着**当前页**一批批翻，本页翻完就停（等翻页）。
+  ⚠️ **自动恒为串行**（用户口径 2026-10-03：「自动翻译只会一批一批向后翻译，**前一批没结束不会开下一批**；
+  增量和整章才受最大请求数限制」）→ 调度里 `slots` 在 AUTO 下被夹成 1；`OcrLock` 仍只看**引擎**
+  （`concurrency() == 1`），远端 API 下 AUTO 不抢 OCR 锁
+- **增量**：自动 + 不受当前页限制，从**当前页第一段**往后翻「向后批数 × 每批段数」段（**滑动窗口**，不是一次性额度：窗口翻完停下，用户翻页窗口自己前移、接着翻；章末即停）；**并发 N 只作用于它和整章**
+- **防抖按「屏」+「上一批收尾」两个触发点**（2026-10-04 用户口径修）：
+  用户报的现场是「**黄色翻译中的背景在上一批翻译完后就会立刻跳到当前正在翻的页面**」——
+  旧写法只把防抖挂在"翻屏"上，而翻屏时上一批还在飞：那次 `delay(debounce)` 在"等在飞批"的
+  过程中被**白白消耗**掉，等上一批真收尾时防抖早已过期 → 立刻认领下一批，黄底无缝跳过去。
+  现在待翻的屏变了 **或 有批收尾（在飞清零）** 都会排一次「等待页面稳定」（两个 `AtomicBoolean`：
+  `spanChanged` / `settled`，见 `NovelTranslationQueue` 的 `页面稳定等待` 日志），
+  所以「上一批结束 → 停一拍 → 才轮到下一批」。
+  ⚠️ **黄底只画「当前这一屏真的在飞」的段**（用户口径 2026-10-04：「我一直翻页还是会有黄底」）：
+  翻屏的瞬间把不在本屏的在飞批从高亮里摘掉，一批落定也立刻摘掉 —— 一直翻页时屏幕上不该再出现黄底。
+  ⚠️ 只在**整条流水线空了**才排（`inflight.isEmpty()`）：增量 N>1 时前面的批收尾不打断补位，
+  第一批三个照旧错峰连发。
+- 面板打开 / 双击翻译按钮 = 暂停并**回退手动**；**离开阅读器（返回键/关掉）** 与
+  **切后台（home/息屏）现在是同一套**（用户口径 2026-10-04：「切后台只暂停什么意思？？
+  且后台就直接关闭当前翻译进程，回退到手动模式！（本章翻译除外）」）→ 一律：停队列 + 中止在途
+  请求 + **回退手动** + 提示 `reader_translate_force_stopped_to_manual`；
+  ⚠️ **只有整章任务例外**（应用级宿主，继续跑）。
+  （2026-09 那份"切后台只暂停、回来接着翻"的口径**已被用户明确撤销**，别再改回去。）
+- 守卫：`NovelBatchPlannerTest`、`NovelTranslationQueueTest`（三种模式怎么推进 + 翻页防抖 +
+  **上一批收尾后的防抖** + 清掉译文的段照常翻）、
+  `NovelTranslationConcurrencyTest`（并发错峰 + **自动恒串行**）
 
 ### 批量翻译：章节卡片 + 应用级后台任务 + 并发错峰（2026-10 大改，改动前必读）
 
@@ -113,7 +134,8 @@ Robolectric 的文本引擎是**桩**：`Paint.breakText` 不按宽度换行、�
 - ⚠️ **`waiting` 属性必须自己 `rebuild()`**：面板推送顺序是「先 waiting、后 active」，而 `active` 为空时
   会提前 return —— 少了 rebuild，"刚排上队的批"要等下一次别的字段变化才出现（`NovelPanelSyncTest` 卡这条）
 - ⚠️ **面板里原来的全局 `btn_translate_action` / `btn_translate_clear` 已按用户要求删除**，别再往面板加
-- **翻译参数分两层**：**「启动延迟」单独一行**（常显）；**其余四个收进可折叠组「批次处理」**
+- **翻译参数分两层**：**「等待页面稳定」（原「启动延迟」，2026-10-04 改名）单独一行**（常显）；
+  **其余四个收进可折叠组「批次处理」**
   （`row_batch_group` + `btn_batch_group` + `batch_group_content`）：组内顺序 = **启动增量翻译向后 →
   每批段数 → 单批预警 → 翻译模型最大同时请求数**，**默认折叠**，展开态存 prefs
   （`novel_batch_group_expanded`，`NovelPanelSheet` 里那一份 prefs）。
@@ -133,11 +155,18 @@ Robolectric 的文本引擎是**桩**：`Paint.breakText` 不按宽度换行、�
 - **N = `TranslationConcurrency.novelConcurrency(context, prefs)`**（`novel_concurrent_requests`；
   **本地引擎恒 1**）。⚠️ 滑块必须读写**默认 prefs** —— 阅读器自己那份是 `novel_*`，写错了就是
   "滑块能拖、值也存了，但翻译永远用默认值"的静默失效
-- 调度循环：满员（`inflight.size >= N`）时 60ms 轮询**补位**；**防抖只在流水线空着时等一次**
-  （每批都等防抖会把 N 个在飞又拖回串行）；`N > 1` 且未满员时按 **500ms 错峰**启动下一批
-- `done = 已译 ∪ failedAnchors ∪ userCleared ∪ **在飞批段号**` —— 最后一项是并发的前提：
-  不把在飞的批当"已完成"，同一个锚点会被反复挑中 → 同一瞬间发出 N 个一模一样的请求（白烧额度）
-- ⚠️ **两份账本 `failedAnchors` / `userClearedParaIndexes` 用并发集合**（N>1 时有多个工人读写），
+- ⚠️ **默认值 = 3**（原 5，用户口径 2026-10-03）：老用户里「还停在旧默认 5」的由
+  `NovelPanelStyle.migrateConcurrency` 一次性挪到 3，**自己拖过滑块的不动**（与 `migrateLineSpacing` 同一套）
+- 调度循环：满员（`inflight.size >= N`）时 60ms 轮询**补位**；
+  ⚠️ **AUTO 下 `slots` 被夹成 1**（自动恒串行，见上「翻译口径」），N 只作用于增量；
+  `N > 1` 且未满员时按 **500ms 错峰**启动下一批
+- **等页面稳定**：见上「翻译口径」那条（翻屏 **或** 上一批收尾都排一次；
+  `AtomicBoolean spanChanged` / `settled`，日志 `页面稳定等待 Nms`）
+- `done = 已译 ∪ failedAnchors ∪ **在飞批段号**` —— 最后一项是并发的前提：
+  不把在飞的批当"已完成"，同一个锚点会被反复挑中 → 同一瞬间发出 N 个一模一样的请求（白烧额度）。
+  ⚠️ **没有 `userCleared` 这一项了**（2026-10-04 撤）：清译文 = 一次显式编辑，宿主当场停队列 +
+  回退手动，之后那几段就是普通"没译文的段"（见「清除选中段的译文」那条）
+- ⚠️ **账本 `failedAnchors` 用并发集合**（N>1 时有多个工人读写），
   且**在飞账本的一切读写都要持锁**：曾出现"调度侧无锁 `sorted()` 迭代 + 工人侧加锁 `removeAll`"
   → `ConcurrentModificationException` 抛在 `launch` 里（scope 无异常处理器 = 崩进程）
 - **`OcrLock` 只在 N==1（本地引擎）时整批持有**；N>1（远端 API）**不持锁** —— 那把锁是**OCR 引擎锁**，
@@ -152,18 +181,54 @@ Robolectric 的文本引擎是**桩**：`Paint.breakText` 不按宽度换行、�
   —— 与漫画「打开面板/退出阅读器」的强制退出同一套，2026-09-28 核对过）。
   「等待」= `runner.waitingPages` + `queuedPages`（章任务）为唯一数据源，不要拿"提交数 − 完成数"推
 
-**单批超长预警**：`NovelBatchWarning`（档位 `2048/4096/8192/16384/32768`，默认 **4096**；
-`utils/TokenEstimator` 粗估 token）+ `NovelBatchWarnGate` / `NovelOversizeConfirmer`
-（**同一轮只打扰一次**：用户对一批说了"取消"之后，同一轮里后续超长批静默跳过）。
+**单批超长预警**：`NovelBatchWarning`（档位 `2048/4096/8192/16384/32768`，默认 **2048**
+（2026-10-03 用户口径，原 4096；老用户里"还停在旧默认 4096"的由 `NovelPanelStyle.migrateBatchDefaults`
+一次性挪到 2048，"每批段数 3 → 2"同一个迁移）；`utils/TokenEstimator` 粗估 token）+
+`NovelBatchWarnGate` / `NovelOversizeConfirmer`（**同一轮只打扰一次**）。
 判据收敛在 **`NovelChapterTranslator.translateBatch` 一处**（翻译本章 / 多选 / 自动 / 增量全汇到这里，
 不会漏路径）；⚠️ **后台任务（阅读器已关）没有 UI 可弹窗时必须放行**，否则任务会静默停在一半。
 
-**暂停提示**：退出阅读器 / 打开面板 = **强制退出在途翻译 + 回退手动** → 文案
-`reader_translate_force_stopped_to_manual`（「翻译进程已强制退出，回退到手动模式」）；**章节任务取消**
-（本来就手动）→ 只报 `reader_translate_force_stopped`（用户口径 2026-09-28）。提示在
-**`onStop` 判 `isFinishing`** 时发（`onDestroy` 里弹的 Toast 常被系统吞掉，这正是用户报"没有提示"的根因），
-`onDestroy` 只兜底 + 防重复（与漫画同一套）。
+⚠️ **弹窗的两个出口**（用户口径 2026-10-03）：
+- **忽略并继续**（肯定）→ 照翻
+- **取消本次翻译**（否定）→ **关闭当前翻译进程 + 回退手动**（不再是"只跳过这一批"）：
+  前台队列走 `NovelReaderActivity.cancelCurrentTranslation()`（停队列 + 中止在途请求 + 模式回手动 +
+  取消当前章的整章任务）；整章任务那条路在 `NovelChapterJobHost.translateUnit` 里收尾
+  （`result.isEmpty && oversize.hasDeclined()` → `cancel(章)`），否则那一章会被一批批静默跳过
+- 60s 不点 = 当作"继续"（提示 `novel_translate_oversize_timeout`），不能让后台任务无限挂着
+
+**暂停提示（2026-10-04 更新：退出 与 切后台 同一套）**：**离开阅读器（返回键/关掉）**、
+**切后台（home/息屏）**、**打开面板** 都是**强制退出在途翻译（含中止 HTTP）+ 回退手动** →
+文案 `reader_translate_force_stopped_to_manual`（「翻译进程已强制退出，回退到手动模式」）；
+**章节任务取消**（本来就手动）→ 只报 `reader_translate_force_stopped`（用户口径 2026-09-28）。
+提示在 **`onStop`** 里发（`onDestroy` 里弹的 Toast 常被系统吞掉），`onDestroy` 只兜底 + 防重复
+（兜底那条也把模式回退手动）。
+⚠️ **提示必须走 [showSticky] 语义**（`showPausedNotice` 里那条注释）：提示发完紧接着就是 `onDestroy` 的
+`TranslationStatusOverlay.dismiss()`，普通 `show()` 会被**当场抹掉**（只剩几十毫秒的一闪）——
+用户报的「退出阅读器**没看到**回退提示」有一半来自这里。
 ⚠️ `pauseToManual` **不再动章节任务**（那是后台任务，暂停前台队列不该打断它）。
+⚠️ `novel_translate_paused_background`（"已暂停，回来继续"）**已废弃**：切后台不再只暂停。
+
+**两条"提示"通道别搞混（用户 2026-10-04 明确纠正过）**：
+| 用户说的 | 实际指 | 实现 |
+|---|---|---|
+| 「**app 的通知系统**」 | 应用内的**状态浮层**（`TranslationStatusOverlay` 的芯片） | 自动/增量 → 队列状态 `showImmediate`「正在翻译 · 第 X/Y 页」；**整章 → `showRunning` 常驻芯片**「整章翻译中 · 第 N 章 x/y 批」（`NovelReaderActivity.refreshChapterJobChips`，与别的芯片并存、可按句柄移除） |
+| 「通知」（系统通知栏） | Android 通知（**要下拉状态栏**才看得到） | 整章 = `TranslationJobService` 每章一条（id 10000+）；阅读器队列 = `ReaderTranslationNotify`（id 9997）。通道 `translation_progress`（DEFAULT 重要度） |
+
+**通知栏（用户口径 2026-10-03：翻译过程的提示**必须进通知系统**，不只是面板徽章）**：
+- **整章任务**：`TranslationJobService` 每章一条（注册表驱动），通道走
+  **`TranslationNotifyChannel.ensure`**（唯一入口，`translation_progress` + **`IMPORTANCE_DEFAULT`**）
+  ⚠️ 旧的 `chapter_translation` 建成 `IMPORTANCE_LOW`，而通道重要度**创建后 App 改不了** →
+  MIUI 上不亮状态栏图标、还容易被折叠成"不重要通知"，用户报的「整章翻译没看到通知」就是它。
+  换 id + 顺手删旧通道，守卫 `translate/batch/ReaderTranslationNotifyTest`
+- **阅读器前台队列（手动一批 / 自动 / 增量）**：`translate/batch/ReaderTranslationNotify`
+  （固定 id 9997，避开汇总 9998 与每章 10000+），由 `NovelReaderActivity.observeQueue` 逐次状态镜像
+  ⚠️ **它也必须先 `TranslationNotifyChannel.ensure`**：Android 8+ 往**不存在**的通道发通知是
+  **静默丢弃**，而这条通知不经过前台服务 —— 只用自动/增量、从没点过「翻译本章」的用户，
+  通道根本没人建（这是"看不到通知"的第三种漏法）
+  ⚠️ **只在 `TRANSLATING` / `WAITING_LOCK` 时挂着**，DRAINED/IDLE、面板打开、`onStop`/`onDestroy`
+  立刻收掉 —— 一条写着"正在翻译"却什么都没在跑的通知比没有通知更糟
+  ⚠️ 它**不进** `TranslationJobRegistry`、也**不需要前台服务**：队列活在阅读器的 `lifecycleScope` 里，
+  离开阅读器就停（用户明确要求），没有"后台保活"的需求
 
 **守卫**：`NovelTranslationConcurrencyTest`（错峰铺开 / 满员不发 / 结束补位 / N=1 全程单飞 /
 并发下失败批不重挑）、`NovelBatchWarningTest`、`NovelChapterTranslatorTest`（预警三条路径）、
@@ -204,11 +269,13 @@ Robolectric 的文本引擎是**桩**：`Paint.breakText` 不按宽度换行、�
   回收站图标（判据收在 `NovelTranslateChrome.showClear(translatedSelected) = translatedSelected > 0`）→
   弹窗报「将清除选中的 N 段译文」（N = 选中**且已翻**的段数）→ 确定后删库 + 重载本章，
   那几段立刻回原文显示，三态/翻译按钮按新状态重算
-  ⚠️ 清过的段要进 `NovelTranslationQueue.userClearedParaIndexes`，而 **`start()` 绝不能清这份账**：
-  自动/增量盯着「当前页有没有没翻的段」，不记账就是清完**立刻又翻回来**（用户看到的"清了个寂寞"）。
-  它与 `failedAnchors` 的唯一区别就是清除时机（`start()` 清后者，只有用户明确要求重来
-  —— 即「翻译本章」`translateWholeChapter` —— 才两份都清）→ **别把两个集合合并成一个**。
-  显式操作（点翻译 / 翻译本章 / 选段重翻）不受这份账影响。守卫：`NovelTranslationQueueTest`
+  ⚠️ **"用户清过的段别再自动翻"的那份账已经取消**（2026-10-04 用户口径：「清译文后重翻只有
+  手动生效，自动和增量即使当前页面刚才删除了译文，开启也没有任何翻译，不会翻译。你要考虑到
+  自动/增量/本章翻译模式下编辑删除的情况」）→ 现在：**清译文 = 一次显式编辑**，
+  `clearSelectedTranslations` 里当场 `pauseToManual()`（停前台队列 + 回退手动）——
+  ① 刚清完**不会**立刻又翻回来（不会"清了个寂寞"）；② 用户之后**再开启**自动/增量时，
+  那几段就是普通"没译文的段"，照常被翻。别再往队列里加"跳过账"。
+  守卫：`NovelTranslationQueueTest` 的「清掉译文的段重新开启自动照常翻」
 - **阅读位置是 `NovelAnchor(段号, 段内比例)`，不是段号**（`NovelAnchors`）：
   一段能跨好几页（只按空行分段，整章一段的样本就是），只按段号恢复会落到**段首那一页/段顶** ——
   译文到达必须重排，重排一次就把读者从段中间拽回段首（用户报的「翻译之后位置跳变」）。
@@ -247,6 +314,11 @@ Robolectric 的文本引擎是**桩**：`Paint.breakText` 不按宽度换行、�
 - **增量 = 跟着当前页走的窗口**（不是一次性额度）：窗口 = 当前页第一段往后
   「向后批数 × 每批段数」段；用完停下，用户**翻页窗口自己前移**接着翻（`aheadLimitPara`）。
   面板增量行显示换算后的段数（"3 批 = 15 段"），改批数或每批段数都要重算（走 `refreshDerivedUi`）
+  ⚠️ 窗口**起点**取「当前视野**全部**段」（`currentPageSpanIndexes`，含不可翻译的图片/短行），
+  **不是**锚点用的那份可翻译段：本页一个可翻译段都没有时，用可翻译段定位会退化成「章首」→
+  `remaining` 算成 0、只弹「已向后翻完 0 批 · 翻页继续」却一批都不翻（用户报的「当前页段数不足 →
+  增量/自动始终 0 批」）。`NovelBatchPlanner.anchorForMode` 在**本页无可翻译段**时改用窗口起点
+  继续向后（**自动模式不变**：本页翻完就停，等翻页）
 - 状态芯片显示**翻到哪一页/哪一段**，不显示第几章（增量会一直往后翻，章号看不出进度）；
   且 DRAINED 不再喊「已翻译」—— 走到 DRAINED 有四种原因（翻完本页/翻完窗口/本章真翻完/一批失败被跳过）
 - **滚动模式进度条按「像素比例」算，不按段序号**（`NovelScrollProgress`）：
@@ -260,9 +332,11 @@ Robolectric 的文本引擎是**桩**：`Paint.breakText` 不按宽度换行、�
 - **双语模式段间距 ×1.8**（`BILINGUAL_PARA_SPACING_FACTOR`，在 `NovelPanelStyle.textStyle` 里乘）：
   一段双语 = 原文行 + 译文行，行间只是一个普通行距；段间距不拉开就分不清"这行译文属于哪段原文"。
   ⚠️ 只作用于排版（分页与绘制共用同一份 style），**不改用户设置里那个 dp 数字**
-- **「正在翻译 / 刚翻完」的段有琥珀高亮**（`NovelTextRenderer.COLOR_ACTIVE_BATCH`，与选中的蓝区分开）：
-  译文到达必须重排、位置总有轻微偏移，高亮让用户偏移后还能找到刚翻的地方。一批翻完**不清**，
-  只在换章 / 清空本章译文 / 换阅读模式时清。高亮底两种模式都**铺满整行 + 8dp 圆角**
+- **琥珀高亮 = 「真的在飞的那几批」**（`NovelTextRenderer.COLOR_ACTIVE_BATCH`，与选中的蓝区分开）：
+  只在 `TRANSLATING` / `WAITING_LOCK` 期间高亮在飞的段，**出结果（成功/失败）立刻擦**。
+  ⚠️ 早先写的是「认领了就高亮、翻完也不擦」（本意是让你看得见"刚翻的是哪几段"），但一旦某批卡住/失败，
+  那几段就**永远黄着** —— 用户看到的「首批一直黄着却不翻译」正是它（2026-10-03 改）。
+  「哪几段失败了」改由面板失败明细 + 红条报，不靠底色记。高亮底两种模式都**铺满整行 + 8dp 圆角**
   （`HIGHLIGHT_CORNER_DP`）——只铺正文列会像被两侧裁了一刀
 - **三态图标是自绘的** `ic_display_{translated,original,bilingual}`：
   ⚠️ 不得与翻译按钮的 `ic_reader_translate` **同形**（同一浮层组并排显示，用户会直接说"图标重复"）；

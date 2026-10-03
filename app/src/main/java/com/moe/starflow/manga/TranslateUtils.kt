@@ -218,7 +218,7 @@ object TranslateUtils {
                 if (isCancelled?.invoke() == true) {
                     cancelledByUser.set(true)
                     translationFinished.set(true)
-                    translator.cancelTranslation()  // 中止引擎 / 取消 HTTP
+                    if (isLocalEngine) translator.cancelTranslation()  // 中止引擎 / 取消 HTTP
                     // 强制结束等待：网络 API 取消后回调永不触发，必须主动 resume 才能解除 isProcessing 阻塞
                     contRef.getAndSet(null)?.let { if (it.isActive) it.resume(Unit) }  // 原子取并置空：看门狗/回调竞争时只 resume 一次
                     break
@@ -226,7 +226,7 @@ object TranslateUtils {
                 if (isLocalEngine && System.currentTimeMillis() - lastProgressAt.get() > LOCAL_STALL_TIMEOUT_MS) {
                     timedOut.set(true)
                     translationFinished.set(true)
-                    translator.cancelTranslation()  // 中止引擎，释放 g_mutex
+                    if (isLocalEngine) translator.cancelTranslation()  // 中止引擎，释放 g_mutex
                     // 强制结束等待：即使 native 彻底卡死不回调，也解除阻塞向上抛错
                     contRef.getAndSet(null)?.let { if (it.isActive) it.resume(Unit) }  // 原子取并置空：看门狗/回调竞争时只 resume 一次
                     break
@@ -239,7 +239,7 @@ object TranslateUtils {
                 contRef.set(cont)
                 cont.invokeOnCancellation {
                     // 协程被取消时尝试主动取消翻译任务
-                    translator.cancelTranslation()
+                    if (isLocalEngine) translator.cancelTranslation()
                 }
                 var lastRenderedCount = 0
                 translator.getTranslationStreaming(
@@ -301,7 +301,7 @@ object TranslateUtils {
             throw TranslationCancelledException()
         }
         if (timedOut.get()) {
-            translator.cancelTranslation()
+            if (isLocalEngine) translator.cancelTranslation()
             val stallSec = (LOCAL_STALL_TIMEOUT_MS / 1000).toInt()
             throw RuntimeException(
                 appContext?.getString(R.string.error_local_engine_stall, stallSec)
@@ -309,7 +309,7 @@ object TranslateUtils {
             )
         }
         if (completed == null) {
-            translator.cancelTranslation()
+            if (isLocalEngine) translator.cancelTranslation()
             throw RuntimeException("AI batch translation timeout (${API_TIMEOUT_MS / 1000}s)")
         }
         if (errorMsg != null) {
@@ -416,7 +416,7 @@ object TranslateUtils {
                 if (!completed) {
                     // 超时：主动取消翻译任务。Hy-MT2 等本地引擎取消后解码循环提前退出，释放占用的引擎，
                     // 否则该线程会继续生成并阻塞后续所有翻译。
-                    translator.cancelTranslation()
+                    if (translator.isLocalHeavyEngine()) translator.cancelTranslation()
                     errorMsg = "Translation timeout (30s)"
                 }
 

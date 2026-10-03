@@ -33,6 +33,9 @@ class NovelScrollAdapter : RecyclerView.Adapter<NovelScrollAdapter.VH>() {
     /** 正在翻译 / 刚翻完的段（琥珀底色）。 */
     private var activeBatch: Set<Int> = emptySet()
 
+    /** 翻失败了的段（淡红底）。 */
+    private var failedBatch: Set<Int> = emptySet()
+
     class VH(val view: ParagraphView) : RecyclerView.ViewHolder(view)
 
     fun submit(content: ChapterContent, style: NovelTextStyle, textColor: Int, backgroundColor: Int) {
@@ -70,6 +73,13 @@ class NovelScrollAdapter : RecyclerView.Adapter<NovelScrollAdapter.VH>() {
         notifyItemRangeChanged(0, itemCount)
     }
 
+    /** 「翻失败了」高亮变化。 */
+    fun setFailedBatch(sel: Set<Int>) {
+        if (failedBatch == sel) return
+        failedBatch = sel
+        notifyItemRangeChanged(0, itemCount)
+    }
+
     /** item 下标 → 段号（选择模式命中用；越界返回 null）。 */
     fun paraIndexAt(position: Int): Int? =
         content?.let { NovelScrollMapping.paraIndexOf(it, position) }
@@ -94,6 +104,7 @@ class NovelScrollAdapter : RecyclerView.Adapter<NovelScrollAdapter.VH>() {
             c.displayOf(para.index), style, textColor, backgroundColor,
             selected = para.index in selected,
             active = para.index in activeBatch,
+            failed = para.index in failedBatch,
         )
     }
 
@@ -106,6 +117,7 @@ class NovelScrollAdapter : RecyclerView.Adapter<NovelScrollAdapter.VH>() {
         private var backgroundColor: Int = android.graphics.Color.WHITE
         private var selected: Boolean = false
         private var active: Boolean = false
+        private var failed: Boolean = false
 
         /** 已经真正设到底色上的颜色（切选中态/切背景都要比它，别比 [backgroundColor]）。 */
         private var appliedBg: Int = backgroundColor
@@ -162,10 +174,11 @@ class NovelScrollAdapter : RecyclerView.Adapter<NovelScrollAdapter.VH>() {
             backgroundColor: Int,
             selected: Boolean = false,
             active: Boolean = false,
+            failed: Boolean = false,
         ) {
             if (this.text == text && this.style == style && this.textColor == textColor &&
                 this.backgroundColor == backgroundColor && this.selected == selected &&
-                this.active == active
+                this.active == active && this.failed == failed
             ) {
                 return
             }
@@ -178,10 +191,12 @@ class NovelScrollAdapter : RecyclerView.Adapter<NovelScrollAdapter.VH>() {
             this.backgroundColor = backgroundColor
             this.selected = selected
             this.active = active
-            // 底色优先级：**选中 > 正在翻译 > 阅读背景**。
-            // 「正在翻译」用半透明琥珀：深浅两种背景下都看得见，又不盖住正文
+            this.failed = failed
+            // 底色优先级：**选中 > 失败 > 正在翻译 > 阅读背景**。
+            // 「正在翻译」用半透明琥珀、「失败」用半透明淡红：深浅两种背景下都看得见，又不盖住正文
             val want = when {
                 selected -> NovelTextRenderer.COLOR_SELECTION
+                failed -> NovelTextRenderer.COLOR_FAILED_BATCH
                 active -> NovelTextRenderer.COLOR_ACTIVE_BATCH
                 else -> backgroundColor
             }

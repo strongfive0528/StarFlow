@@ -10,8 +10,8 @@ import java.util.concurrent.atomic.AtomicBoolean
  * 判据是**粗估 token**（[TokenEstimator]，CJK≈1/字、其它≈1/4 字符），不接任何厂商的分词器 ——
  * 这里要的是"大概多长"，不是精确计费。
  *
- * ⚠️ 阈值是**用户设置**（面板里的「单批预警阈值」滑块），不是写死的常量；档位都是较大的值
- * （2048 起）—— 一批 3 段正常小说（每段几百字）也就 1~2k tokens，档位太小会逢批必弹。
+ * ⚠️ 阈值是**用户设置**（面板里的「单批预警阈值」滑块），不是写死的常量；档位从 2048 起
+ * （默认就是 2048）—— 一批 2 段正常小说（每段几百字）也就几百 token，档位太小会逢批必弹。
  */
 object NovelBatchWarning {
 
@@ -22,8 +22,14 @@ object NovelBatchWarning {
      */
     val tiers: List<Int> = listOf(2048, 4096, 8192, 16384, 32768)
 
-    /** 默认 4096（用户指定）。 */
-    const val DEFAULT_THRESHOLD = 4096
+    /** 默认 **2048**（用户口径 2026-10-03，原 4096）。 */
+    const val DEFAULT_THRESHOLD = 2048
+
+    /**
+     * ⚠️ 旧默认值（4096）：`NovelPanelStyle.migrateBatchDefaults` 靠它识别"还停在旧默认的人"，
+     * 与 [DEFAULT_THRESHOLD] **必须不同**。别删。
+     */
+    const val LEGACY_DEFAULT_THRESHOLD = 4096
 
     /** 默认档位在 [tiers] 里的下标。 */
     val defaultIndex: Int get() = tiers.indexOf(DEFAULT_THRESHOLD)

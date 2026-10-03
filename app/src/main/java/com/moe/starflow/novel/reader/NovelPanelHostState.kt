@@ -38,7 +38,7 @@ data class NovelPanelHostState(
     val background: Int = 0,
     val autoTurn: Boolean = false,
     val intervalSec: Int = 5,
-    val debounceMs: Int = 500,
+    val debounceMs: Int = NovelPanelStyle.DEBOUNCE_DEFAULT,
     val aheadBatches: Int = NovelQuota.DEFAULT,
     val batchSize: Int = NovelPanelStyle.BATCH_DEFAULT,
     val rotateLabel: String = "",

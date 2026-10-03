@@ -60,7 +60,7 @@ class NovelPanelState(
     val rotateLabel: String = "",
     val isDarkPanel: Boolean = false,
     val translateMode: NovelTranslateMode = NovelTranslateMode.MANUAL,
-    val debounceMs: Int = 500,
+    val debounceMs: Int = NovelPanelStyle.DEBOUNCE_DEFAULT,
     val aheadBatches: Int = NovelQuota.DEFAULT,
     val batchSize: Int = NovelPanelStyle.BATCH_DEFAULT,
     val currentChapter: Int = 0,

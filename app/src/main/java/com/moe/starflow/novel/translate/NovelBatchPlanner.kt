@@ -25,11 +25,13 @@ object NovelBatchPlanner {
     /**
      * 按模式取锚点。
      *
-     * @param pageParaIndexes 当前页显示的段（按顺序）
+     * @param pageParaIndexes 当前页**可翻译**的段（按顺序）
      * @param chapterParaIndexes 整章的段（按顺序）—— 增量模式在页内翻完后从这里继续**向后**找
      * @param aheadLimitPara 增量窗口的右边界（**不含**）：只在这个段号之前往后找。
      *   窗口 = 当前页第一段往后「向后批数 × 每批段数」段（见 [NovelTranslationQueue]）——
      *   翻页时窗口自己前移，所以"额度用完"不是终点，翻页就能接着翻
+     * @param aheadStartPara 增量窗口的**左边界**（当前页第一个段在整章里的位置）。
+     *   只在本页一个可翻译段都没有时用到，见下面的说明
      */
     fun anchorForMode(
         mode: NovelTranslateMode,
@@ -37,12 +39,23 @@ object NovelBatchPlanner {
         chapterParaIndexes: List<Int>,
         translated: Set<Int>,
         aheadLimitPara: Int = Int.MAX_VALUE,
+        aheadStartPara: Int? = null,
     ): Int? {
         anchorOnPage(pageParaIndexes, translated)?.let { return it }
         if (mode != NovelTranslateMode.AHEAD) return null
         // ⚠️ 增量只**向后**：页内翻完后取「本页之后第一段没翻的」，
         // **不回头**去补本页之前的段（那与"向后翻译"相反），也不越到下一章（章末即停 → null）。
-        val lastOnPage = pageParaIndexes.maxOrNull() ?: return null
+        val lastOnPage = pageParaIndexes.maxOrNull()
+        // ⚠️ **本页一个可翻译段都没有**（图片页 / 整页都是 <4 字的短行 / 段落都在别页）时
+        // 不能直接返回 null：那样增量会永远停在「已向后翻完 0 批 · 翻页继续」，用户不翻页
+        // 就一动不动（2026-10 用户报的「当前页段数不足时增量/自动无法翻译、始终 0 批」）。
+        // 增量的本意是「不受当前页限制」→ 这时从**窗口起点**（当前页在整章里的位置）往后找。
+        if (lastOnPage == null) {
+            return chapterParaIndexes.firstOrNull {
+                (aheadStartPara == null || it >= aheadStartPara) &&
+                    it < aheadLimitPara && it !in translated
+            }
+        }
         return chapterParaIndexes.firstOrNull {
             it > lastOnPage && it < aheadLimitPara && it !in translated
         }

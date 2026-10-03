@@ -21,6 +21,10 @@ import org.junit.Test
  * - 有批一结束就**立刻**补位（不等满一个错峰周期）
  * - 并发 == 1（本地引擎）→ 全程最多 1 个在飞（天然串行）
  * - 并发下**失败的批同样不会被重复挑中**（[NovelTranslationQueue.failedAnchors] 语义未变）
+ *
+ * ⚠️ **并发只作用于增量（AHEAD）**（用户口径 2026-10-03）：「自动翻译只会一批一批向后翻译，
+ * 前一批没有结束不会开启下一批；**增量和整章**才受最大请求数限制」。所以下面用 AHEAD 驱动并发，
+ * 自动模式的串行单独有一条守住（`自动模式恒为串行`）。
  */
 class NovelTranslationConcurrencyTest {
 
@@ -92,7 +96,7 @@ class NovelTranslationConcurrencyTest {
             page = { (0..9).toList() }, chapterSize = 10, batchSize = 1, concurrency = 3,
         )
 
-        q.start(book(), NovelTranslateMode.AUTO, currentChapter = { 0 }) { _, r ->
+        q.start(book(), NovelTranslateMode.AHEAD, NovelQuota.of(10), currentChapter = { 0 }) { _, r ->
             translated += r.translations.keys
         }
 
@@ -133,7 +137,7 @@ class NovelTranslationConcurrencyTest {
             page = { (0..5).toList() }, chapterSize = 6, batchSize = 1, concurrency = 1,
         )
 
-        q.start(book(), NovelTranslateMode.AUTO, currentChapter = { 0 }) { _, r ->
+        q.start(book(), NovelTranslateMode.AHEAD, NovelQuota.of(10), currentChapter = { 0 }) { _, r ->
             translated += r.translations.keys
         }
         advanceTimeBy(30_000)
@@ -155,7 +159,7 @@ class NovelTranslationConcurrencyTest {
             page = { (0..2).toList() }, chapterSize = 3, batchSize = 1, concurrency = 3,
         )
 
-        q.start(book(), NovelTranslateMode.AUTO, currentChapter = { 0 }) { _, r ->
+        q.start(book(), NovelTranslateMode.AHEAD, NovelQuota.of(10), currentChapter = { 0 }) { _, r ->
             translated += r.translations.keys
         }
         advanceTimeBy(5_000)
@@ -163,6 +167,36 @@ class NovelTranslationConcurrencyTest {
 
         advanceTimeBy(60_000)
         assertEquals("失败后不该继续重挑同一批", 3, probe.starts.size)
+        q.stop()
+    }
+
+    /**
+     * **自动模式恒为串行**（用户口径 2026-10-03）：
+     * 「自动翻译只会一批一批向后翻译，前一批没有结束不会去开启下一批」。
+     *
+     * ⚠️ 即使把「同时 API 请求数」设成 3，自动模式也必须**最多 1 个批在飞** ——
+     * 并发是给增量/整章的（`NovelTranslationConcurrencyTest` 的其余用例走 AHEAD）。
+     */
+    @Test
+    fun `自动模式恒为串行`() = runTest {
+        val probe = Probe(holdMs = 1_000).apply { now = { testScheduler.currentTime } }
+        val translated = mutableSetOf<Int>()
+        val q = queue(
+            backgroundScope, probe, translated,
+            page = { (0..9).toList() }, chapterSize = 10, batchSize = 1, concurrency = 3,
+        )
+
+        q.start(book(), NovelTranslateMode.AUTO, currentChapter = { 0 }) { _, r ->
+            translated += r.translations.keys
+        }
+        advanceTimeBy(20_000)
+
+        assertEquals("自动模式全程只有一个批在飞", 1, probe.maxInflight)
+        assertEquals("一批一批接着翻完本页", listOf(0, 1, 2, 3, 4, 5, 6, 7, 8, 9), probe.starts.map { it.second })
+        // 每批之间隔着"上一批的耗时"（串行），不是错峰铺开的那种 500ms；
+        // 允许一个槽位轮询周期（SLOT_POLL_MS=60ms）的抖动
+        val gaps = probe.starts.take(4).zipWithNext { a, b -> b.first - a.first }
+        assertTrue("批与批之间必须等上一批结束（实测 $gaps）", gaps.all { it in 1_000..1_200 })
         q.stop()
     }
 
@@ -185,7 +219,6 @@ class NovelTranslationConcurrencyTest {
         val calls = java.util.concurrent.atomic.AtomicInteger(0)
         val translated = java.util.concurrent.ConcurrentHashMap.newKeySet<Int>()
         val paragraphs = (0 until 60).map { NovelParagraph(it, NovelParagraphType.TEXT, "p$it") }
-
         val t = object : NovelBatchTranslator {
             override suspend fun translateBatch(
                 book: ImportedNovel,
@@ -212,7 +245,8 @@ class NovelTranslationConcurrencyTest {
             sourceLang = { "en" },
             targetLang = { "zh" },
             translatorName = { "fake" },
-            batchSize = { 2 },
+            // 窗口要盖住整章：增量窗口 = 向后批数 × 每批段数 = 10 × 6 = 60 段
+            batchSize = { 6 },
             debounceMs = { 0 },
             currentPageParaIndexes = { paragraphs.map { it.index } },
             chapterParaIndexes = { _, _ -> paragraphs.map { it.index } },
@@ -220,7 +254,7 @@ class NovelTranslationConcurrencyTest {
             concurrency = { 4 },
         )
         try {
-            q.start(book(), NovelTranslateMode.AUTO, currentChapter = { 0 }) { _, r ->
+            q.start(book(), NovelTranslateMode.AHEAD, NovelQuota.of(10), currentChapter = { 0 }) { _, r ->
                 translated += r.translations.keys
             }
             val deadline = System.currentTimeMillis() + 20_000
@@ -230,7 +264,7 @@ class NovelTranslationConcurrencyTest {
             Thread.sleep(200)   // 留一点时间让在途/收尾的账本操作撞一撞
 
             assertEquals("60 段都要翻到（批计数不能丢）", 60, translated.size)
-            assertEquals("每段只发一次请求：60 段 / 每批 2 段 = 30 次（并发去重要靠在飞账本）", 30, calls.get())
+            assertEquals("每段只发一次请求：60 段 / 每批 6 段 = 10 次（并发去重要靠在飞账本）", 10, calls.get())
             assertTrue("不能有异常（CME 会在这里现形）: $errors", errors.isEmpty())
         } finally {
             q.stop()

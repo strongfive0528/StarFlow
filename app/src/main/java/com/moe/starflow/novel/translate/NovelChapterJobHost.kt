@@ -114,10 +114,18 @@ class NovelChapterJobHost(
 
     private val finishedListeners = CopyOnWriteArrayList<(Int, Int, Int, Boolean) -> Unit>()
 
-    /** 「同一轮只打扰一次」的超长确认器（用户拒过一次 → 同轮后续超长批静默跳过）。 */
-    private val oversize = NovelOversizeConfirmer { estimate, threshold ->
+    /** 「同一轮只打扰一次」的超长确认器（用户拒过一次 → 同轮后续超长批静默跳过）。 */    private val oversize = NovelOversizeConfirmer { estimate, threshold ->
         uiConfirmOversize?.invoke(estimate, threshold) ?: true
     }
+
+    /**
+     * 前台队列**在飞**的段（由阅读器注入）—— 章任务排批时要跳过它们。
+     *
+     * ⚠️ 去重原先只有**单向**（队列躲章任务；章任务看不见队列）→ 同一段会被两边各发一次请求
+     * （用户口径 2026-10-03：「两套任务不要重复烧额度」）。默认空 = 没有前台队列（后台任务场景）。
+     */
+    @Volatile
+    var queueInFlightParas: (chapterIndex: Int) -> Set<Int> = { emptySet() }
 
     // ===== 翻译器（按值缓存：本地引擎每造一次都要重载模型，别每批现造）=====
 
@@ -228,7 +236,10 @@ class NovelChapterJobHost(
                 emptySet()
             } else {
                 runCatching { translator().loadTranslations(b, chapterIndex) }
-                    .getOrDefault(emptyMap()).keys
+                    .getOrDefault(emptyMap()).keys +
+                    // ⚠️ **反向去重**（用户口径 2026-10-03）：原先只有"队列躲章任务"这一向，
+                    // 章任务排批时看不见前台队列正在翻的段 → 同一段被两边各发一次请求（白烧额度）。
+                    runCatching { queueInFlightParas(chapterIndex) }.getOrDefault(emptySet())
             }
             val plan = NovelBatchPlanner.planBatches(
                 chapterParaIndexes = paras,
@@ -366,6 +377,13 @@ class NovelChapterJobHost(
         notifyUiChanged()
         if (result.isEmpty && result.error != null) {
             LogCollector.w(TAG, "第 ${unit.chapterIndex} 章一批没翻成：${result.error}")
+        }
+        // ⚠️ **用户在前面的超长预警里选了「取消本次翻译」**（用户口径 2026-10-03：
+        // 「可以取消本次翻译（关闭当前翻译进程，回退手动）」）：预警器会记住"这一轮已被拒绝"，
+        // 本轮后续超长批**静默跳过** —— 不在这里收尾的话，整章会被一批批跳过、任务却报"翻完"。
+        if (result.isEmpty && oversize.hasDeclined()) {
+            LogCollector.i(TAG, "用户在超长预警里取消 → 关闭第 ${unit.chapterIndex} 章任务")
+            cancel(unit.chapterIndex)
         }
         return !result.isEmpty
     }

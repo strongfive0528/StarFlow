@@ -32,6 +32,9 @@ class NovelPageView(context: Context) : View(context) {
     /** 正在翻译 / 刚翻完的段（琥珀高亮底，让用户在重排偏移后仍能找到）。 */
     private var activeBatch: Set<Int> = emptySet()
 
+    /** 「这一批翻失败了」的段（淡红高亮底；见 [NovelTextRenderer.COLOR_FAILED_BATCH]）。 */
+    private var failedBatch: Set<Int> = emptySet()
+
     /**
      * 与 `page.segments` 对应的排版结果，**按段号索引**（空文本/未布局的段没有条目）。
      *
@@ -78,6 +81,11 @@ class NovelPageView(context: Context) : View(context) {
         color = NovelTextRenderer.COLOR_ACTIVE_BATCH
     }
 
+    /** 「这一批翻失败了」的高亮底（淡红，与滚动模式共用）。 */
+    private val failedBatchPaint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
+        color = NovelTextRenderer.COLOR_FAILED_BATCH
+    }
+
     /** 高亮底与滚动模式共用的圆角半径。 */
     private val hlRadiusPx by lazy { NovelTextRenderer.HIGHLIGHT_CORNER_DP * resources.displayMetrics.density }
 
@@ -88,6 +96,7 @@ class NovelPageView(context: Context) : View(context) {
         textColor: Int,
         selected: Set<Int> = emptySet(),
         activeBatch: Set<Int> = emptySet(),
+        failedBatch: Set<Int> = emptySet(),
     ) {
         // ⚠️ 排版输入没变就别作废已排好的 layout：选择模式每点一下都会重绑，
         // 全页重建 StaticLayout 是白烧的（而且会闪）
@@ -110,6 +119,7 @@ class NovelPageView(context: Context) : View(context) {
         this.textColor = textColor
         this.selected = selected
         this.activeBatch = activeBatch
+        this.failedBatch = failedBatch
         applyTextColor()
         invalidate()
     }
@@ -224,9 +234,10 @@ class NovelPageView(context: Context) : View(context) {
             usedBottom = bottom
 
             // 高亮底画在文字**下面**（同一个矩形范围，逐段累加的高度）。
-            // 选中优先于「正在翻译」：两者同时命中时得看得出是选中
+            // 优先级：选中 > 失败 > 正在翻译 —— 三者同时命中时得看得出最要紧的那个
             val hl = when {
                 seg.paraIndex in selected -> selectionPaint
+                seg.paraIndex in failedBatch -> failedBatchPaint
                 seg.paraIndex in activeBatch -> activeBatchPaint
                 else -> null
             }

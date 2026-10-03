@@ -1,8 +1,6 @@
 package com.moe.starflow.translate.batch
 
 import android.annotation.SuppressLint
-import android.app.NotificationChannel
-import android.app.NotificationManager
 import android.app.PendingIntent
 import android.content.Context
 import android.content.Intent
@@ -45,7 +43,16 @@ class TranslationJobService : LifecycleService() {
         const val EXTRA_BOOK_ID = "book_id"
         const val EXTRA_CHAPTER_INDEX = "chapter_index"
 
-        const val CHANNEL_ID = "chapter_translation"
+        /**
+         * ⚠️ **2026-10-03 换了 id**：原 `chapter_translation` 建的时候是 `IMPORTANCE_LOW` ——
+         * Android 的**通道重要性一旦创建就不能由 App 改**（用户说了算），而 LOW 在 MIUI 上
+         * 既不亮状态栏图标、也容易被当成"不重要通知"折叠掉，用户报「看不到通知系统的通知」。
+         * 新 id 建 `IMPORTANCE_DEFAULT`（亮图标、仍在通知栏，但 `setSilent` 不响不震）。
+         * 通道的**创建入口收敛在 [TranslationNotifyChannel.ensure]**（阅读器队列那条通知也走它，
+         * 因为它不经过前台服务、否则用户只用自动/增量时通道根本没人建 → 通知被静默丢掉）。
+         */
+        const val CHANNEL_ID = TranslationNotifyChannel.ID
+
         const val NOTIFICATION_ID_SERVICE = 9998
 
         /**
@@ -188,6 +195,7 @@ class TranslationJobService : LifecycleService() {
             .setContentText(text)
             .setOngoing(job.state == ChapterJobState.RUNNING || job.state == ChapterJobState.QUEUED)
             .setOnlyAlertOnce(true)
+            .setSilent(true)
             .setPriority(NotificationCompat.PRIORITY_LOW)
             .setProgress(job.total.coerceAtLeast(1), job.done, false)
             .setContentIntent(openReaderIntent(job))
@@ -209,6 +217,8 @@ class TranslationJobService : LifecycleService() {
         try {
             NotificationManagerCompat.from(this).notify(job.notificationId, builder.build())
             shown += job.notificationId
+            // ⚠️ 打日志：用户报「看不到通知」时，这一行能立刻区分"没发出去"和"发了但被折叠"
+            LogCollector.d(TAG, "章通知 id=${job.notificationId} ch=${job.chapterIndex} ${job.state} ${job.done}/${job.total}")
         } catch (e: SecurityException) {
             LogCollector.w(TAG, "通知权限缺失，无法显示翻译进度: ${e.message}")
         }
@@ -257,6 +267,7 @@ class TranslationJobService : LifecycleService() {
             .setContentTitle(getString(R.string.chapter_translate_notify_summary_title))
             .setContentText(getString(R.string.chapter_translate_notify_summary, running))
             .setOngoing(true)
+            .setSilent(true)
             .setPriority(NotificationCompat.PRIORITY_LOW)
             .build()
 
@@ -281,14 +292,8 @@ class TranslationJobService : LifecycleService() {
     }
 
     private fun ensureChannel() {
-        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
-            val channel = NotificationChannel(
-                CHANNEL_ID,
-                getString(R.string.chapter_translate_notify_summary_title),
-                NotificationManager.IMPORTANCE_LOW
-            )
-            getSystemService(NotificationManager::class.java).createNotificationChannel(channel)
-        }
+        // 通道创建只有一个入口（见 TranslationNotifyChannel 的说明）
+        TranslationNotifyChannel.ensure(this)
     }
 
     override fun onDestroy() {
