@@ -2754,9 +2754,14 @@ class MangaReaderActivity : AppCompatActivity() {
                 }
                 when {
                     !saved -> ExportNotice(getString(R.string.reader_download_failed), true)
-                    // 跳过的页必须说出来：包不完整时用户得知道
+                    // 真·少页：包不完整时用户必须知道
                     outcome.skipped > 0 -> ExportNotice(
                         getString(R.string.reader_download_done_skipped, display, outcome.skipped), false
+                    )
+                    // ⚠️ **页在、只是没译文**（PDF 的未译页回填原图 / 双语只出了原图页）：
+                    //    这**不是**"跳过"，说成跳过会让用户以为下载的 PDF 缺页。
+                    outcome.untranslated > 0 -> ExportNotice(
+                        getString(R.string.reader_download_done_untranslated, display, outcome.untranslated), false
                     )
                     else -> ExportNotice(getString(R.string.reader_download_done, display), false)
                 }
@@ -2840,6 +2845,10 @@ class MangaReaderActivity : AppCompatActivity() {
      * ⚠️ `insert` 与 `openOutputStream` **都必须在 try 内**：MediaProvider 不可用（存储未挂载/受限）
      * 会抛 SecurityException / IllegalArgumentException，而调用方多是协程 —— 抛出去就是进程崩溃。
      *
+     * ⚠️ **`CancellationException` 必须重抛**（catch 的具体类型写在前面）：取消不是"导出失败"。
+     *    被这里吞掉的话，用户退出阅读器取消导出后还会弹一句「导出失败」；
+     *    重抛前已经把那条 MediaStore 记录删掉了，所以取消同样不会留下半截文件。
+     *
      * @return 是否成功落盘（失败时已尽力回滚，返回值不会说谎）
      */
     private suspend fun streamToDownloads(
@@ -2863,6 +2872,11 @@ class MangaReaderActivity : AppCompatActivity() {
             } ?: false
             if (!ok) uri?.let { runCatching { contentResolver.delete(it, null, null) } }
             ok
+        } catch (e: kotlinx.coroutines.CancellationException) {
+            // 退出阅读器 / 被取消：先删掉半截文件（否则下载目录留一个打不开的 PDF），再把取消往上抛
+            // —— 取消不是"导出失败"，吞掉它会让用户走后还看到一句「导出失败」。
+            uri?.let { runCatching { contentResolver.delete(it, null, null) } }
+            throw e
         } catch (e: Exception) {
             // 半截文件必须删：截断的 PDF 没有 xref，阅读器打不开，留着就是"看得见用不了"
             LogCollector.e("MangaReader", "streamToDownloads failed name=$displayName", e)

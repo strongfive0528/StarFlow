@@ -308,8 +308,8 @@
 - ⚠️ **只有真的写完 trailer 才算成功**（`completed` 标志）：中途 IOException 产生的截断 PDF
   **没有 xref、阅读器根本打不开**，不能被当成"部分成功"交付（zip 截断还能解开一部分，PDF 不能）。
 - ⚠️ **导出途中译文被删也要如实计数**：`translated` 是导出开始时的快照，而 `renderForExport` 现读载荷
-  （用户完全可能中途"删除该页译文 / 清空本章"）→ 拿不到就记 `skipped++` 并落日志。
-  不记的话双语包会只剩原图页、`skipped` 还是 0，用户以为整本都翻了。
+  （用户完全可能中途"删除该页译文 / 清空本章"）→ 拿不到就记进 `untranslated`（**不是** `skipped`，
+  见下条）并落日志。不记的话双语包会只剩原图页、两个计数都还是 0，用户以为整本都翻了。
 - ⚠️ **不用 `android.graphics.pdf.PdfDocument`**：Skia 的 PDF 后端对整页位图走**无损**压缩
   （FlateDecode），一页 300DPI 图压完仍有十几 MB → 300 页的译文 PDF 能到几个 GB。
   `PdfJpegWriter` 把**已经编码好的 JPEG 原样嵌入**（`/Filter /DCTDecode`），体积 ≈ 各页 JPEG 之和。
@@ -318,6 +318,17 @@
   每个偏移必须正落在 `N 0 obj` 上、`startxref` 指向 `xref`、流的 `/Length` 必须等于真实字节数
   （**内容流和图像流都要**）。这些由 `PdfJpegWriterTest` 把写出来的字节**当 PDF 解析一遍**逐条核
   （0 页 / 1 页 / N 页都测）。
+- ⚠️ **两个计数必须分开：`skipped`（这页没进包）与 `untranslated`（页在、只是没译文）**。
+  译文 PDF 会把未译页**回填原图**（页数完整），把这批报成"跳过"就是在骗用户（他会以为 PDF 缺页）；
+  双语 PDF 的未译页只出原图页，同理。所以 `ExportOutcome.Done` 有三个字段，
+  提示语也分成 `reader_download_done_skipped`（真缺页）与 `reader_download_done_untranslated`（页在但没译文）。
+  规约：`!wroteAny -> skipped++`、`rendered == null -> untranslated++`（见 [ReaderPdfExport]）。
+- ⚠️ **直写流的收尾必须重抛 `CancellationException`**（`catch` 的具体类型写在 `catch (Exception)` 前面）：
+  取消不是"导出失败"，被吞掉的话用户退出阅读器后还会看到一句「导出失败」；
+  重抛前先删掉那条 MediaStore 记录，取消同样不会留半截文件。
+- ⚠️ **导出进度芯片的 dismiss 不能挪进 `finally`**：它必须在 `notifyUser(结果)` **之前**执行
+  （`showImmediate` 是替换、`show` 是追加，顺序反了会变成两条芯片）；取消路径靠阅读器 `onDestroy`
+  的 `dismiss()` 兜底（取消只会发生在退出阅读器时）。
 - 页的**点尺寸**由像素尺寸按 `PdfRasterPolicy.RASTER_DPI` 反推（= 原页面尺寸），
   所以导出 PDF 的"纸"和原书一致；进度按**原书页**上报（双语下一页可能写两张）。
 
