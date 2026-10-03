@@ -37,6 +37,7 @@ import com.moe.starflow.mangaimport.reader.ReaderAnimationState
 import com.moe.starflow.mangaimport.reader.SimulationTransformer
 import com.moe.starflow.me.settings.SettingPageActivity
 import com.moe.starflow.novel.data.ImportedNovel
+import com.moe.starflow.novel.data.NovelStorageDir
 import com.moe.starflow.novel.data.NovelStore
 import com.moe.starflow.novel.translate.NovelBatchTranslator
 import com.moe.starflow.novel.translate.NovelBatchWarnGate
@@ -342,7 +343,10 @@ class NovelReaderActivity : AppCompatActivity() {
         book = loaded
         chapterCount = loaded.chapterCount
 
-        repository = NovelChapterRepository()
+        // ⚠️ 传 `novel_import/` 作为插图落盘根目录：epub 里的插图在这一层解出来，
+        // 落到 `novel_import/<书 id>/images/`（删书时跟着一起清掉，不会留孤儿文件）。
+        // 不传的话图片段就永远是占位文本 `📷 [图片]`（阅读器是唯一需要真图的地方）
+        repository = NovelChapterRepository(imagesRoot = NovelStorageDir.root(this))
         pageAdapter = NovelPageAdapter()
         scrollAdapter = NovelScrollAdapter()
         binding.novelPager.adapter = pageAdapter

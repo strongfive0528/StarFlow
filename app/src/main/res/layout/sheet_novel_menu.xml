@@ -295,7 +295,9 @@
                 </LinearLayout>
 
                 <!-- 单批预警阈值（token 粗估）：一批合并文本超过它就弹窗问「继续 / 取消这次翻译」。
-                     档位在 NovelBatchWarning.tiers，滑块位置是**档位下标**（不是 token 值本身）。 -->
+                     档位在 NovelBatchWarning.tiers（512/1024/2048/4096/8192/16384），滑块位置是
+                     **档位下标**（不是 token 值本身）；默认值 2048 落在中间那格，两边都能拖。
+                     这里的 min/max/默认文本只是预览值，实际由 NovelPanelSheet 按档位表刷新。 -->
                 <LinearLayout android:id="@+id/row_batch_warn" android:layout_width="match_parent"
                     android:layout_height="wrap_content" android:orientation="vertical" android:layout_marginTop="8dp">
                     <LinearLayout android:layout_width="match_parent" android:layout_height="wrap_content"
@@ -304,10 +306,10 @@
                             android:layout_height="wrap_content" android:text="@string/novel_translate_warn"
                             android:textSize="14sp" android:textColor="#333333"/>
                         <TextView android:id="@+id/tv_batch_warn_value" android:layout_width="wrap_content"
-                            android:layout_height="wrap_content" android:text="4096" android:textSize="12sp" android:textColor="#55AEEA"/>
+                            android:layout_height="wrap_content" android:text="2048" android:textSize="12sp" android:textColor="#55AEEA"/>
                     </LinearLayout>
                     <SeekBar android:id="@+id/sb_batch_warn" android:layout_width="match_parent"
-                        android:layout_height="wrap_content" android:min="0" android:max="4" android:layout_marginTop="2dp"
+                        android:layout_height="wrap_content" android:min="0" android:max="5" android:layout_marginTop="2dp"
                         android:thumbTint="#55AEEA" android:progressTint="#55AEEA" android:progressBackgroundTint="#55AEEA"/>
                     <TextView android:id="@+id/tv_batch_warn_hint" android:layout_width="match_parent"
                         android:layout_height="wrap_content" android:text="@string/novel_translate_warn_hint"

@@ -61,12 +61,17 @@ internal class NovelLayoutCache(private val maxEntries: Int = 256) {
  * `StaticLayout` 行数与真机不符 —— 依赖真实换行的断言在 Robolectric 下是**假绿**。
  * 所以换行信息由调用方/测试显式提供，分页逻辑本身与文本引擎解耦。
  *
- * ### 高度口径：**只认 `StaticLayout` 量出来的数**，不做任何估算
+ * ### 高度口径：**只认量出来的数**，不做任何估算
  * 这里的 `lineHeights` 就是 `getLineBottom(i) - getLineTop(i)`，段高就是它们的和
  * （`setIncludePad(false)` 时等于 `layout.height`）—— 绘制端按同一份 layout 的同一批
  * 数字累加。**分页与绘制共用一套几何**（逐段累加那一套收敛在 [NovelPageGeometry] 一份里，
  * 本文件的 `offsetInPage` 也走它），中间没有任何「按字号估行高」「把段距量化成整行」
  * 这类换算，所以「分页说放得下、画出来顶出框」在结构上就不可能发生。
+ *
+ * ⚠️ **插图段是这条规则唯一的"另一种来源"**：它没有 `StaticLayout`，高度由
+ * [NovelImageMetrics] 按图片真实像素尺寸算出（等比、只缩不放、不超过一页），
+ * 然后**伪装成"整段一行"**塞进同一套记账 —— 分页逻辑一行都不用为图片改。
+ * 绘制端必须调**同一个函数**取高度，理由同上（差几像素就是底部被裁）。
  *
  * 踩过的两个坑都死在「估算」上：
  * - 用 `字号 × 行距倍率` 估行高：中文字体真实行高是字号的 ≈1.15~1.5 倍（含 `lineSpacing`
@@ -208,11 +213,12 @@ object NovelPaginator {
     ): List<NovelPage> = paginate(paragraphs, style, widthPx, heightPx, anchor, null)
 
     /**
-     * 与上面同义，但可以带上**段级排版缓存**（宿主按章持有，见 [NovelLayoutCache]）。
+     * 与上面同义，但可以带上**段级排版缓存**（宿主按章持有，见 [NovelLayoutCache]）
+     * 与**本章插图**（[images]）。
      *
      * 单独一个 `internal` 重载而不是给公开那版加参数：`NovelLayoutCache` 是实现细节，
      * 不该出现在公开签名里（编译器也会因为公开函数暴露 internal 类型而报错）。
-     * 传 null = 每次全量重排（单测与不需要缓存的调用方用）。
+     * 传 null / 空表 = 每次全量重排、没有插图（单测与不需要缓存的调用方用）。
      */
     internal fun paginate(
         paragraphs: List<NovelParagraph>,
@@ -221,6 +227,7 @@ object NovelPaginator {
         heightPx: Int,
         anchor: NovelAnchor?,
         layoutCache: NovelLayoutCache?,
+        images: Map<Int, NovelImage> = emptyMap(),
     ): List<NovelPage> {
         val visible = paragraphs.filter { it.type != NovelParagraphType.SKIP }
         if (visible.isEmpty() || widthPx <= 0 || heightPx <= 0) return emptyList()
@@ -228,18 +235,34 @@ object NovelPaginator {
         val contentWidth = style.contentWidthPx(widthPx)
         val contentHeight = style.contentHeightPx(heightPx)
 
-        // ⚠️ 走缓存：译文每落一批就会重排整章，而真正变的只有那一批几段 ——
-        // 不缓存的话改动 3 段要重建 300 份 StaticLayout（见 [NovelLayoutCache]）
-        val layouts = visible.map { p ->
-            layoutCache
-                ?.layout(p.index, p.originalText, style, contentWidth) {
-                    NovelTextRenderer.build(p.originalText, style, contentWidth)
-                }
-                ?: NovelTextRenderer.build(p.originalText, style, contentWidth)
+        // ── 插图段：没有 StaticLayout，只有"一行"高度 ──
+        // ⚠️ 高度必须与绘制端走**同一个公式**（[NovelImageMetrics]）：分页端和绘制端各算一套的话，
+        // 差几像素就是"底部那行被裁"或"正文顶出框"。这也是它必须在 IO 线程上就能算出来的原因
+        // —— 图片真实像素尺寸在加载时已经量好存进 [NovelImage] 了，这里不碰解码。
+        val imageSizes = visible.map { p ->
+            images[p.index]?.let { NovelImageMetrics.fit(it, contentWidth, contentHeight) }
         }
-        val lineStarts = layouts.map { l -> IntArray(l.lineCount) { l.getLineStart(it) } }
-        val lineHeights = layouts.map { l ->
-            FloatArray(l.lineCount) { (l.getLineBottom(it) - l.getLineTop(it)).toFloat() }
+        val layouts = visible.mapIndexed { i, p ->
+            // 有图可画 → 不排版（那串 `📷 [图片]` 占位文本根本不显示）
+            if (imageSizes[i] != null) {
+                null
+            } else {
+                layoutCache
+                    ?.layout(p.index, p.originalText, style, contentWidth) {
+                        NovelTextRenderer.build(p.originalText, style, contentWidth)
+                    }
+                    ?: NovelTextRenderer.build(p.originalText, style, contentWidth)
+            }
+        }
+        // 图片段当"整段一行、行起点 0、高度 = 图片高度"：`paginateByLines` 只认这两个数组，
+        // 于是「图片要不要换页」和文字走的是同一套记账，不需要给图片单开一条分页路径
+        val lineStarts = visible.mapIndexed { i, _ ->
+            layouts[i]?.let { l -> IntArray(l.lineCount) { l.getLineStart(it) } } ?: intArrayOf(0)
+        }
+        val lineHeights = visible.mapIndexed { i, _ ->
+            layouts[i]?.let { l ->
+                FloatArray(l.lineCount) { (l.getLineBottom(it) - l.getLineTop(it)).toFloat() }
+            } ?: floatArrayOf(imageSizes[i]!!.height)
         }
 
         // 锚点 → (可见段下标, 段内行号)：锚点的字符位置落在哪一行，那一行就要另起一页。
@@ -249,9 +272,15 @@ object NovelPaginator {
         visible.forEachIndexed { i, p -> visIndexOf[p.index] = i }
         val target = anchor?.let { a ->
             val vi = visIndexOf[a.paraIndex] ?: return@let null
-            val len = visible[vi].originalText.length
-            val off = a.charOffsetOf(len).coerceIn(0, (len - 1).coerceAtLeast(0))
-            vi to layouts[vi].getLineForOffset(off)
+            val lay = layouts[vi]
+            if (lay == null) {
+                // 插图段：整段就是"一行"，锚点只能落在它的第一行
+                vi to 0
+            } else {
+                val len = visible[vi].originalText.length
+                val off = a.charOffsetOf(len).coerceIn(0, (len - 1).coerceAtLeast(0))
+                vi to lay.getLineForOffset(off)
+            }
         }
 
         // 先按**自然分页**算一遍，量出锚点落在它那一页的什么位置再决定要不要强分。

@@ -11,12 +11,30 @@ import java.util.zip.ZipException
 import java.util.zip.ZipFile
 
 /**
+ * 一章的原始内容：**正文 + 内嵌图片**。
+ *
+ * @param text 纯文本正文（图片在文里是 `HtmlTextExtractor.IMAGE_MARK`，每张图单独成段）
+ * @param images 图片原始字节，**与 [text] 里的图片标记按顺序一一对应**；
+ *   读不到 / 超过上限的那张写 `null`（渲染时回落成占位文本 —— 少一张图不能把正文也丢了）。
+ *   顺序对齐是硬约束：错一位就是「第 3 章配了第 4 章的脸」，而且**看不出错**。
+ */
+class ChapterSource(
+    val text: String,
+    val images: List<ByteArray?> = emptyList(),
+) {
+    companion object {
+        val EMPTY = ChapterSource("")
+    }
+}
+
+/**
  * 一种文本格式的解析器。实现必须是**无状态 object**（不持有 file 引用）。
  *
  * 失败用异常表达（`IOException` / `IllegalStateException`），由调用方归类成
  * `NovelImportFailureReason`。返回空章节列表 = 文件里没有可读文本。
  *
- * ⚠️ [parse] / [loadChapter] 都会做阻塞的文件 / 压缩包 I/O，**调用方必须在主线程之外调用**。
+ * ⚠️ [parse] / [loadChapter] / [loadChapterSource] 都会做阻塞的文件 / 压缩包 I/O，
+ * **调用方必须在主线程之外调用**。
  */
 interface NovelParser {
     /** 解析结构（目录 + 元数据），不读正文。 */
@@ -32,6 +50,16 @@ interface NovelParser {
      * - FOLDER = `"<夹内相对路径>"`；夹内 epub 的某一章是 `"<相对路径>|<epub 内 locator>"`
      */
     suspend fun loadChapter(file: File, locator: String): String
+
+    /**
+     * 读取一章的**正文 + 内嵌图片**（见 [ChapterSource]）。
+     *
+     * 默认实现 = 只有正文：**没有图片的格式（TXT）不必覆写**；有图片的格式
+     * （EPUB / ZIP / 单 HTML / 文件夹）各自覆写，并把图片字节一并读出来（一次开包，
+     * 上限见 `NovelReadLimits` —— 单张 8MB、一章另有总额度）。
+     */
+    suspend fun loadChapterSource(file: File, locator: String): ChapterSource =
+        ChapterSource(loadChapter(file, locator))
 }
 
 /**
@@ -129,6 +157,15 @@ object NovelReadLimits {
     const val MAX_TOTAL_DECOMPRESSED_BYTES = 200L * 1024 * 1024
     const val MAX_ZIP_ENTRIES = 20_000
     const val MAX_FILE_BYTES = 100 * 1024 * 1024
+
+    /**
+     * **一章**内嵌图片的累计上限。
+     *
+     * 单张 8MB 是不够的：一章放 20 张 2MB 插图就有 40MB，而这些字节会**同时**驻留在一张
+     * `List<ByteArray>` 里（`ChapterSource.images`）。正常一章几张插图，24MB 已经远超合理值；
+     * 超出的那几张写 null（回落占位文本），而不是把整章的正文也一起赔进去。
+     */
+    const val MAX_CHAPTER_IMAGE_BYTES = 24 * 1024 * 1024
 
     /** 超过读取上限。类型是 `ZipException`，为的是复用既有的失败归类（见 object KDoc）。 */
     class TooLargeException(message: String) : ZipException(message)

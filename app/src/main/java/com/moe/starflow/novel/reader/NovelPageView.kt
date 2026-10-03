@@ -169,6 +169,9 @@ class NovelPageView(context: Context) : View(context) {
      * ⚠️ **逐段复用**：段号相同 + 显示文本相同 + 宽度没变 → 上一批的 layout 原样搬过来。
      * 译文到达时只有这一批翻到的那几段文本变了，同页其余段没有理由重排；只换高亮/换色的重绑
      * 更是一个都不该排（[layoutsDirty] 为 false 时这里直接早退）。
+     *
+     * ⚠️ **插图段只有"一行"高度、没有 layout**（与 [NovelPaginator] 同一套记账）：
+     * 高度走 [NovelImageMetrics] 同一份公式。有图的段不再排那串 `📷 [图片]` 占位文本。
      */
     private fun ensureLayouts() {
         val w = width
@@ -181,10 +184,17 @@ class NovelPageView(context: Context) : View(context) {
         val sameWidth = w == laidOutWidth
         laidOutWidth = w
         val cw = style.contentWidthPx(w)
+        val maxImgH = style.contentHeightPx(height)
         val newLayouts = HashMap<Int, StaticLayout>(p.segments.size)
         val newHeights = HashMap<Int, FloatArray>(p.segments.size)
         val newTexts = HashMap<Int, String>(p.segments.size)
         for (seg in p.segments) {
+            // 插图段：高度由图片尺寸定。图片尺寸已知（加载时量好），所以这里**不解码**
+            val imgSize = c.images[seg.paraIndex]?.let { NovelImageMetrics.fit(it, cw, maxImgH) }
+            if (imgSize != null) {
+                newHeights[seg.paraIndex] = floatArrayOf(imgSize.height)
+                continue
+            }
             val text = c.displayOf(seg.paraIndex)
             if (text.isEmpty()) continue
             val reused = if (sameWidth && layoutTexts[seg.paraIndex] == text) {
@@ -209,6 +219,7 @@ class NovelPageView(context: Context) : View(context) {
 
     override fun onDraw(canvas: Canvas) {
         super.onDraw(canvas)
+        val c = content ?: return
         val p = page ?: return
         ensureLayouts()
 
@@ -228,12 +239,9 @@ class NovelPageView(context: Context) : View(context) {
         // ⚠️ 纵向走法走共用件（[NovelPageGeometry]）：绘制、命中测试、分页量"锚点离页顶多少 px"
         // 必须是同一份，否则三处各改各的，错位只有真机上看图才发现
         NovelPageGeometry.walk(p.segments, { lineHeights[it] }, style.paragraphSpacingPx, boxTop) { seg, top, bottom ->
-            val layout = layouts[seg.paraIndex] ?: return@walk
-            // 行区间由共用件判定（没有度量的段根本不会被回调），画与记账用的是同一个区间
-            val range = NovelPageGeometry.lineRange(seg, lineHeights[seg.paraIndex]) ?: return@walk
             usedBottom = bottom
 
-            // 高亮底画在文字**下面**（同一个矩形范围，逐段累加的高度）。
+            // 高亮底画在文字/图片**下面**（同一个矩形范围，逐段累加的高度）。
             // 优先级：选中 > 失败 > 正在翻译 —— 三者同时命中时得看得出最要紧的那个
             val hl = when {
                 seg.paraIndex in selected -> selectionPaint
@@ -246,6 +254,16 @@ class NovelPageView(context: Context) : View(context) {
                 // 高亮像被两侧裁了一刀，和滚动模式的 item 底色也不是一个样子
                 canvas.drawRoundRect(0f, top, widthF, bottom, hlRadiusPx, hlRadiusPx, hl)
             }
+
+            val layout = layouts[seg.paraIndex]
+            if (layout == null) {
+                // 插图段：整段就是那张图（高度已经由 [NovelImageMetrics] 定好，与分页同一个数）
+                drawImageSegment(canvas, c.images[seg.paraIndex], top, bottom)
+                return@walk
+            }
+
+            // 行区间由共用件判定（没有度量的段根本不会被回调），画与记账用的是同一个区间
+            val range = NovelPageGeometry.lineRange(seg, lineHeights[seg.paraIndex]) ?: return@walk
 
             // 只画 [range] 这几行：整份 layout 一起画会把区间外的行也画出来，
             // 而本页的高度记账只算了这几行。
@@ -262,6 +280,26 @@ class NovelPageView(context: Context) : View(context) {
         canvas.restore()
 
         reportOverflow(usedBottom, boxBottom)
+    }
+
+    /**
+     * 画一张插图：正文列内**居中**，高度就是分页给它记的那一份（[bottom] - [top]）。
+     *
+     * ⚠️ 尺寸再算一次（而不是直接用 [bottom] - [top] 反推宽度）是为了**等比**：由高度反推宽度
+     * 在四舍五入下会和 [NovelImageMetrics] 差半个像素，宽高比偶尔就被拉歪一点点。
+     * 画不出来（文件被删 / 解码失败）就什么都不画 —— 页面高度已经记过了，不能在这里改。
+     */
+    private fun drawImageSegment(canvas: Canvas, image: NovelImage?, top: Float, bottom: Float) {
+        if (image == null) return
+        val cw = style.contentWidthPx(width)
+        val size = NovelImageMetrics.fit(image, cw, style.contentHeightPx(height)) ?: return
+        val left = style.paddingPx + (cw - size.width) / 2f
+        // 额外裁一道该段自己的高度：图片永远是"画在本段给它记的那条带子里"，
+        // 万一哪天公式改了导致尺寸对不上，也只会少画几个像素，不会盖住下一段
+        canvas.save()
+        canvas.clipRect(0f, top, width.toFloat(), bottom)
+        NovelImageStore.draw(canvas, image, left, top, size)
+        canvas.restore()
     }
 
     /**

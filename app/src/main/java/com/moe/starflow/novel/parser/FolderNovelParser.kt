@@ -91,17 +91,31 @@ object FolderNovelParser : NovelParser {
         }
     }
 
-    override suspend fun loadChapter(file: File, locator: String): String = withContext(Dispatchers.IO) {
-        val sep = locator.indexOf(INNER_SEP)
-        if (sep >= 0) {
-            // 卷内章：交给 epub 解析器按卷内 locator 取
-            val volume = File(file, locator.substring(0, sep))
-            val inner = locator.substring(sep + 1)
-            return@withContext EpubParser.loadChapter(volume, inner)
+    override suspend fun loadChapter(file: File, locator: String): String =
+        loadChapterSource(file, locator).text
+
+    /**
+     * 正文 + 图片。
+     *
+     * ⚠️ 夹里的**散章都是 txt**（导入只拷 txt/epub）→ 本来就没有图片；夹里的 **epub 卷**则整条
+     * 委托给 [EpubParser.loadChapterSource]（卷内插图照常显示）。
+     */
+    override suspend fun loadChapterSource(file: File, locator: String): ChapterSource =
+        withContext(Dispatchers.IO) {
+            val sep = locator.indexOf(INNER_SEP)
+            if (sep >= 0) {
+                // 卷内章：交给 epub 解析器按卷内 locator 取
+                val volume = File(file, locator.substring(0, sep))
+                val inner = locator.substring(sep + 1)
+                return@withContext EpubParser.loadChapterSource(volume, inner)
+            }
+            val target = File(file, locator)
+            if (!target.isFile) return@withContext ChapterSource.EMPTY
+            // 夹内的散章都是 txt（见 NovelImporter.DIR_IMPORT_EXTS）→ 与 TxtParser 同一套「一行一段」
+            ChapterSource(
+                NovelParagraphSplitter.linesToParagraphs(
+                    TextEncoding.decode(NovelReadLimits.readFile(target))
+                )
+            )
         }
-        val target = File(file, locator)
-        if (!target.isFile) return@withContext ""
-        // 夹内的散章都是 txt（见 NovelImporter.DIR_IMPORT_EXTS）→ 与 TxtParser 同一套「一行一段」
-        NovelParagraphSplitter.linesToParagraphs(TextEncoding.decode(NovelReadLimits.readFile(target)))
-    }
 }

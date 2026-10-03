@@ -27,8 +27,10 @@ object NovelParagraphSplitter {
      * 另一条路是把 `splitVersion` 并进主键（需要一次重建表的迁移），当前没做。
      *
      * 历史：1 → 2 是因为 TXT 改成**一行一段**（见 [linesToParagraphs]），段号映射整体变了。
+     * 2 → 3 是因为 HTML/EPUB 的图片标记改成**前后各留一个空行**（`<p>文字<img/></p>` 从
+     * 「一段（文字 + 标记）」变成「两段」）—— 含内嵌图片的章段号整体后移，旧译文会静默错位。
      */
-    const val SPLIT_VERSION = 2
+    const val SPLIT_VERSION = 3
 
     /** 短于此长度的段落不翻译（短对白、分隔符、"……"）。 */
     const val MIN_TEXT_LENGTH = 4

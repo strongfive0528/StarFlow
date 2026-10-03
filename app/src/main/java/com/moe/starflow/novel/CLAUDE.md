@@ -62,9 +62,34 @@ Robolectric 的文本引擎是**桩**：`Paint.breakText` 不按宽度换行、�
 新版本的行 `insertIgnore` **静默写不进去**（"补齐分母"与"标记翻译中"全废，且不报错，看不出错）。
 
 - 现存的清理路径：`NovelChapterTranslator.resetStale`（阅读器进入时跑）→ `dao.deleteOtherVersions`
-- **当前值已经是 2**（上面那次「一行一段」时 +1 的），所以改切分规则照旧 +1 即可 ——
-  别看到版本号已是 2 就以为"动完了不能再动"，也别把上面那句清理路径删了
+- **当前值已经是 3**（2 → 3 是「图片标记前后各留一个空行」那次：`<p>文字<img/></p>` 从一段变成
+  两段，含内嵌图片的章段号整体后移）。所以改切分规则照旧 +1 即可 ——
+  别看到版本号已是 3 就以为"动完了不能再动"，也别把上面那句清理路径删了
 - 另一条路是把 `splitVersion` 并进主键（要一次重建表的迁移），没做
+
+### ⚠️ EPUB/HTML 的内嵌插图（2026-10-04 加，改动前必读）
+
+小说阅读器**会显示 epub/zip 里的插图**（封面页、插图页）。整条链路是"标记 ←→ 字节 ←→ 文件"
+三段，每一段的一一对应都是硬约束：
+
+| 段 | 位置 | 约定 |
+|---|---|---|
+| 抽地址 | `HtmlTextExtractor.extractWithImages` | 图片标记 `📷 [图片]` **前后各留一个空行**（单独成段）；地址表（`src` / `xlink:href` / `href`）**按文档顺序**，标签没写地址的也占一个空位 |
+| 读字节 | `NovelParser.loadChapterSource` + `ZipImages` | 一次开包读完整章；相对地址按**条目所在目录**解析（基准目录**必须带结尾 `/`**，`ZipImages.baseDirOf`）；`../`、百分号转义、`data:`、SVG 包装往里找一层 |
+| 落盘+量尺寸 | `NovelChapterRepository.imagesOf` | 按**内容哈希**写进 `novel_import/<书 id>/images/`（删书一起清）；`inJustDecodeBounds` 量原始像素尺寸 |
+| 分页+绘制 | `NovelPaginator` / `NovelPageView` / `NovelScrollAdapter` | 尺寸口径**只有一份**：`NovelImageMetrics`（等比、只缩不放、分页时限一页高）；插图段没有 `StaticLayout`，高度伪装成"整段一行" |
+
+- ⚠️ **图片段数是配对规则的锚**：`第 i 个 IMAGE 段` 配 `第 i 张图`。所以 `head` / `script` 里的
+  图片**必须**在抽地址前就被剥掉（`stripClosedBlock` 先跑），标签没地址的也必须占位 ——
+  少一项就是"第 3 章配了第 4 章的脸"，**看不出错**
+- ⚠️ **只缩不放**：电子书里 1×1 的占位/间距小图非常多（`<img src="dot.gif">`），允许放大
+  会被撑成一整屏的方块
+- ⚠️ 读不到的图写 `null` → 该段**回落成占位文本**：少一张图不能把正文也丢了
+- ⚠️ 单 HTML / 文件夹里的**散章**没有图：导入只复制 txt/epub（SAF 单文件授权拿不到兄弟文件），
+  所以 `HtmlParser.loadChapterSource` 那条路解析出来的地址在导入后都取不到（留着的意义是
+  以后若改成连图一起拷，它立刻能用）
+- 守卫：`NovelImageExtractionTest`（抽地址 / 配对 / epub 相对路径 / 百分号转义 / SVG 包装 /
+  `data:` / 路径穿越）、`NovelImageMetricsTest`（尺寸口径）、`NovelImagePaginationTest`（占位高度与换页）
 
 ### ⚠️ 当前状态（2026-09-27）
 
@@ -181,10 +206,13 @@ Robolectric 的文本引擎是**桩**：`Paint.breakText` 不按宽度换行、�
   —— 与漫画「打开面板/退出阅读器」的强制退出同一套，2026-09-28 核对过）。
   「等待」= `runner.waitingPages` + `queuedPages`（章任务）为唯一数据源，不要拿"提交数 − 完成数"推
 
-**单批超长预警**：`NovelBatchWarning`（档位 `2048/4096/8192/16384/32768`，默认 **2048**
+**单批超长预警**：`NovelBatchWarning`（档位 `512/1024/2048/4096/8192/16384`，默认 **2048**
 （2026-10-03 用户口径，原 4096；老用户里"还停在旧默认 4096"的由 `NovelPanelStyle.migrateBatchDefaults`
 一次性挪到 2048，"每批段数 3 → 2"同一个迁移）；`utils/TokenEstimator` 粗估 token）+
 `NovelBatchWarnGate` / `NovelOversizeConfirmer`（**同一轮只打扰一次**）。
+⚠️ **档位区间是围绕默认值铺开的**（用户口径 2026-10-04：「滑动范围要根据当前默认值调整到合理的
+范围」）：默认 2048 落在第 3 格，往下还能拖到 512/1024 —— 原档位从 2048 起、默认值顶在最左端，
+滑块只能往右拖，"想更早被提醒"这条需求在界面上**根本走不通**。
 判据收敛在 **`NovelChapterTranslator.translateBatch` 一处**（翻译本章 / 多选 / 自动 / 增量全汇到这里，
 不会漏路径）；⚠️ **后台任务（阅读器已关）没有 UI 可弹窗时必须放行**，否则任务会静默停在一半。
 

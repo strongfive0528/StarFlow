@@ -28,7 +28,31 @@ object HtmlParser : NovelParser {
         )
     }
 
-    override suspend fun loadChapter(file: File, locator: String): String = withContext(Dispatchers.IO) {
-        HtmlTextExtractor.extract(TextEncoding.decode(NovelReadLimits.readFile(file)))
-    }
+    override suspend fun loadChapter(file: File, locator: String): String =
+        loadChapterSource(file, locator).text
+
+    /**
+     * 正文 + 图片。
+     *
+     * ⚠️ 单 HTML 的图片是**同目录下的兄弟文件**，而导入只复制了这一个 html（SAF 的单文件授权
+     * 拿不到兄弟文件）→ 这些地址在导入后**都取不到**，回落成占位文本。这里仍然按规矩解析：
+     * 一旦哪天导入改成连图片一起拷（或用户手工把图片放进书目录），这条路径立刻就能用。
+     */
+    override suspend fun loadChapterSource(file: File, locator: String): ChapterSource =
+        withContext(Dispatchers.IO) {
+            val ex = HtmlTextExtractor.extractWithImages(TextEncoding.decode(NovelReadLimits.readFile(file)))
+            val dir = file.parentFile ?: return@withContext ChapterSource(ex.text)
+            var spent = 0
+            ChapterSource(
+                ex.text,
+                ex.imageSources.map { src ->
+                    if (src.isEmpty() || spent >= NovelReadLimits.MAX_CHAPTER_IMAGE_BYTES) {
+                        return@map null
+                    }
+                    val bytes = ZipImages.readLocalOne(dir, src) ?: return@map null
+                    spent += bytes.size
+                    bytes
+                },
+            )
+        }
 }

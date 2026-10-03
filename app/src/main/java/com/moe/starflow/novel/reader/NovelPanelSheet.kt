@@ -484,7 +484,7 @@ class NovelPanelSheet(
         })
         applyAheadRowVisibility(view, translateMode)
 
-        // 单批预警阈值（滑块位置 = 档位下标；用户口径：默认 4096，档位都是较大的值）
+        // 单批预警阈值（滑块位置 = 档位下标；默认 2048 落在**中间那格**，两边都能拖，见 NovelBatchWarning.tiers）
         val sbWarn = view.findViewById<SeekBar>(R.id.sb_batch_warn)
         val tvWarn = view.findViewById<TextView>(R.id.tv_batch_warn_value)
         sbWarn.max = NovelBatchWarning.maxIndex()

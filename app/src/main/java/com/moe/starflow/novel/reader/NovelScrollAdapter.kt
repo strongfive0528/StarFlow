@@ -102,6 +102,7 @@ class NovelScrollAdapter : RecyclerView.Adapter<NovelScrollAdapter.VH>() {
         val para = c.visibleParas.getOrNull(position) ?: return
         holder.view.bind(
             c.displayOf(para.index), style, textColor, backgroundColor,
+            image = c.images[para.index],
             selected = para.index in selected,
             active = para.index in activeBatch,
             failed = para.index in failedBatch,
@@ -118,6 +119,14 @@ class NovelScrollAdapter : RecyclerView.Adapter<NovelScrollAdapter.VH>() {
         private var selected: Boolean = false
         private var active: Boolean = false
         private var failed: Boolean = false
+
+        /**
+         * 这一段的插图（有图就**画图不画那串 `📷 [图片]` 占位文本**）。
+         *
+         * ⚠️ 滚动模式**不限高**（[NovelImageMetrics.fit] 传 `0f`）：这里没有"页"，
+         * 一张整页插图就该按正文列宽铺开、有多高滚多高 —— 与分页模式不得不把它压进一页是两回事。
+         */
+        private var image: NovelImage? = null
 
         /** 已经真正设到底色上的颜色（切选中态/切背景都要比它，别比 [backgroundColor]）。 */
         private var appliedBg: Int = backgroundColor
@@ -172,23 +181,25 @@ class NovelScrollAdapter : RecyclerView.Adapter<NovelScrollAdapter.VH>() {
             style: NovelTextStyle,
             textColor: Int,
             backgroundColor: Int,
+            image: NovelImage? = null,
             selected: Boolean = false,
             active: Boolean = false,
             failed: Boolean = false,
         ) {
             if (this.text == text && this.style == style && this.textColor == textColor &&
-                this.backgroundColor == backgroundColor && this.selected == selected &&
-                this.active == active && this.failed == failed
+                this.backgroundColor == backgroundColor && this.image == image &&
+                this.selected == selected && this.active == active && this.failed == failed
             ) {
                 return
             }
             // ⚠️ 「要不要重新测量」必须在**赋值之前**判定：item 是 `WRAP_CONTENT`，
-            // `requestLayout()` 必然带回一遍 `onMeasure`（那里要拿 layout 的高度）。
-            val remeasure = this.text != text || this.style != style
+            // `requestLayout()` 必然带回一遍 `onMeasure`（那里要拿 layout / 图片的高度）。
+            val remeasure = this.text != text || this.style != style || this.image != image
             this.text = text
             this.style = style
             this.textColor = textColor
             this.backgroundColor = backgroundColor
+            this.image = image
             this.selected = selected
             this.active = active
             this.failed = failed
@@ -225,6 +236,14 @@ class NovelScrollAdapter : RecyclerView.Adapter<NovelScrollAdapter.VH>() {
         override fun onMeasure(widthMeasureSpec: Int, heightMeasureSpec: Int) {
             val w = MeasureSpec.getSize(widthMeasureSpec)
             val contentWidth = style.contentWidthPx(w)
+            // 插图段：高度由图片本身决定（与分页模式同一个公式，只是这里**不限高**）。
+            // 量不出来（尺寸异常）就落回文本路径，显示占位文本 —— 不能量成 0 高把这一段吞掉
+            image?.let { img ->
+                NovelImageMetrics.fit(img, contentWidth, 0f)?.let { size ->
+                    setMeasuredDimension(w, (size.height + style.paragraphSpacingPx).toInt())
+                    return
+                }
+            }
             // ⚠️ 条目高度 = 正文高度 + **段间距**。以前这里还加了 `2 × style.paddingPx` ——
             // 那是**左右**边距（16~64dp），被当成上下留白来用，于是滚动模式下段间距被撑得极大、
             // 拖「段间距」滑块几乎看不出变化（用户报的「不受段落面板控制」就是这个）。
@@ -237,9 +256,19 @@ class NovelScrollAdapter : RecyclerView.Adapter<NovelScrollAdapter.VH>() {
 
         override fun onDraw(canvas: Canvas) {
             super.onDraw(canvas)
+            val contentWidth = style.contentWidthPx(width)
+            // 插图段：整段就是那张图（左右居中；高度与 onMeasure 记的是同一个数）
+            image?.let { img ->
+                val size = NovelImageMetrics.fit(img, contentWidth, 0f)
+                if (size != null) {
+                    val left = style.paddingPx + (contentWidth - size.width) / 2f
+                    if (NovelImageStore.draw(canvas, img, left, 0f, size)) return
+                    // 画不出来（文件没了/解码失败）→ 落回下面的占位文本，别留一片空白
+                }
+            }
             // ⚠️ 这里**不再重排**：拿 onMeasure 已经排好的那一份（闸门保证命中），
             // 文字色只改 paint（见 [NovelTextRenderer.drawLayout]）
-            val lay = layoutFor(style.contentWidthPx(width)) ?: return
+            val lay = layoutFor(contentWidth) ?: return
             NovelTextRenderer.drawLayout(
                 canvas = canvas,
                 layout = lay,
