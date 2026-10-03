@@ -2,7 +2,6 @@ package com.moe.starflow.mangaimport.reader
 
 import android.graphics.Bitmap
 import com.moe.starflow.mangaimport.data.PdfRasterPolicy
-import com.moe.starflow.mangaimport.translate.ReaderTranslationController
 import com.moe.starflow.utils.LogCollector
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.Dispatchers
@@ -42,20 +41,35 @@ internal object ReaderPdfExport {
     private const val JPEG_QUALITY = 88
 
     /**
+     * 导出成 PDF。
+     *
+     * ⚠️ 页图由**调用方**提供（而不是直接吃 `ReaderPageSource` + `Controller`）：这两个都是重型
+     * Android 依赖，绑死它们就没法对"页数/两个计数/截断判定"这些**纯逻辑**写行为测试 ——
+     * 而这几条正是最容易改错、且错了用户会以为"整本都翻了"的地方（`ReaderPdfExportAccountingTest`）。
+     *
+     * @param pageCount 全书页数（= `ReaderPageSource.size`）
+     * @param translatedPages 导出**开始时**"应该有译文"的页集合快照（= `controller.translatedPages()`）
+     * @param readOriginal 取该页原图（= `source.loadFull`）。**返回的位图归本函数所有**，用完即回收
+     * @param renderTranslated 渲染该页译图（= `controller.renderForExport`）；null = 这页没有译文。
+     *                         同样**归本函数所有**、用完即回收
      * @param both true = 双语 PDF（已译页：原图页 + 译图页）；false = 译文 PDF（全页，未译页原图）
      * @param out **调用方拥有**的输出流（本函数只 flush，不 close）
      * @param onProgress 每处理完一页原书页回调一次（**主线程**），参数为 (已处理, 总页数)
+     * @param encodeJpeg 位图 → JPEG 字节（测试缝：默认实现就是 `Bitmap.compress(JPEG, 88)`）
      */
     suspend fun export(
-        source: ReaderPageSource,
-        controller: ReaderTranslationController,
+        pageCount: Int,
+        translatedPages: Set<Int>,
+        readOriginal: (Int) -> Bitmap?,
+        renderTranslated: (Int) -> Bitmap?,
         both: Boolean,
         out: OutputStream,
         onProgress: (done: Int, total: Int) -> Unit,
+        encodeJpeg: (Bitmap) -> ByteArray? = ::encodeJpeg,
     ): ExportOutcome = withContext(Dispatchers.IO) {
-        val total = source.size
+        val total = pageCount
         if (total <= 0) return@withContext ExportOutcome.Empty
-        val translated = controller.translatedPages()
+        val translated = translatedPages
         // 一页都没翻过 → 与 zip 导出同一条口径：不产出"纯原图"的假译文包
         if (translated.isEmpty()) return@withContext ExportOutcome.Empty
 
@@ -76,12 +90,16 @@ internal object ReaderPdfExport {
         try {
             val writer = PdfJpegWriter(buffered)
             for (page in 0 until total) {
-                var wroteAny = false
+                /** 本页写进 PDF 的张数（双语模式下已译页是 2 张），同时作为"这页有没有产出"的判据。 */
+                var wroteThisPage = false
                 // ① 双语：先出"原图页"（未翻译页就靠这一张，所以不能省）
-                if (both && writeSourcePage(writer, source, page)) wroteAny = true
+                if (both && writeOriginalPage(writer, readOriginal, encodeJpeg, page)) {
+                    written++
+                    wroteThisPage = true
+                }
                 // ② 译图页：按导出开始时的快照判断"这页应该有译文"，再现读载荷渲染
                 val expected = page in translated
-                val rendered = if (expected) controller.renderForExport(page) else null
+                val rendered = if (expected) renderTranslated(page) else null
                 if (expected && rendered == null) {
                     // ⚠️ **必须记一笔**：导出是跨 onStop 继续跑的长任务，用户完全可能中途
                     //    「删除该页译文 / 清空本章」，于是快照里还有、载荷已经取不到了。
@@ -90,18 +108,24 @@ internal object ReaderPdfExport {
                 }
                 if (rendered != null) {
                     try {
-                        if (writeBitmapPage(writer, rendered)) wroteAny = true
+                        if (writeBitmapPage(writer, rendered, encodeJpeg)) {
+                            written++
+                            wroteThisPage = true
+                        }
                     } finally {
                         // renderForExport 给的是独立副本 → 用完即回收（别攒内存）
                         rendered.recycle()
                     }
                 } else if (!both) {
                     // 译文 PDF：未翻译页回填原图，保证整本页数一致、可连续阅读
-                    if (writeSourcePage(writer, source, page)) wroteAny = true
+                    if (writeOriginalPage(writer, readOriginal, encodeJpeg, page)) {
+                        written++
+                        wroteThisPage = true
+                    }
                 }
                 when {
                     // 这一页连原图都没进包 → 真·跳过（阅读器会少一页）
-                    !wroteAny -> skipped++
+                    !wroteThisPage -> skipped++
                     // 页在，只是没有译文（未翻译 / 中途被删 / 渲染失败）
                     rendered == null -> untranslated++
                 }
@@ -110,7 +134,10 @@ internal object ReaderPdfExport {
             writer.finish()
             buffered.flush()
             completed = true
-            // 一页都没写进去 = 没交付任何东西，不能算成功
+            // ⚠️ **`written` 必须真的累加**：它同时是"有没有交付任何东西"的判据 ——
+            //    只记 `wroteThisPage` 而漏了 `written++`，每次导出都会走到这里判 Failed，
+            //    调用方（streamToDownloads）还会把刚落盘的那条记录删掉 → 用户点了导出什么都没有
+            //    （2026-10 真发生：行为测试 `ReaderPdfExportAccountingTest` 抓到的）。
             if (written <= 0) ExportOutcome.Failed
             else ExportOutcome.Done(written, skipped, untranslated)
         } catch (e: CancellationException) {
@@ -127,28 +154,40 @@ internal object ReaderPdfExport {
         }
     }
 
-    /** 原图页（PDF 现渲）。返回是否写成功；位图用完即回收。 */
-    private fun writeSourcePage(writer: PdfJpegWriter, source: ReaderPageSource, page: Int): Boolean {
-        val bmp = source.loadFull(page) ?: return false
+    /** 原图页：由调用方提供位图，返回是否写成功；位图用完即回收（契约：归本函数所有）。 */
+    private fun writeOriginalPage(
+        writer: PdfJpegWriter,
+        readOriginal: (Int) -> Bitmap?,
+        encodeJpeg: (Bitmap) -> ByteArray?,
+        page: Int,
+    ): Boolean {
+        val bmp = readOriginal(page) ?: return false
         return try {
-            writeBitmapPage(writer, bmp)
+            writeBitmapPage(writer, bmp, encodeJpeg)
         } finally {
             bmp.recycle()
         }
     }
 
     /** 位图 → JPEG → 一页 PDF。页的**点尺寸**由像素尺寸按栅格化 DPI 反推（= 原页面尺寸）。 */
-    private fun writeBitmapPage(writer: PdfJpegWriter, bitmap: Bitmap): Boolean {
+    private fun writeBitmapPage(
+        writer: PdfJpegWriter,
+        bitmap: Bitmap,
+        encodeJpeg: (Bitmap) -> ByteArray?,
+    ): Boolean {
         val w = bitmap.width
         val h = bitmap.height
         if (w <= 0 || h <= 0) return false
-        val jpeg = ByteArrayOutputStream().use { buffer ->
-            if (!bitmap.compress(Bitmap.CompressFormat.JPEG, JPEG_QUALITY, buffer)) return false
-            buffer.toByteArray()
-        }
+        val jpeg = encodeJpeg(bitmap) ?: return false
         if (jpeg.isEmpty()) return false
         val ptPerPx = 72f / PdfRasterPolicy.RASTER_DPI
         writer.addPage(jpeg, w, h, w * ptPerPx, h * ptPerPx)
         return true
+    }
+
+    /** 默认的 JPEG 编码（唯一实现，测试可替换成假编码器从而不依赖 Skia）。 */
+    private fun encodeJpeg(bitmap: Bitmap): ByteArray? = ByteArrayOutputStream().use { buffer ->
+        if (!bitmap.compress(Bitmap.CompressFormat.JPEG, JPEG_QUALITY, buffer)) return null
+        buffer.toByteArray()
     }
 }

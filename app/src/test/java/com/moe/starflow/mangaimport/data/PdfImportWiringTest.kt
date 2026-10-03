@@ -256,14 +256,17 @@ class PdfImportWiringTest {
         // 译文 PDF = 全页（未译页回填原图）；双语 = 已译页「原图页 + 译图页」
         assertTrue("必须逐页遍历整本", body.contains("for (page in 0 until total)"))
         assertTrue("未译页要回填原图", body.contains("else if (!both)"))
-        assertTrue("双语模式先出原图页", body.contains("if (both && writeSourcePage("))
+        assertTrue("双语模式先出原图页", body.contains("if (both && writeOriginalPage("))
         assertTrue("一页都没翻过时不出包", body.contains("if (translated.isEmpty())"))
         // ⚠️ **两个计数必须分开**：「这页没进包」与「这页在、只是没译文」对用户是两件事。
         //    合成一个的话，译文 PDF 的未译页（回填了原图、页数完整）会被报成"N 页跳过" = 骗用户缺页。
         assertTrue("必须有 untranslated 计数", body.contains("var untranslated = 0"))
-        assertTrue("真·跳过只在整页都没写进去时计", body.contains("!wroteAny -> skipped++"))
+        assertTrue("真·跳过只在整页都没写进去时计", body.contains("!wroteThisPage -> skipped++"))
         assertTrue("没译文（页在）单独计", body.contains("rendered == null -> untranslated++"))
         assertTrue("结果要带上第三个计数", body.contains("ExportOutcome.Done(written, skipped, untranslated)"))
+        // ⚠️ `written` 必须真的累加（漏了它每次导出都判 Failed，用户点了导出什么都没有）。
+        //    真正的守卫是行为测试 `ReaderPdfExportAccountingTest`，这里只做一道粗筛。
+        assertTrue("written 必须在写入成功处累加", Regex("written\\+\\+").findAll(body).count() >= 3)
         // 提示语也要分开：untranslated 走新文案，不能说成"跳过"
         val readerSrc = read(READER)
         assertTrue("提示必须区分 skipped / untranslated",

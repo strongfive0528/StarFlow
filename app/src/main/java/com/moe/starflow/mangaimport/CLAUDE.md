@@ -322,7 +322,18 @@
   译文 PDF 会把未译页**回填原图**（页数完整），把这批报成"跳过"就是在骗用户（他会以为 PDF 缺页）；
   双语 PDF 的未译页只出原图页，同理。所以 `ExportOutcome.Done` 有三个字段，
   提示语也分成 `reader_download_done_skipped`（真缺页）与 `reader_download_done_untranslated`（页在但没译文）。
-  规约：`!wroteAny -> skipped++`、`rendered == null -> untranslated++`（见 [ReaderPdfExport]）。
+  规约：`!wroteThisPage -> skipped++`、`rendered == null -> untranslated++`（见 [ReaderPdfExport]）。
+  ⚠️⚠️ **`written` 也必须真的累加**：它同时是"有没有交付任何东西"的判据（`written <= 0 → Failed`），
+  **只记 `wroteThisPage` 而漏了 `written++`，每次导出都会判失败**，而调用方 `streamToDownloads`
+  还会把刚落盘的那条 MediaStore 记录删掉 → 用户点了导出什么都没有（2026-10 真发生，
+  上一轮的"两个计数"重构引入的；**源码级 grep 抓不到**，是补上行为测试
+  `ReaderPdfExportAccountingTest` 当轮抓出来的）。这也说明：这段逻辑必须靠行为断言守，
+  不要只留"`ExportOutcome.Done(written, skipped, untranslated)` 这行字符串存在"这种假守卫。
+- ⚠️ **导出的页图由调用方以 lambda 提供**（`readOriginal` / `renderTranslated` / `encodeJpeg`），
+  不再直接吃 `ReaderPageSource` + `ReaderTranslationController`：那两个是重型 Android 依赖，
+  绑死就没法对"页数 / 两个计数 / 截断判定"写行为测试（`ReaderPdfExportAccountingTest`，9 例，
+  Robolectric + 假编码器，不依赖 Skia）。真机侧由 `tools/verify-pdf-import.ps1` 的
+  `PdfReadPathProbe` 覆盖真实编码 + 系统 `PdfRenderer` 读回。
 - ⚠️ **直写流的收尾必须重抛 `CancellationException`**（`catch` 的具体类型写在 `catch (Exception)` 前面）：
   取消不是"导出失败"，被吞掉的话用户退出阅读器后还会看到一句「导出失败」；
   重抛前先删掉那条 MediaStore 记录，取消同样不会留半截文件。

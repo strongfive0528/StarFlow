@@ -2711,8 +2711,12 @@ class MangaReaderActivity : AppCompatActivity() {
         var outcome: ExportOutcome = ExportOutcome.Failed
         val ok = streamToDownloads(display, PDF_MIME) { out ->
             outcome = ReaderPdfExport.export(
-                source = source,
-                controller = controller,
+                pageCount = source.size,
+                // ⚠️ 快照在这一刻取：导出是长任务，中途用户可能删译文（这时 renderTranslated 会给 null，
+                //    由导出侧如实计入 untranslated，见 ReaderPdfExport 的说明）
+                translatedPages = controller.translatedPages(),
+                readOriginal = { page -> source.loadFull(page) },
+                renderTranslated = { page -> controller.renderForExport(page) },
                 both = both,
                 out = out,
                 onProgress = onProgress,
