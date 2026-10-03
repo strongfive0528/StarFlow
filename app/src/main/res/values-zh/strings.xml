@@ -1245,6 +1245,7 @@
     <string name="reader_download_progress">正在导出 %1$d/%2$d…</string>
     <string name="reader_download_done">已保存到下载目录：%1$s</string>
     <string name="reader_download_done_skipped">已保存到下载目录：%1$s（%2$d 页跳过）</string>
+    <string name="reader_download_done_untranslated">已保存到下载目录：%1$s（%2$d 页还没有译文，那里用的原图）</string>
     <string name="reader_download_failed">导出失败</string>
     <string name="reader_download_nothing">还没有已翻译的页面</string>
     <string name="reader_download_busy">正在导出中，请稍候</string>

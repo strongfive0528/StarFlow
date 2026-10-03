@@ -60,47 +60,59 @@ internal object ReaderPdfExport {
         if (translated.isEmpty()) return@withContext ExportOutcome.Empty
 
         var written = 0
+        /**
+         * 这一页**什么都没写进 PDF**（真·跳过）：阅读器会少一页。
+         */
         var skipped = 0
+        /**
+         * 这一页**在包里，但没有译文**（双语 = 只出了原图页；译文 PDF = 用原图回填）。
+         *
+         * ⚠️ 和 [skipped] 分开计数是有意的：把"回填了原图"也说成"N 页跳过"，用户会以为 PDF 缺页。
+         */
+        var untranslated = 0
         /** 是否真的写到了 trailer —— 没有它的话，中途 IOException 会被当成"部分成功"交付一个打不开的 PDF。 */
         var completed = false
         val buffered = BufferedOutputStream(out, 64 * 1024)
         try {
             val writer = PdfJpegWriter(buffered)
             for (page in 0 until total) {
-                var pageFailed = false
+                var wroteAny = false
                 // ① 双语：先出"原图页"（未翻译页就靠这一张，所以不能省）
-                if (both) {
-                    if (writeSourcePage(writer, source, page)) written++ else pageFailed = true
-                }
+                if (both && writeSourcePage(writer, source, page)) wroteAny = true
                 // ② 译图页：按导出开始时的快照判断"这页应该有译文"，再现读载荷渲染
                 val expected = page in translated
                 val rendered = if (expected) controller.renderForExport(page) else null
                 if (expected && rendered == null) {
                     // ⚠️ **必须记一笔**：导出是跨 onStop 继续跑的长任务，用户完全可能中途
                     //    「删除该页译文 / 清空本章」，于是快照里还有、载荷已经取不到了。
-                    //    不记的话双语包会只剩原图页、skipped 还是 0 —— 用户以为整本都翻了。
-                    pageFailed = true
+                    //    不记的话双语包会只剩原图页、两个计数都还是 0 —— 用户以为整本都翻了。
                     LogCollector.w(TAG, "译文页渲染失败（导出途中译文被删除/载荷为空）page=$page")
                 }
                 if (rendered != null) {
                     try {
-                        if (writeBitmapPage(writer, rendered)) written++ else pageFailed = true
+                        if (writeBitmapPage(writer, rendered)) wroteAny = true
                     } finally {
                         // renderForExport 给的是独立副本 → 用完即回收（别攒内存）
                         rendered.recycle()
                     }
                 } else if (!both) {
                     // 译文 PDF：未翻译页回填原图，保证整本页数一致、可连续阅读
-                    if (writeSourcePage(writer, source, page)) written++ else pageFailed = true
+                    if (writeSourcePage(writer, source, page)) wroteAny = true
                 }
-                if (pageFailed) skipped++
+                when {
+                    // 这一页连原图都没进包 → 真·跳过（阅读器会少一页）
+                    !wroteAny -> skipped++
+                    // 页在，只是没有译文（未翻译 / 中途被删 / 渲染失败）
+                    rendered == null -> untranslated++
+                }
                 withContext(Dispatchers.Main) { onProgress(page + 1, total) }
             }
             writer.finish()
             buffered.flush()
             completed = true
             // 一页都没写进去 = 没交付任何东西，不能算成功
-            if (written <= 0) ExportOutcome.Failed else ExportOutcome.Done(written, skipped)
+            if (written <= 0) ExportOutcome.Failed
+            else ExportOutcome.Done(written, skipped, untranslated)
         } catch (e: CancellationException) {
             // 取消（退出阅读器 → onDestroy 取消 lifecycleScope）要按结构化并发继续上抛
             throw e
@@ -110,7 +122,7 @@ internal object ReaderPdfExport {
             // ⚠️ **没写完 trailer 的 PDF 是打不开的**（没有 xref）——宁可报失败也不能当成功交付：
             //    zip 截断还能解开一部分，PDF 截断连页数都读不出来。
             if (!completed) ExportOutcome.Failed
-            else if (written > 0) ExportOutcome.Done(written, skipped)
+            else if (written > 0) ExportOutcome.Done(written, skipped, untranslated)
             else ExportOutcome.Failed
         }
     }

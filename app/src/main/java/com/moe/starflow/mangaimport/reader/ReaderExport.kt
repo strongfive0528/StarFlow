@@ -81,7 +81,14 @@ internal sealed interface ExportOutcome {
     data object Failed : ExportOutcome
 
     /** 跑完：[written] 写进包的页数，[skipped] 因渲染/读图失败被跳过的页数。 */
-    data class Done(val written: Int, val skipped: Int) : ExportOutcome
+    /**
+     * 跑完：[written] 写进包的页数，[skipped] 因渲染/读图失败被跳过的页数，
+     * [untranslated] **在包里但没有译文**的页数（PDF 才有这个口径，见 [ReaderPdfExport]）。
+     *
+     * ⚠️ 两个计数**语义不同，提示语也必须不同**：zip 里"跳过"= 这一页没进包；
+     * 而 PDF 的译文导出会把未译页**回填原图**（页在、只是没译文）——把它也说成"跳过"就是在骗用户。
+     */
+    data class Done(val written: Int, val skipped: Int, val untranslated: Int = 0) : ExportOutcome
 }
 
 /**
