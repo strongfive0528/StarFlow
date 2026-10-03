@@ -1,0 +1,604 @@
+<?xml version="1.0" encoding="utf-8"?>
+<LinearLayout
+    xmlns:android="http://schemas.android.com/apk/res/android"
+    android:id="@+id/sheet_root"
+    android:layout_width="match_parent"
+    android:layout_height="wrap_content"
+    android:orientation="vertical"
+    android:background="@color/white">
+
+    <!-- 四图标 Tab：24dp 原版图标，不放大不压缩 -->
+    <LinearLayout
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        android:orientation="horizontal"
+        android:gravity="center"
+        android:paddingTop="4dp"
+        android:paddingBottom="4dp">
+
+        <FrameLayout
+            android:layout_width="0dp"
+            android:layout_height="52dp"
+            android:layout_weight="1"
+            android:gravity="center"
+            android:clickable="true"
+            android:id="@+id/tab_paging">
+            <ImageView android:id="@+id/sel_tab_paging" android:layout_width="40dp" android:layout_height="40dp" android:layout_gravity="center" android:src="@drawable/ic_sel_circle" android:visibility="gone"/>
+            <ImageView android:layout_width="24dp" android:layout_height="24dp" android:layout_gravity="center"
+                android:src="@drawable/ic_reader_paging" android:contentDescription="@string/reader_tab_paging"/>
+        </FrameLayout>
+
+        <FrameLayout
+            android:layout_width="0dp"
+            android:layout_height="52dp"
+            android:layout_weight="1"
+            android:gravity="center"
+            android:clickable="true"
+            android:id="@+id/tab_translate">
+            <ImageView android:id="@+id/sel_tab_translate" android:layout_width="40dp" android:layout_height="40dp" android:layout_gravity="center" android:src="@drawable/ic_sel_circle" android:visibility="gone"/>
+            <ImageView android:layout_width="24dp" android:layout_height="24dp" android:layout_gravity="center"
+                android:src="@drawable/ic_reader_translate" android:contentDescription="@string/reader_tab_translate"/>
+        </FrameLayout>
+
+        <FrameLayout
+            android:layout_width="0dp"
+            android:layout_height="52dp"
+            android:layout_weight="1"
+            android:gravity="center"
+            android:clickable="true"
+            android:id="@+id/tab_appearance">
+            <ImageView android:id="@+id/sel_tab_appearance" android:layout_width="40dp" android:layout_height="40dp" android:layout_gravity="center" android:src="@drawable/ic_sel_circle" android:visibility="gone"/>
+            <ImageView android:layout_width="24dp" android:layout_height="24dp" android:layout_gravity="center"
+                android:src="@drawable/ic_reader_appearance" android:contentDescription="@string/reader_color_filter"/>
+        </FrameLayout>
+
+        <FrameLayout
+            android:layout_width="0dp"
+            android:layout_height="52dp"
+            android:layout_weight="1"
+            android:gravity="center"
+            android:clickable="true"
+            android:id="@+id/tab_more">
+            <ImageView android:id="@+id/sel_tab_more" android:layout_width="40dp" android:layout_height="40dp" android:layout_gravity="center" android:src="@drawable/ic_sel_circle" android:visibility="gone"/>
+            <ImageView android:layout_width="24dp" android:layout_height="24dp" android:layout_gravity="center"
+                android:src="@drawable/ic_reader_more" android:contentDescription="@string/reader_tab_more"/>
+        </FrameLayout>
+    </LinearLayout>
+
+    <View android:layout_width="match_parent" android:layout_height="1dp" android:background="#33000000"/>
+
+    <FrameLayout
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content">
+
+        <!-- ========== 翻页面板 ========== -->
+        <ScrollView
+            android:id="@+id/panel_paging"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:maxHeight="400dp">
+
+            <LinearLayout
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:orientation="vertical"
+                android:padding="14dp">
+
+                <TextView android:id="@+id/tv_mode_label" android:layout_width="wrap_content" android:layout_height="wrap_content"
+                    android:text="@string/reader_reading_mode" android:textSize="14sp" android:textColor="#888888"/>
+
+                <LinearLayout android:id="@+id/seg_mode" android:layout_width="match_parent" android:layout_height="wrap_content"
+                    android:orientation="horizontal" android:layout_marginTop="2dp">
+
+                    <FrameLayout android:id="@+id/seg_mode_ltr" android:layout_width="0dp" android:layout_height="48dp" android:layout_weight="1"
+                        android:gravity="center" android:clickable="true">
+            <ImageView android:id="@+id/sel_seg_mode_ltr" android:layout_width="40dp" android:layout_height="40dp" android:layout_gravity="center" android:src="@drawable/ic_sel_circle" android:visibility="gone"/>
+                        <ImageView android:layout_width="24dp" android:layout_height="24dp" android:layout_gravity="center" android:src="@drawable/ic_reader_ltr" android:contentDescription="@string/reader_mode_ltr"/>
+                    </FrameLayout>
+                    <FrameLayout android:id="@+id/seg_mode_rtl" android:layout_width="0dp" android:layout_height="48dp" android:layout_weight="1"
+                        android:gravity="center" android:clickable="true">
+            <ImageView android:id="@+id/sel_seg_mode_rtl" android:layout_width="40dp" android:layout_height="40dp" android:layout_gravity="center" android:src="@drawable/ic_sel_circle" android:visibility="gone"/>
+                        <ImageView android:layout_width="24dp" android:layout_height="24dp" android:layout_gravity="center" android:src="@drawable/ic_reader_rtl" android:contentDescription="@string/reader_mode_rtl"/>
+                    </FrameLayout>
+                    <FrameLayout android:id="@+id/seg_mode_vertical" android:layout_width="0dp" android:layout_height="48dp" android:layout_weight="1"
+                        android:gravity="center" android:clickable="true">
+            <ImageView android:id="@+id/sel_seg_mode_vertical" android:layout_width="40dp" android:layout_height="40dp" android:layout_gravity="center" android:src="@drawable/ic_sel_circle" android:visibility="gone"/>
+                        <ImageView android:layout_width="24dp" android:layout_height="24dp" android:layout_gravity="center" android:src="@drawable/ic_reader_vertical" android:contentDescription="@string/reader_mode_vertical"/>
+                    </FrameLayout>
+                    <FrameLayout android:id="@+id/seg_mode_webtoon" android:layout_width="0dp" android:layout_height="48dp" android:layout_weight="1"
+                        android:gravity="center" android:clickable="true">
+            <ImageView android:id="@+id/sel_seg_mode_webtoon" android:layout_width="40dp" android:layout_height="40dp" android:layout_gravity="center" android:src="@drawable/ic_sel_circle" android:visibility="gone"/>
+                        <!-- 图标包一层容器：角标要贴「图标」的右上角，直接放进 48dp 的 cell 会贴到 cell 角上 -->
+                        <FrameLayout android:layout_width="26dp" android:layout_height="26dp" android:layout_gravity="center">
+                            <ImageView android:layout_width="24dp" android:layout_height="24dp" android:layout_gravity="center" android:src="@drawable/ic_gesture_vertical" android:contentDescription="@string/reader_mode_webtoon"/>
+                            <TextView android:id="@+id/tv_webtoon_translated_badge" android:layout_width="wrap_content" android:layout_height="wrap_content"
+                                android:layout_gravity="top|end" android:minWidth="11dp" android:paddingStart="3dp" android:paddingEnd="3dp"
+                                android:gravity="center" android:background="@drawable/bg_reader_translated_badge"
+                                android:text="@string/reader_webtoon_badge" android:textSize="9sp" android:textStyle="bold" android:textColor="#FFFFFF"
+                                android:includeFontPadding="false" android:visibility="gone"
+                                android:contentDescription="@string/reader_webtoon_badge_desc"/>
+                        </FrameLayout>
+                    </FrameLayout>
+                </LinearLayout>
+
+                <TextView android:id="@+id/tv_animation_label" android:layout_width="wrap_content" android:layout_height="wrap_content"
+                    android:layout_marginTop="12dp" android:text="@string/reader_animation" android:textSize="14sp" android:textColor="#888888"/>
+
+                <LinearLayout android:id="@+id/seg_animation" android:layout_width="match_parent" android:layout_height="wrap_content"
+                    android:orientation="horizontal" android:layout_marginTop="2dp" android:gravity="center">
+
+                    <FrameLayout android:id="@+id/seg_anim_none" android:layout_width="0dp" android:layout_height="48dp" android:layout_weight="1"
+                        android:gravity="center" android:clickable="true">
+            <ImageView android:id="@+id/sel_seg_anim_none" android:layout_width="40dp" android:layout_height="40dp" android:layout_gravity="center" android:src="@drawable/ic_sel_circle" android:visibility="gone"/>
+                        <ImageView android:layout_width="24dp" android:layout_height="24dp" android:layout_gravity="center" android:src="@drawable/ic_anim_none" android:contentDescription="@string/reader_anim_none"/>
+                    </FrameLayout>
+                    <FrameLayout android:id="@+id/seg_anim_default" android:layout_width="0dp" android:layout_height="48dp" android:layout_weight="1"
+                        android:gravity="center" android:clickable="true">
+            <ImageView android:id="@+id/sel_seg_anim_default" android:layout_width="40dp" android:layout_height="40dp" android:layout_gravity="center" android:src="@drawable/ic_sel_circle" android:visibility="gone"/>
+                        <ImageView android:layout_width="24dp" android:layout_height="24dp" android:layout_gravity="center" android:src="@drawable/ic_anim_default" android:contentDescription="@string/reader_anim_default"/>
+                    </FrameLayout>
+                    <FrameLayout android:id="@+id/seg_anim_advanced" android:layout_width="0dp" android:layout_height="48dp" android:layout_weight="1"
+                        android:gravity="center" android:clickable="true">
+            <ImageView android:id="@+id/sel_seg_anim_advanced" android:layout_width="40dp" android:layout_height="40dp" android:layout_gravity="center" android:src="@drawable/ic_sel_circle" android:visibility="gone"/>
+                        <ImageView android:layout_width="24dp" android:layout_height="24dp" android:layout_gravity="center" android:src="@drawable/ic_anim_advanced" android:contentDescription="@string/reader_anim_advanced"/>
+                    </FrameLayout>
+                    <FrameLayout android:id="@+id/seg_anim_simulation" android:layout_width="0dp" android:layout_height="48dp" android:layout_weight="1"
+                        android:gravity="center" android:clickable="true">
+            <ImageView android:id="@+id/sel_seg_anim_simulation" android:layout_width="40dp" android:layout_height="40dp" android:layout_gravity="center" android:src="@drawable/ic_sel_circle" android:visibility="gone"/>
+                        <ImageView android:layout_width="24dp" android:layout_height="24dp" android:layout_gravity="center" android:src="@drawable/ic_anim_simulation" android:contentDescription="@string/reader_anim_simulation"/>
+                    </FrameLayout>
+                </LinearLayout>
+
+                <TextView android:id="@+id/tv_background_label" android:layout_width="wrap_content" android:layout_height="wrap_content"
+                    android:layout_marginTop="12dp" android:text="@string/reader_background" android:textSize="14sp" android:textColor="#888888"/>
+
+                <LinearLayout android:id="@+id/seg_background" android:layout_width="match_parent" android:layout_height="wrap_content"
+                    android:orientation="horizontal" android:layout_marginTop="2dp" android:gravity="center">
+
+                    <FrameLayout android:id="@+id/seg_bg_default" android:layout_width="0dp" android:layout_height="48dp" android:layout_weight="1"
+                        android:gravity="center" android:clickable="true">
+            <ImageView android:id="@+id/sel_seg_bg_default" android:layout_width="40dp" android:layout_height="40dp" android:layout_gravity="center" android:src="@drawable/ic_sel_circle" android:visibility="gone"/>
+                        <ImageView android:layout_width="22dp" android:layout_height="22dp" android:layout_gravity="center" android:src="@drawable/ic_bg_default" android:contentDescription="@string/reader_bg_default"/>
+                    </FrameLayout>
+                    <FrameLayout android:id="@+id/seg_bg_light" android:layout_width="0dp" android:layout_height="48dp" android:layout_weight="1"
+                        android:gravity="center" android:clickable="true">
+            <ImageView android:id="@+id/sel_seg_bg_light" android:layout_width="40dp" android:layout_height="40dp" android:layout_gravity="center" android:src="@drawable/ic_sel_circle" android:visibility="gone"/>
+                        <ImageView android:layout_width="22dp" android:layout_height="22dp" android:layout_gravity="center" android:src="@drawable/ic_bg_light" android:contentDescription="@string/reader_bg_light"/>
+                    </FrameLayout>
+                    <FrameLayout android:id="@+id/seg_bg_dark" android:layout_width="0dp" android:layout_height="48dp" android:layout_weight="1"
+                        android:gravity="center" android:clickable="true">
+            <ImageView android:id="@+id/sel_seg_bg_dark" android:layout_width="40dp" android:layout_height="40dp" android:layout_gravity="center" android:src="@drawable/ic_sel_circle" android:visibility="gone"/>
+                        <ImageView android:layout_width="22dp" android:layout_height="22dp" android:layout_gravity="center" android:src="@drawable/ic_bg_dark" android:contentDescription="@string/reader_bg_dark"/>
+                    </FrameLayout>
+                    <FrameLayout android:id="@+id/seg_bg_white" android:layout_width="0dp" android:layout_height="48dp" android:layout_weight="1"
+                        android:gravity="center" android:clickable="true">
+            <ImageView android:id="@+id/sel_seg_bg_white" android:layout_width="40dp" android:layout_height="40dp" android:layout_gravity="center" android:src="@drawable/ic_sel_circle" android:visibility="gone"/>
+                        <ImageView android:layout_width="22dp" android:layout_height="22dp" android:layout_gravity="center" android:src="@drawable/ic_bg_white" android:contentDescription="@string/reader_bg_white"/>
+                    </FrameLayout>
+                    <FrameLayout android:id="@+id/seg_bg_black" android:layout_width="0dp" android:layout_height="48dp" android:layout_weight="1"
+                        android:gravity="center" android:clickable="true">
+            <ImageView android:id="@+id/sel_seg_bg_black" android:layout_width="40dp" android:layout_height="40dp" android:layout_gravity="center" android:src="@drawable/ic_sel_circle" android:visibility="gone"/>
+                        <ImageView android:layout_width="22dp" android:layout_height="22dp" android:layout_gravity="center" android:src="@drawable/ic_bg_black" android:contentDescription="@string/reader_bg_black"/>
+                    </FrameLayout>
+                </LinearLayout>
+            </LinearLayout>
+        </ScrollView>
+
+        <!-- ========== 翻译面板 ==========
+             ⚠️ NestedScrollView（不是 ScrollView）：面板里嵌了 RecyclerView（记录列表），
+                 要靠 nested scroll 把「列表滚到底后继续滚面板」接起来；框架 ScrollView 不参与
+                 这一套，用户就会觉得"上滑到底就没反应了"。 -->
+        <androidx.core.widget.NestedScrollView
+            android:id="@+id/panel_translate"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:visibility="gone">
+
+            <LinearLayout
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:orientation="vertical"
+                android:padding="14dp">
+
+                <TextView android:id="@+id/tv_translate_mode_label" android:layout_width="wrap_content" android:layout_height="wrap_content"
+                    android:text="@string/reader_translate_mode_title" android:textSize="14sp" android:textColor="#888888"/>
+
+                <RadioGroup android:id="@+id/seg_translate_mode"
+                    android:layout_width="match_parent" android:layout_height="wrap_content"
+                    android:orientation="horizontal" android:layout_marginTop="2dp">
+                    <RadioButton android:id="@+id/translate_mode_manual" android:layout_width="0dp" android:layout_height="wrap_content"
+                        android:layout_weight="1" android:text="@string/reader_translate_mode_manual" android:checked="true"
+                        android:paddingTop="6dp" android:paddingBottom="6dp"/>
+                    <RadioButton android:id="@+id/translate_mode_auto" android:layout_width="0dp" android:layout_height="wrap_content"
+                        android:layout_weight="1" android:text="@string/reader_translate_mode_auto"/>
+                    <RadioButton android:id="@+id/translate_mode_incremental" android:layout_width="0dp" android:layout_height="wrap_content"
+                        android:layout_weight="1" android:text="@string/reader_translate_mode_incremental"/>
+                </RadioGroup>
+
+                <!-- 启动延迟（防抖）：翻页停留多久才开翻，自动/增量都用它 -->
+                <LinearLayout android:id="@+id/row_debounce" android:layout_width="match_parent"
+                    android:layout_height="wrap_content" android:orientation="vertical" android:layout_marginTop="4dp">
+
+                    <LinearLayout android:layout_width="match_parent" android:layout_height="wrap_content"
+                        android:orientation="horizontal" android:gravity="center_vertical">
+                        <TextView android:id="@+id/tv_debounce_label" android:layout_width="0dp"
+                            android:layout_weight="1" android:layout_height="wrap_content"
+                            android:text="@string/reader_translate_debounce" android:textSize="14sp" android:textColor="#888888"/>
+                        <TextView android:id="@+id/tv_debounce_value" android:layout_width="wrap_content"
+                            android:layout_height="wrap_content" android:text="500 ms" android:textSize="12sp" android:textColor="#55AEEA"/>
+                    </LinearLayout>
+
+                    <SeekBar android:id="@+id/sb_debounce" android:layout_width="match_parent"
+                        android:layout_height="wrap_content" android:min="200" android:max="2000"
+                        android:layout_marginTop="2dp" android:thumbTint="#55AEEA"
+                        android:progressTint="#55AEEA" android:progressBackgroundTint="#55AEEA"/>
+
+                    <!-- 说明（用户口径：漫画这边缺了启动延迟的说明） -->
+                    <TextView android:id="@+id/tv_debounce_hint" android:layout_width="match_parent"
+                        android:layout_height="wrap_content" android:text="@string/reader_translate_debounce_hint"
+                        android:textSize="11sp" android:textColor="#888888"/>
+                </LinearLayout>
+
+                <!-- 字体大小：**与文本阅读器同一个样式**（标签在左、值贴右，进度条另起一行；用户口径）。
+                     仍走 utils/MangaFontSize（与个性化设置页、悬浮窗菜单同一份设置，三处一致）；
+                     「自动」是漫画独有的（按气泡尺寸自适应），做成小胶囊。
+                     ⚠️ 用户口径（2026-09-28）：「自动」必须**紧跟标题**（字体大小 自动 …… 12sp），
+                     不能夹在数值左边 —— 它是这个设置的开关，跟标题是一组。 -->
+                <LinearLayout android:id="@+id/row_font_size" android:layout_width="match_parent"
+                    android:layout_height="wrap_content" android:orientation="vertical" android:layout_marginTop="8dp">
+                    <LinearLayout android:layout_width="match_parent" android:layout_height="wrap_content"
+                        android:orientation="horizontal" android:gravity="center_vertical">
+                        <TextView android:id="@+id/tv_font_size_row" android:layout_width="wrap_content"
+                            android:layout_height="wrap_content"
+                            android:text="@string/reader_translate_font_size_label" android:textSize="14sp" android:textColor="#333333"/>
+                        <TextView android:id="@+id/btn_font_auto" android:layout_width="wrap_content"
+                            android:layout_height="wrap_content" android:layout_marginStart="6dp"
+                            android:paddingStart="9dp" android:paddingEnd="9dp" android:paddingTop="3dp" android:paddingBottom="3dp"
+                            android:clickable="true" android:focusable="true"
+                            android:text="@string/manga_font_size_auto" android:textSize="12sp"/>
+                        <!-- 弹性占位：把数值顶到最右（标题与「自动」贴在一起） -->
+                        <View android:layout_width="0dp" android:layout_height="1dp" android:layout_weight="1"/>
+                        <TextView android:id="@+id/tv_font_size_value" android:layout_width="wrap_content"
+                            android:layout_height="wrap_content" android:minWidth="40dp" android:gravity="end"
+                            android:textSize="12sp" android:textColor="#55AEEA"/>
+                    </LinearLayout>
+                    <SeekBar android:id="@+id/sb_font_size" android:layout_width="match_parent"
+                        android:layout_height="wrap_content" android:min="0" android:max="11" android:layout_marginTop="2dp"
+                        android:thumbTint="#55AEEA" android:progressTint="#55AEEA" android:progressBackgroundTint="#55AEEA"/>
+                    <TextView android:id="@+id/tv_font_size_hint" android:layout_width="match_parent"
+                        android:layout_height="wrap_content" android:text="@string/reader_translate_font_size_hint"
+                        android:textSize="11sp" android:textColor="#888888"/>
+                </LinearLayout>
+                <!-- 向后翻译页数：仅增量模式显示。⚠️ 与上面的「字体大小」之间**不画分隔线**
+                     （用户口径 2026-10：「字体大小跟向后翻译自己不要有横线」）—— 两者同属
+                     「翻译节奏」这一组，画线反而把它们割成两块。 -->
+                <LinearLayout android:id="@+id/row_ahead_pages" android:layout_width="match_parent"
+                    android:layout_height="wrap_content" android:orientation="vertical"
+                    android:layout_marginTop="2dp" android:visibility="gone">
+
+                    <LinearLayout android:layout_width="match_parent" android:layout_height="wrap_content"
+                        android:orientation="horizontal" android:gravity="center_vertical">
+                        <TextView android:id="@+id/tv_ahead_label" android:layout_width="0dp"
+                            android:layout_weight="1" android:layout_height="wrap_content"
+                            android:text="@string/reader_translate_ahead_pages" android:textSize="14sp" android:textColor="#888888"/>
+                        <TextView android:id="@+id/tv_ahead_value" android:layout_width="wrap_content"
+                            android:layout_height="wrap_content" android:text="5" android:textSize="12sp" android:textColor="#55AEEA"/>
+                    </LinearLayout>
+
+                    <SeekBar android:id="@+id/sb_ahead" android:layout_width="match_parent"
+                        android:layout_height="wrap_content" android:min="1" android:max="10"
+                        android:layout_marginTop="2dp" android:thumbTint="#55AEEA"
+                        android:progressTint="#55AEEA" android:progressBackgroundTint="#55AEEA"/>
+
+                    <!-- 简短说明（用户口径 2026-10：「向后翻译页数应该有简短的描述」）——
+                         与「启动延迟」那行同款 11sp 次要色，且必须登记进 panelSubIds。 -->
+                    <TextView android:id="@+id/tv_ahead_hint" android:layout_width="match_parent"
+                        android:layout_height="wrap_content" android:text="@string/reader_translate_ahead_hint"
+                        android:textSize="11sp" android:textColor="#888888"/>
+                </LinearLayout>
+
+                <!-- 模型区：OCR/翻译模型 快速跳转 -->
+                <LinearLayout android:id="@+id/btn_model_ocr" android:layout_width="match_parent" android:layout_height="wrap_content"
+                    android:orientation="horizontal" android:paddingTop="10dp" android:paddingBottom="10dp"
+                    android:gravity="center_vertical" android:clickable="true">
+                    <TextView android:ellipsize="end" android:maxLines="1" android:autoSizeTextType="uniform" android:autoSizeMinTextSize="10sp" android:autoSizeMaxTextSize="14sp" android:autoSizeStepGranularity="1sp"  android:id="@+id/tv_ocr_model_row" android:layout_width="0dp" android:layout_height="wrap_content"
+                        android:layout_weight="1" android:textSize="14sp" android:textColor="#333333"/>
+                    <TextView android:layout_width="wrap_content" android:layout_height="wrap_content"
+                        android:text="›" android:textSize="16sp" android:textColor="#BBBBBB"/>
+                </LinearLayout>
+                <LinearLayout android:id="@+id/btn_model_translate" android:layout_width="match_parent" android:layout_height="wrap_content"
+                    android:orientation="horizontal" android:paddingTop="6dp" android:paddingBottom="6dp"
+                    android:gravity="center_vertical" android:clickable="true">
+                    <TextView android:ellipsize="end" android:maxLines="1" android:autoSizeTextType="uniform" android:autoSizeMinTextSize="10sp" android:autoSizeMaxTextSize="14sp" android:autoSizeStepGranularity="1sp"  android:id="@+id/tv_translator_model_row" android:layout_width="0dp" android:layout_height="wrap_content"
+                        android:layout_weight="1" android:textSize="14sp" android:textColor="#333333"/>
+                    <TextView android:layout_width="wrap_content" android:layout_height="wrap_content"
+                        android:text="›" android:textSize="16sp" android:textColor="#BBBBBB"/>
+                </LinearLayout>
+                <!-- 语言区：源/目标语言选择（两格圆角并排 + 互换），下拉弹窗 -->
+                <LinearLayout android:layout_width="match_parent" android:layout_height="wrap_content"
+                    android:orientation="horizontal" android:gravity="center_vertical"
+                    android:paddingTop="8dp" android:paddingBottom="4dp">
+
+                    <LinearLayout android:id="@+id/btn_source_lang" android:layout_width="0dp" android:layout_height="wrap_content"
+                        android:layout_weight="1" android:orientation="vertical" android:padding="10dp" android:clickable="true">
+                        <TextView android:id="@+id/tv_source_caption" android:layout_width="wrap_content" android:layout_height="wrap_content"
+                            android:text="@string/reader_translate_source_lang_label" android:textSize="10sp" android:textColor="#888888"/>
+                        <LinearLayout android:layout_width="match_parent" android:layout_height="wrap_content"
+                            android:orientation="horizontal" android:gravity="center_vertical" android:layout_marginTop="2dp">
+                            <TextView android:ellipsize="end" android:maxLines="1" android:autoSizeTextType="uniform" android:autoSizeMinTextSize="10sp" android:autoSizeMaxTextSize="14sp" android:autoSizeStepGranularity="1sp"  android:id="@+id/tv_source_lang_value" android:layout_width="0dp" android:layout_height="wrap_content"
+                                android:layout_weight="1" android:textSize="14sp" android:textColor="#333333"/>
+                            <ImageView android:id="@+id/iv_source_spinner" android:layout_width="16dp" android:layout_height="16dp"
+                                android:src="@drawable/spinnericon"/>
+                        </LinearLayout>
+                    </LinearLayout>
+
+                    <TextView android:id="@+id/btn_swap_lang" android:layout_width="wrap_content" android:layout_height="wrap_content"
+                        android:text="⇄" android:textSize="20sp" android:textColor="#55AEEA"
+                        android:paddingStart="12dp" android:paddingEnd="12dp" android:clickable="true"/>
+
+                    <LinearLayout android:id="@+id/btn_target_lang" android:layout_width="0dp" android:layout_height="wrap_content"
+                        android:layout_weight="1" android:orientation="vertical" android:padding="10dp" android:clickable="true">
+                        <TextView android:id="@+id/tv_target_caption" android:layout_width="wrap_content" android:layout_height="wrap_content"
+                            android:text="@string/reader_translate_target_lang_label" android:textSize="10sp" android:textColor="#888888"/>
+                        <LinearLayout android:layout_width="match_parent" android:layout_height="wrap_content"
+                            android:orientation="horizontal" android:gravity="center_vertical" android:layout_marginTop="2dp">
+                            <TextView android:ellipsize="end" android:maxLines="1" android:autoSizeTextType="uniform" android:autoSizeMinTextSize="10sp" android:autoSizeMaxTextSize="14sp" android:autoSizeStepGranularity="1sp"  android:id="@+id/tv_target_lang_value" android:layout_width="0dp" android:layout_height="wrap_content"
+                                android:layout_weight="1" android:textSize="14sp" android:textColor="#333333"/>
+                            <ImageView android:id="@+id/iv_target_spinner" android:layout_width="16dp" android:layout_height="16dp"
+                                android:src="@drawable/spinnericon"/>
+                        </LinearLayout>
+                    </LinearLayout>
+                </LinearLayout>
+                <View android:layout_width="match_parent" android:layout_height="1dp" android:background="#11000000"/>
+
+                <!-- 同时请求数（并发翻译）：漫画批量任务用。
+                     ⚠️ 与文本的「同时 API 请求数」**互相独立**：漫画受本地 OCR 串行制约，
+                     拉到 5 也就那样；文本没有 OCR，可以更激进。 -->
+                <LinearLayout android:id="@+id/row_concurrency" android:layout_width="match_parent"
+                    android:layout_height="wrap_content" android:orientation="vertical" android:layout_marginTop="4dp">
+
+                    <LinearLayout android:layout_width="match_parent" android:layout_height="wrap_content"
+                        android:orientation="horizontal" android:gravity="center_vertical">
+                        <TextView android:id="@+id/tv_concurrency_label" android:layout_width="0dp"
+                            android:layout_weight="1" android:layout_height="wrap_content"
+                            android:text="@string/reader_translate_concurrency" android:textSize="14sp" android:textColor="#333333"/>
+                        <TextView android:id="@+id/tv_concurrency_value" android:layout_width="wrap_content"
+                            android:layout_height="wrap_content" android:textSize="12sp" android:textColor="#55AEEA"/>
+                    </LinearLayout>
+
+                    <SeekBar android:id="@+id/sb_concurrency" android:layout_width="match_parent"
+                        android:layout_height="wrap_content" android:min="2" android:max="5"
+                        android:layout_marginTop="2dp" android:thumbTint="#55AEEA"
+                        android:progressTint="#55AEEA" android:progressBackgroundTint="#55AEEA"/>
+
+                    <!-- 说明：并发主要受本地 OCR 速度限制（OCR 是串行的）。
+                         ⚠️ 下面紧挨着筛选（历史记录）栏，底边留 10dp 空隙，别贴在一起 -->
+                    <TextView android:id="@+id/tv_concurrency_hint" android:layout_width="match_parent"
+                        android:layout_height="wrap_content" android:textSize="11sp" android:textColor="#888888"
+                        android:layout_marginBottom="10dp"
+                        android:text="@string/reader_translate_concurrency_hint"/>
+                </LinearLayout>
+
+                <HorizontalScrollView android:layout_width="match_parent" android:layout_height="wrap_content" android:scrollbars="none">
+                    <LinearLayout android:id="@+id/translate_filter_row" android:layout_width="wrap_content" android:layout_height="wrap_content"
+                        android:orientation="horizontal"/>
+                </HorizontalScrollView>
+
+                <androidx.recyclerview.widget.RecyclerView
+                    android:id="@+id/rv_translate_pages"
+                    android:layout_width="match_parent" android:layout_height="200dp"
+                    android:layout_marginTop="6dp" android:clipToPadding="false"/>
+            </LinearLayout>
+        </androidx.core.widget.NestedScrollView>
+
+        <!-- ========== 调色面板 ==========
+             ⚠️ 同翻译面板：NestedScrollView + 内部 RecyclerView 靠 nested scroll 接力。 -->
+        <androidx.core.widget.NestedScrollView android:id="@+id/panel_appearance" android:layout_width="match_parent" android:layout_height="wrap_content"
+            android:visibility="gone">
+            <LinearLayout android:layout_width="match_parent" android:layout_height="wrap_content" android:orientation="vertical">
+
+                <!-- 原图 vs 处理后 对比预览 -->
+                <LinearLayout android:layout_width="match_parent" android:layout_height="wrap_content"
+                    android:orientation="horizontal" android:padding="8dp">
+
+                    <FrameLayout android:id="@+id/cell_orig_preview" android:layout_width="0dp" android:layout_height="150dp" android:layout_weight="1"
+                        android:layout_marginEnd="4dp" android:background="@drawable/bg_preview_cell">
+                        <ImageView android:id="@+id/iv_orig_preview" android:layout_width="match_parent" android:layout_height="match_parent"
+                            android:scaleType="centerCrop"/>
+                        <TextView android:layout_width="wrap_content" android:layout_height="wrap_content"
+                            android:layout_gravity="top|start" android:layout_margin="6dp" android:paddingStart="6dp" android:paddingEnd="6dp"
+                            android:background="@drawable/bg_pill_dark" android:text="@string/reader_preview_original"
+                            android:textSize="10sp" android:textColor="#FFFFFF"/>
+                    </FrameLayout>
+
+                    <FrameLayout android:id="@+id/cell_proc_preview" android:layout_width="0dp" android:layout_height="150dp" android:layout_weight="1"
+                        android:layout_marginStart="4dp" android:background="@drawable/bg_preview_cell">
+                        <ImageView android:id="@+id/iv_proc_preview" android:layout_width="match_parent" android:layout_height="match_parent"
+                            android:scaleType="centerCrop"/>
+                        <TextView android:layout_width="wrap_content" android:layout_height="wrap_content"
+                            android:layout_gravity="top|start" android:layout_margin="6dp" android:paddingStart="6dp" android:paddingEnd="6dp"
+                            android:background="@drawable/bg_pill_dark" android:text="@string/reader_preview_result"
+                            android:textSize="10sp" android:textColor="#FFFFFF"/>
+                    </FrameLayout>
+                </LinearLayout>
+
+                <LinearLayout android:layout_width="match_parent" android:layout_height="wrap_content" android:orientation="horizontal"
+                    android:gravity="center_vertical" android:paddingStart="16dp" android:paddingEnd="8dp" android:paddingTop="4dp">
+                    <TextView android:ellipsize="end" android:maxLines="1" android:autoSizeTextType="uniform" android:autoSizeMinTextSize="10sp" android:autoSizeMaxTextSize="14sp" android:autoSizeStepGranularity="1sp"  android:id="@+id/tv_color_title" android:layout_width="0dp" android:layout_height="wrap_content" android:layout_weight="1"
+                        android:text="@string/reader_color_filter" android:textSize="14sp" android:textStyle="bold" android:textColor="#333333"/>
+                    <TextView android:id="@+id/btn_reset_color" android:layout_width="wrap_content" android:layout_height="wrap_content"
+                        android:drawableStart="@drawable/ic_reset" android:drawablePadding="3dp" android:padding="4dp"
+                        android:text="@string/reader_reset" android:textSize="12sp" android:textColor="#55AEEA" android:clickable="true"/>
+                </LinearLayout>
+
+                <LinearLayout android:layout_width="match_parent" android:layout_height="wrap_content" android:orientation="horizontal" android:gravity="center_vertical" android:paddingStart="16dp" android:paddingEnd="16dp" android:paddingTop="2dp" android:paddingBottom="2dp">
+                    <TextView android:ellipsize="end" android:maxLines="1" android:autoSizeTextType="uniform" android:autoSizeMinTextSize="10sp" android:autoSizeMaxTextSize="14sp" android:autoSizeStepGranularity="1sp"  android:id="@+id/tv_color_inverted" android:layout_width="0dp" android:layout_height="wrap_content" android:layout_weight="1"
+                        android:text="@string/reader_color_inverted" android:textSize="14sp" android:textColor="#333333"/>
+                    <Switch android:id="@+id/sw_invert" android:layout_width="wrap_content" android:layout_height="wrap_content"/>
+                </LinearLayout>
+                <LinearLayout android:layout_width="match_parent" android:layout_height="wrap_content" android:orientation="horizontal" android:gravity="center_vertical" android:paddingStart="16dp" android:paddingEnd="16dp" android:paddingTop="2dp" android:paddingBottom="2dp">
+                    <TextView android:ellipsize="end" android:maxLines="1" android:autoSizeTextType="uniform" android:autoSizeMinTextSize="10sp" android:autoSizeMaxTextSize="14sp" android:autoSizeStepGranularity="1sp"  android:id="@+id/tv_color_grayscale" android:layout_width="0dp" android:layout_height="wrap_content" android:layout_weight="1"
+                        android:text="@string/reader_color_grayscale" android:textSize="14sp" android:textColor="#333333"/>
+                    <Switch android:id="@+id/sw_grayscale" android:layout_width="wrap_content" android:layout_height="wrap_content"/>
+                </LinearLayout>
+                <LinearLayout android:layout_width="match_parent" android:layout_height="wrap_content" android:orientation="horizontal" android:gravity="center_vertical" android:paddingStart="16dp" android:paddingEnd="16dp" android:paddingTop="2dp" android:paddingBottom="2dp">
+                    <TextView android:ellipsize="end" android:maxLines="1" android:autoSizeTextType="uniform" android:autoSizeMinTextSize="10sp" android:autoSizeMaxTextSize="14sp" android:autoSizeStepGranularity="1sp"  android:id="@+id/tv_color_book" android:layout_width="0dp" android:layout_height="wrap_content" android:layout_weight="1"
+                        android:text="@string/reader_color_book" android:textSize="14sp" android:textColor="#333333"/>
+                    <Switch android:id="@+id/sw_book" android:layout_width="wrap_content" android:layout_height="wrap_content"/>
+                </LinearLayout>
+
+                <!-- 护眼（色彩开关组的最后一个）与亮度（滑杆组的第一个）之间画一条分隔线：
+                     两组都是"改画面"，但控件形态不同（开关 ⇄ 滑杆），用户口径 2026-10-01 要求分开。
+                     左右缩进 16dp 与两侧内容对齐（这两行各自带 padding，根容器没有）。 -->
+                <View android:layout_width="match_parent" android:layout_height="1dp"
+                    android:layout_marginStart="16dp" android:layout_marginEnd="16dp"
+                    android:layout_marginTop="6dp" android:layout_marginBottom="6dp"
+                    android:background="#11000000"/>
+
+                <LinearLayout android:layout_width="match_parent" android:layout_height="wrap_content" android:orientation="vertical" android:paddingStart="16dp" android:paddingEnd="16dp">
+                    <LinearLayout android:layout_width="match_parent" android:layout_height="wrap_content" android:orientation="horizontal">
+                        <TextView android:ellipsize="end" android:maxLines="1" android:autoSizeTextType="uniform" android:autoSizeMinTextSize="10sp" android:autoSizeMaxTextSize="14sp" android:autoSizeStepGranularity="1sp"  android:id="@+id/tv_brightness_label" android:layout_width="0dp" android:layout_height="wrap_content" android:layout_weight="1"
+                            android:text="@string/reader_brightness" android:textSize="14sp" android:textColor="#333333"/>
+                        <TextView android:id="@+id/tv_brightness_value" android:layout_width="wrap_content" android:layout_height="wrap_content" android:text="0%" android:textSize="12sp" android:textColor="#55AEEA"/>
+                    </LinearLayout>
+                    <SeekBar android:id="@+id/sb_brightness" android:layout_width="match_parent" android:layout_height="wrap_content"
+                        android:min="-100" android:max="100" android:layout_marginTop="2dp"
+                        android:thumbTint="#55AEEA" android:progressTint="#55AEEA" android:progressBackgroundTint="#55AEEA"/>
+                    <LinearLayout android:layout_width="match_parent" android:layout_height="wrap_content" android:orientation="horizontal" android:paddingTop="6dp">
+                        <TextView android:ellipsize="end" android:maxLines="1" android:autoSizeTextType="uniform" android:autoSizeMinTextSize="10sp" android:autoSizeMaxTextSize="14sp" android:autoSizeStepGranularity="1sp"  android:id="@+id/tv_contrast_label" android:layout_width="0dp" android:layout_height="wrap_content" android:layout_weight="1"
+                            android:text="@string/reader_contrast" android:textSize="14sp" android:textColor="#333333"/>
+                        <TextView android:id="@+id/tv_contrast_value" android:layout_width="wrap_content" android:layout_height="wrap_content" android:text="0%" android:textSize="12sp" android:textColor="#55AEEA"/>
+                    </LinearLayout>
+                    <SeekBar android:id="@+id/sb_contrast" android:layout_width="match_parent" android:layout_height="wrap_content"
+                        android:min="-100" android:max="100" android:layout_marginTop="2dp"
+                        android:thumbTint="#55AEEA" android:progressTint="#55AEEA" android:progressBackgroundTint="#55AEEA"/>
+                    <!-- ══════════════════════════════════════════════
+                         画质增强（2026-10 v2）
+                         ⚠️ 超分控件放在**调色面板**（用户口径：它调的是"画面看起来怎样"，与调色同类）；
+                            翻译面板里不再有超分行。
+                         ① 超分模型行 = 点开模型管理页的「超分」Tab
+                         ② 阅读器超分开关 = 本页「超分」总闸（阅读器独立，与截图链路无关）
+                         ③ 翻译时自动超分 = 点翻译 → 原图 OCR → 之后启动超分（与 API 请求并行）
+                         ④ Anime4K = 独立档位，点行循环切档；**超分开着时置灰**（两者互斥）
+                         ⚠️ **超分关闭时只隐藏 `sr_panel_group`**（用户口径：关闭就不显示超分
+                            模型选择和「翻译时自动超分」组件）；Anime4K 行**保留可见**
+                            —— 它是零下载的基础显示层，关掉超分后正是它的用武之地。
+                         ⚠️ **总开关 `sw_reader_sr` 必须在 `sr_panel_group` 之外**：
+                            超分**默认是关的**，把开关放进"关着就隐藏"的那一组 = **单向门** ——
+                            用户永远打不开这个功能（2026-10 真机反馈踩过：整个调色面板里
+                            一点超分的东西都看不到）。组内只放"开着才有意义"的东西。
+                         ⚠️ 下面这些 TextView 都要在 applyPanelTheme 登记（label 组 / sub 组），
+                            漏登记 = 深色调色面板下同色字压同色底、看不见
+                         ══════════════════════════════════════════════ -->
+                    <View android:layout_width="match_parent" android:layout_height="1dp" android:background="#11000000" android:layout_marginTop="6dp"/>
+
+                    <!-- 超分总开关：**始终可见**（唯一入口，个性化里没有它） -->
+                    <LinearLayout android:layout_width="match_parent" android:layout_height="wrap_content"
+                        android:orientation="horizontal" android:paddingTop="10dp" android:paddingBottom="8dp"
+                        android:gravity="center_vertical">
+                        <TextView android:id="@+id/tv_sr_switch_label" android:layout_width="0dp" android:layout_height="wrap_content"
+                            android:layout_weight="1" android:text="@string/reader_sr_switch_label" android:textSize="14sp" android:textStyle="bold" android:textColor="#333333"
+                            android:ellipsize="end" android:maxLines="1"
+                            android:autoSizeTextType="uniform" android:autoSizeMinTextSize="10sp" android:autoSizeMaxTextSize="14sp" android:autoSizeStepGranularity="1sp"/>
+                        <Switch android:id="@+id/sw_reader_sr" android:layout_width="wrap_content" android:layout_height="wrap_content"/>
+                    </LinearLayout>
+
+                    <!-- 超分开启后才显示的那几项 -->
+                    <LinearLayout android:id="@+id/sr_panel_group" android:layout_width="match_parent"
+                        android:layout_height="wrap_content" android:orientation="vertical">
+
+                        <LinearLayout android:id="@+id/btn_model_sr" android:layout_width="match_parent" android:layout_height="wrap_content"
+                            android:orientation="horizontal" android:paddingTop="4dp" android:paddingBottom="10dp"
+                            android:gravity="center_vertical" android:clickable="true">
+                            <TextView android:id="@+id/tv_sr_model_row" android:layout_width="0dp" android:layout_height="wrap_content"
+                                android:layout_weight="1" android:textSize="14sp" android:textColor="#333333"
+                                android:ellipsize="end" android:maxLines="1"
+                                android:autoSizeTextType="uniform" android:autoSizeMinTextSize="10sp" android:autoSizeMaxTextSize="14sp" android:autoSizeStepGranularity="1sp"/>
+                            <TextView android:layout_width="wrap_content" android:layout_height="wrap_content"
+                                android:text="›" android:textSize="16sp" android:textColor="#BBBBBB"/>
+                        </LinearLayout>
+
+                        <!-- 「翻译时自动超分」：管的是"点翻译要不要顺手超分"。
+                             ⚠️ 只有总开关开着才显示（本组整组隐藏时它自然跟着消失）。 -->
+                        <LinearLayout android:layout_width="match_parent" android:layout_height="wrap_content"
+                            android:orientation="horizontal" android:paddingBottom="8dp"
+                            android:gravity="center_vertical">
+                            <TextView android:id="@+id/tv_sr_auto_label" android:layout_width="0dp" android:layout_height="wrap_content"
+                                android:layout_weight="1" android:text="@string/reader_sr_auto_label" android:textSize="14sp" android:textColor="#333333"
+                                android:ellipsize="end" android:maxLines="1"
+                                android:autoSizeTextType="uniform" android:autoSizeMinTextSize="10sp" android:autoSizeMaxTextSize="14sp" android:autoSizeStepGranularity="1sp"/>
+                            <Switch android:id="@+id/sw_reader_sr_auto" android:layout_width="wrap_content" android:layout_height="wrap_content"/>
+                        </LinearLayout>
+
+
+                        <!-- ══════ 超分记录（用户口径 2026-10：「给**超分面板**设计一个类似翻译面板
+                             那样的记录系统」）。**不是翻译面板** —— 放在超分区里，紧挨着超分开关。 ══════
+                             与翻译面板的记录列表同一套形态：筛选 chips + 「章卡片 → 展开页行」两段式，
+                             复用 item_translate_chapter_row / item_translate_page_state 两个布局。
+                             ⚠️ 这里在调色面板的 ScrollView 里，所以列表必须**定高**（与翻译面板的
+                                 rv_translate_pages 同样是 200dp）：wrap_content 会让 RecyclerView 量完
+                                 全部条目，几百章的书直接卡死。 -->
+                        <View android:layout_width="match_parent" android:layout_height="1dp"
+                            android:background="#11000000" android:layout_marginTop="8dp"/>
+
+                        <HorizontalScrollView android:layout_width="match_parent" android:layout_height="wrap_content"
+                            android:scrollbars="none" android:layout_marginTop="6dp">
+                            <LinearLayout android:id="@+id/sr_filter_row" android:layout_width="wrap_content"
+                                android:layout_height="wrap_content" android:orientation="horizontal"/>
+                        </HorizontalScrollView>
+
+                        <androidx.recyclerview.widget.RecyclerView
+                            android:id="@+id/rv_sr_records"
+                            android:layout_width="match_parent" android:layout_height="200dp"
+                            android:layout_marginTop="6dp" android:layout_marginBottom="4dp"
+                            android:clipToPadding="false"/>
+                    </LinearLayout>
+
+                    <LinearLayout android:id="@+id/btn_anime4k" android:layout_width="match_parent" android:layout_height="wrap_content"
+                        android:orientation="horizontal" android:paddingTop="10dp" android:paddingBottom="6dp"
+                        android:gravity="center_vertical" android:clickable="true">
+                        <TextView android:id="@+id/tv_anime4k_label" android:layout_width="0dp" android:layout_height="wrap_content"
+                            android:layout_weight="1" android:text="@string/reader_anime4k_label" android:textSize="14sp" android:textColor="#333333"
+                            android:ellipsize="end" android:maxLines="1"
+                            android:autoSizeTextType="uniform" android:autoSizeMinTextSize="10sp" android:autoSizeMaxTextSize="14sp" android:autoSizeStepGranularity="1sp"/>
+                        <TextView android:id="@+id/tv_anime4k_value" android:layout_width="wrap_content" android:layout_height="wrap_content"
+                            android:textSize="13sp" android:textColor="#888888" android:layout_marginEnd="6dp"/>
+                        <TextView android:layout_width="wrap_content" android:layout_height="wrap_content"
+                            android:text="›" android:textSize="16sp" android:textColor="#BBBBBB"/>
+                    </LinearLayout>
+                    <TextView android:id="@+id/tv_color_hint" android:layout_width="wrap_content" android:layout_height="wrap_content" android:layout_marginBottom="12dp"
+                        android:text="@string/reader_color_hint" android:textSize="11sp" android:textColor="#BBBBBB"/>
+                </LinearLayout>
+            </LinearLayout>
+        </androidx.core.widget.NestedScrollView>
+
+        <!-- ========== 更多面板 ========== -->
+        <LinearLayout android:id="@+id/panel_more" android:layout_width="match_parent" android:layout_height="wrap_content"
+            android:orientation="vertical" android:padding="4dp" android:visibility="gone">
+
+            <LinearLayout android:id="@+id/btn_rotate" android:layout_width="match_parent" android:layout_height="wrap_content" android:orientation="horizontal" android:padding="12dp" android:gravity="center_vertical" android:clickable="true">
+                <TextView android:ellipsize="end" android:maxLines="1" android:autoSizeTextType="uniform" android:autoSizeMinTextSize="10sp" android:autoSizeMaxTextSize="14sp" android:autoSizeStepGranularity="1sp"  android:id="@+id/tv_rotate_label" android:layout_width="0dp" android:layout_height="wrap_content" android:layout_weight="1" android:text="@string/reader_rotate" android:textSize="14sp" android:textColor="#333333"/>
+                <TextView android:id="@+id/tv_rotate_value" android:layout_width="wrap_content" android:layout_height="wrap_content" android:text="@string/reader_rotate_portrait" android:textSize="13sp" android:textColor="#888888"/>
+            </LinearLayout>
+            <View android:layout_width="match_parent" android:layout_height="1dp" android:background="#11000000"/>
+            <LinearLayout android:layout_width="match_parent" android:layout_height="wrap_content" android:orientation="horizontal" android:padding="12dp" android:gravity="center_vertical">
+                <LinearLayout android:layout_width="0dp" android:layout_height="wrap_content" android:orientation="vertical" android:layout_weight="1">
+                    <TextView android:id="@+id/tv_auto_turn_label" android:layout_width="wrap_content" android:layout_height="wrap_content" android:text="@string/reader_auto_turn" android:textSize="14sp" android:textColor="#333333"/>
+                    <TextView android:id="@+id/tv_interval_value" android:layout_width="wrap_content" android:layout_height="wrap_content" android:layout_marginTop="1dp" android:text="5s" android:textSize="11sp" android:textColor="#888888"/>
+                </LinearLayout>
+                <Switch android:id="@+id/sw_auto_turn" android:layout_width="wrap_content" android:layout_height="wrap_content"/>
+            </LinearLayout>
+            <View android:layout_width="match_parent" android:layout_height="1dp" android:background="#11000000"/>
+            <LinearLayout android:id="@+id/btn_download" android:layout_width="match_parent" android:layout_height="wrap_content" android:orientation="horizontal" android:padding="12dp" android:gravity="center_vertical" android:clickable="true">
+                <TextView android:ellipsize="end" android:maxLines="1" android:autoSizeTextType="uniform" android:autoSizeMinTextSize="10sp" android:autoSizeMaxTextSize="14sp" android:autoSizeStepGranularity="1sp"  android:id="@+id/tv_download_label" android:layout_width="0dp" android:layout_height="wrap_content" android:layout_weight="1" android:text="@string/reader_download" android:textSize="14sp" android:textColor="#333333"/>
+                <TextView android:id="@+id/tv_download_value" android:layout_width="wrap_content" android:layout_height="wrap_content" android:text="@string/reader_download_original" android:textSize="13sp" android:textColor="#888888"/>
+            </LinearLayout>
+            <View android:layout_width="match_parent" android:layout_height="1dp" android:background="#11000000"/>
+            <LinearLayout android:id="@+id/btn_settings" android:layout_width="match_parent" android:layout_height="wrap_content" android:orientation="horizontal" android:padding="12dp" android:gravity="center_vertical" android:clickable="true">
+                <TextView android:ellipsize="end" android:maxLines="1" android:autoSizeTextType="uniform" android:autoSizeMinTextSize="10sp" android:autoSizeMaxTextSize="14sp" android:autoSizeStepGranularity="1sp"  android:id="@+id/tv_settings_label" android:layout_width="0dp" android:layout_height="wrap_content" android:layout_weight="1" android:text="@string/reader_settings" android:textSize="14sp" android:textColor="#333333"/>
+                <TextView android:layout_width="wrap_content" android:layout_height="wrap_content" android:text="›" android:textSize="16sp" android:textColor="#BBBBBB"/>
+            </LinearLayout>
+        </LinearLayout>
+    </FrameLayout>
+
+</LinearLayout>

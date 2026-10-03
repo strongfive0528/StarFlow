@@ -1,0 +1,427 @@
+# StarFlow（星译）
+
+<p align="center">
+  <img src="images/appicon.png" width="128" height="128" alt="StarFlow Logo">
+</p>
+
+<p align="center">
+  <b>开源 Android 截图翻译 App</b><br>
+  游戏 / 视频翻译 · 漫画翻译 · 文本翻译，附漫画书架与阅读器<br>
+  完全免费 · 无广告 · 开源 · 端侧模型可离线<br>
+  支持 Android 10+（API 29+）· 仅 arm64-v8a
+</p>
+
+---
+
+## 目录
+
+| | |
+|---|---|
+| **[一、快速了解](#一快速了解)** | [这是什么](#这是什么) · [下载安装](#下载安装) · [亮点速览](#亮点速览) |
+| **[二、使用指南](#二使用指南)** | [游戏 / 视频翻译](#游戏--视频翻译) · [漫画翻译](#漫画翻译) · [书架与阅读器](#漫画书架与阅读器) · [文本与对话](#文本与对话翻译) |
+| **[三、机制说明](#三机制说明)** | [翻译引擎](#翻译引擎) · [OCR 引擎](#ocr-引擎) · [缓存与翻译历史](#缓存与翻译历史) · [译文数据与渲染](#译文数据与渲染) · [全局设置项](#全局设置项) · [自动翻译](#自动翻译与稳定性检测) |
+| **[四、开发](#四开发)** | [环境](#环境要求) · [构建](#常用命令) · [测试](#单元测试) · [项目结构](#项目结构) |
+
+---
+
+# 一、快速了解
+
+## 这是什么
+
+StarFlow 是一个 Android 端的 OCR 翻译应用：识别画面或图片中的文字，翻译后把译文渲染回原来的位置。
+
+| 功能 | 文字 / 图片从哪来 | 说明 |
+|------|------------------|------|
+| **游戏 / 视频翻译** | 屏幕截图 | 悬浮翻译窗覆盖在原文位置，可自动跟随画面变化持续翻译 |
+| **漫画翻译** | 屏幕截图（漫画页） | 气泡级检测 + 竖排识别 + 竖排渲染，可自动翻页 |
+| **漫画书架与阅读器** | 导入的 zip / 图片文件 | 直接读取图片，不经过截图；翻译结果按页保存 |
+| **文本 / 对话翻译** | 手动输入的文本 | 输入文本直接翻译，或切换成与翻译模型对话 |
+
+前两者属于**截屏翻译**（截图后处理当前画面）；阅读器与文本翻译直接处理文件或输入内容，与截图无关。四种场景共用同一套 OCR 引擎与翻译引擎，见「[三、机制说明](#三机制说明)」。
+
+## 下载安装
+
+| 方式 | 链接 |
+|------|------|
+| GitHub Releases | [最新版本 v0.11.2](https://github.com/xujunjiex/StarFlow/releases/tag/v0.11.2) |
+| 百度网盘 | https://pan.baidu.com/s/1Zi-o2mHhgJEqhk8UzxRoSA?pwd=star |
+| 夸克网盘 | https://pan.quark.cn/s/cbac92882d82?pwd=E9P8 |
+
+Android 10 及以上、64 位 ARM 设备。PP-OCRv6 small 已内置在 APK 中，无需下载；其余 OCR 模型与本地翻译模型在应用内的模型管理页按需下载。
+
+首次启动会引导授予截图 / 悬浮窗权限并配置翻译 API；应用内可检查 GitHub Releases 更新（也可从上面的网盘下载）；启动时会检查开发者公告；常见问题见应用内 FAQ 页面。
+
+## 亮点速览
+
+1. **开源无广告** — 采用 LGPL 协议，源码公开、可自行编译审计；不含广告、内购与账号体系，亦未集成统计 SDK。
+2. **日漫专用识别** — 集成 manga-ocr，面向日漫竖排文本训练，与 RT-DETR-V2 气泡检测配合使用。
+3. **自动识别翻译** — 画面变化即触发识别与翻译，提供「等待画面静止」与「变化即翻」两种触发策略。
+4. **AI 模型接入** — 内置 DeepSeek、通义千问、豆包、智谱，支持在线获取可用模型列表与 OpenAI 兼容接口。
+5. **历史记录管理** — 翻译记录按进程归档；提供时间与进程双视图、全屏翻页浏览、单条重翻与整组打包导出。
+6. **缓存命中复用** — 以 256 位感知哈希匹配整页，命中后跳过 OCR 与翻译，未命中再复用已有译文。
+7. **内置阅读器** — 直接识别导入的原图，不受屏幕截图缩放与压缩影响；自动翻译机制按阅读进度翻译，并可提前处理后续页面。
+8. **底图译文分离** — 仅持久化译文文本与气泡坐标，不落盘译文位图；调整渲染参数后重新合成，无需重新翻译。
+9. **离线模型自选** — 预制 Hy-MT2 提供 1.25-bit（约 440MB）与 Q4_K_M（约 1.08GB）两档；也可导入任意 llama.cpp 兼容的 GGUF，按其自带对话模板推理。全程本地、无接口费用，文本不离开设备。
+10. **多种 OCR 组合** — 提供四组搭配：PP-OCRv6 / v5、RT-DETR-V2 + manga-ocr、ML Kit。
+
+---
+
+# 二、使用指南
+
+## 游戏 / 视频翻译
+
+<p align="center">
+  <img src="images/game_demo.gif" width="360" alt="游戏翻译">
+  &nbsp;&nbsp;
+  <img src="images/video_demo.gif" width="360" alt="视频翻译">
+  <br>
+  <em>游戏翻译 &nbsp;|&nbsp; 视频翻译</em>
+</p>
+
+**取词方式**
+
+- **全屏 / 框选** — 手动全屏截图，或先拖出一个框选区域，只翻译该区域（区域可重复使用）
+- **自动翻译** — 打开后自动检测画面变化并翻译，提供两种触发策略：等待画面静止后翻译（适合游戏翻页）或画面变化即翻译（适合视频字幕、直播弹幕）
+
+两种方式都走同一条流程：**截屏 → 文字检测 → OCR 识别 → 翻译 → 渲染回原位置**。
+
+**悬浮球**
+
+- 单击 / 双击 / 长按可分别指定「翻译 / 打开菜单 / 自动翻译开关 / 关闭悬浮窗」
+- 长按菜单中可切换 OCR 引擎与源语言、查看历史、开关自动翻译
+- 大小（50%–200%）与不透明度（10%–100%）可调，与漫画共用同一份设置；贴边或转屏后会自动移回屏幕内
+- 图标随处理 / 翻译 / 完成 / 出错四种状态变化
+
+**翻译结果框**
+
+- 字体、字号、文字颜色、背景颜色、文字阴影可分别配置
+- 「显示原文」三态：只显示译文 / 只显示原文 / 原文 + 译文对照
+- 可拖动摆放；四角有锁定、复制、重新翻译、关闭按钮
+
+**截图方式**（游戏与漫画共用）
+
+| 模式 | 特点 | 适用 |
+|------|------|------|
+| **MediaProjection**（默认） | 弹窗授权，重启应用后需重新授权 | 日常使用 |
+| **AccessibilityService** | 手动开启，授权长期有效 | 需要频繁截图时 |
+
+## 漫画翻译
+
+漫画与游戏使用不同的处理路径：漫画需要气泡级检测、竖排文字识别，并按气泡区域排版回填，还要处理同一句话被切成多行 / 多列的情况。
+
+**处理流程**
+
+```
+截图 → 气泡 / 文字检测 → 识别后区域合并 → OCR 识别 → 翻译 → 按气泡区域渲染
+```
+
+「识别后区域合并」是指：把同一句话被切开的多行 / 多列检测框，按字号、方向与对齐方式重新连成一句再送去翻译，避免一句话被翻成几段、或相邻两句话被合并（表格、多栏场景可在个性化设置中关闭）。
+
+**引擎组合**（在模型管理页切换，游戏 / 漫画 / 首页状态栏同步）
+
+| 组合 | 检测 | 识别 | 适用 |
+|------|------|------|------|
+| **PP-OCRv6**（默认） | PP-OCRv6 det | PP-OCRv6 rec | 通用，small 已内置 |
+| **PP-OCRv5** | PP-OCRv5 det | PP-OCRv5 rec | 通用，多语言识别模型可选下载 |
+| **RT-DETR-V2 + manga-ocr** | RT-DETR-V2 | manga-ocr | 日漫竖排文字精度最高 |
+| **ML Kit** | ML Kit（检测识别一体） | ML Kit | 无需下载模型，速度快，适合版式简单的页面 |
+
+**增量分批渲染**：气泡数超过 6 个时自动分批，第一批识别完成即开始翻译并显示，**第二批的识别与第一批的翻译并行执行**；批次间携带上下文以保持同一页的称呼与语气一致，完成后回滚。本地 LlamaCpp 模型（预制 Hy-MT2 与导入的 GGUF 都算）不走分批，改为「一次翻译全部气泡 + 逐句流式显示」——省掉多次重复读指令的开销。
+
+**浮窗交互**
+
+- **三态切换** — 译文 / 原文 / 纯原图
+- 点气泡可复制原文或译文
+- **自动翻页** — 检测到翻页并停稳约 1 秒后自动翻译
+
+> 缓存、渲染排版与引擎参数见「[三、机制说明](#三机制说明)」。
+
+<p align="center">
+  <img src="images/manga_demo.gif" width="200" alt="漫画翻译">
+  &nbsp;&nbsp;
+  <img src="images/stability_demo.gif" width="200" alt="稳定性检测">
+  <br>
+  <em>漫画翻译 &nbsp;|&nbsp; 稳定性检测 &nbsp;|&nbsp; 缓存命中</em>
+</p>
+
+## 漫画书架与阅读器
+
+**书架**：导入 zip / cbz 或图片目录（复制到应用专属目录），自动生成封面；支持简介、重命名、换封面、已读标记、多选删除、下拉刷新，以及列表 / 网格两种显示。导入有进度卡片可取消；文件被外部删除会标记「文件丢失」；删除含译文的漫画前会提示并可先去导出。
+
+**阅读器**
+
+| 能力 | 说明 |
+|------|------|
+| 4 阅读模式 | 左到右 / 右到左 / 竖排（竖向整页）/ 连续滑动（Webtoon） |
+| 4 翻页动画 | 无 / 默认滑动 / 高级（封面叠放）/ 仿真（页脚卷曲） |
+| 背景与调色 | 6 种背景（含跟随系统夜间）+ 反色 / 灰度 / 书本 + 亮度对比度，可实时对比原图与处理后 |
+| 进度胶囊 | 拖拽寻页、长按弹出缩略图网格跳页；白=已读 / 灰=未读 / 绿=已翻译 |
+| 自动翻页 | 翻页间隔可设，触摸与失焦时自动暂停 |
+| 显示控制 | 点击屏幕正中区域显隐上下 UI；旋转后自动对齐当前页并按新视口重算尺寸 |
+
+**内嵌翻译**：直接对导入的原图做识别（不经过屏幕截图，分辨率不受屏幕缩放与压缩影响）。手动、自动（按阅读进度翻译当前页）、增量（提前翻译后续页面）三种模式共用一条串行队列，翻页不会打断；译文实时叠加在页面上，三态切换与漫画浮窗一致；翻译失败的页面显示感叹号，点开可查看失败原因。
+
+**打包下载**：原文 / 译文（仅已翻译页）/ 双语三种压缩包，命名沿用原压缩包中的页序号。
+
+## 文本与对话翻译
+
+独立文本翻译页面：流式输出实时显示翻译进度，最近记录分页与快速复制，语言选择跨页面保留。源语言不受 OCR 引擎限制（30 种全部可选），目标语言按所选翻译模型过滤。
+
+页面内置**聊天模式**（Tab 切换）：基于端侧本地模型（任意已激活的 GGUF，含预制 Hy-MT2）或 OpenAI 兼容接口的对话式翻译，支持聊天模板与会话历史；使用端侧模型时对话可完全离线。
+
+---
+
+# 三、机制说明
+
+四种翻译场景共用同一套翻译引擎与 OCR 引擎，也共用「译文文本 + 气泡坐标」这一份数据模型与全局渲染设置。**图片缓存与历史记录只属于截屏路径**（游戏 / 视频翻译、漫画浮窗），阅读器与文本翻译不使用它们。
+
+## 翻译引擎
+
+**本地引擎**（离线推理，文本不离开设备）
+
+| 引擎 | 说明 |
+|------|------|
+| **LlamaCpp（本地 GGUF）** | 通用 llama.cpp 本地推理引擎。既能下载**预制模型**（腾讯混元 Hy-MT2 1.8B，两个量化档：1.25-bit 约 440MB / Q4_K_M 约 1.08GB），也能**导入任意 llama.cpp 兼容的 GGUF**（Qwen / Gemma / 混元等）——导入的模型由它**自带的对话模板**渲染提示词，原格式不被改写。每个模型单独保存提示词与采样参数；支持流式输出（译文逐字显示）；进程内共享同一个已加载实例，游戏 / 漫画 / 文本 / 阅读器 / 对话共用；读取原文与生成译文的线程数可分别配置 |
+| **NLLB** | 首次下载模型（约 950MB）后可离线使用；检测到设备内存小于 6GB 时会提示可能出现的推理问题 |
+
+**在线翻译 API**
+
+| API | 免费额度 | 需要 Key |
+|-----|---------|----------|
+| 必应翻译 | 无限制 | 否 |
+| 小牛翻译 | 20 万字符/天 | 是 |
+| 火山引擎 | 200 万字符/月 | 是 |
+| Azure AI 翻译 | 200 万字符/月 | 是 |
+| DeepL 翻译 | 50 万字符/月 | 是 |
+| 百度翻译 | 100 万字符/月 | 是 |
+| 腾讯云 | 500 万字符/月 | 是 |
+
+图片翻译（整图提交给厂商）支持百度、腾讯与自定义接口。
+
+**AI 大模型**
+
+- 内置 **DeepSeek、通义千问、豆包（火山引擎）、智谱 GLM**；也可填入地址、Key 与模型名接入任意 OpenAI 兼容接口，并可一键拉取账号可用的模型列表
+- **提示词游戏 / 漫画独立配置** — 漫画模式另外使用「续写格式控制」：通过各厂商的 assistant 续写能力，约束模型按 `[1] 译文` 的编号列表格式输出，一次请求翻译整页气泡，输出格式固定、便于解析
+- **AI 上下文** — 游戏模式可携带最近若干轮（5–20，可配置）的历史翻译对，提升剧情连贯性；漫画模式仅在增量渲染的两批之间使用
+- 思考模式三态可配置（跟随模型 / 强制关闭 / 强制开启），避免部分网关因不支持的参数返回错误
+
+## OCR 引擎
+
+| 模型 | 用途 | 大小 | 来源 |
+|------|------|------|------|
+| **Google ML Kit** | 内置多语言 OCR | 内置 | Google，无需下载 |
+| **PP-OCRv6 small** | 通用多语言检测 + 识别（**默认**） | det + rec ≈ 31MB | RapidAI / RapidOCR，**已内置在 APK** |
+| **PP-OCRv6 medium** | 高精度检测 + 识别 | det + rec ≈ 132MB | 下载 |
+| **PP-OCRv5** | 通用中日英检测 + 识别 | det + rec_zh ≈ 21MB | 下载 |
+| **PP-OCRv5 多语言** | 英 / 韩 / 俄专用识别模型 | 7.5 / 12.9 / 7.7MB | 下载（可选） |
+| **manga-ocr** | 日漫竖排文字专用 | encoder + decoder ≈ 134MB | HuggingFace，可选下载 |
+| **RT-DETR-V2** | 文字 / 气泡检测 | ≈ 11MB | HuggingFace，可选下载 |
+
+只内置 PP-OCRv6 small，其余模型在模型管理页按需下载（支持断点续传、自动重试与 MD5 校验）；下载页按「引擎组合」分组，未下载的组合置灰并提示所需模型。PP-OCRv5 / v6 的检测参数（置信度阈值、扩展比例、大框过滤等）可在开发者选项的调试面板中实时调节。
+
+## 缓存与翻译历史
+
+本节属于截屏路径（游戏 / 视频翻译、漫画浮窗）。阅读器内嵌翻译不走截图，它按页把翻译结果写入数据库，并使用独立的内存渲染缓存。
+
+截图后按以下顺序查找缓存：
+
+| 层 | 匹配方式 | 命中后省去 |
+|----|---------|-----------|
+| **图片缓存** | 256 位 pHash，精确匹配或相似度 ≥ 0.95 | OCR、翻译与渲染，直接显示上次结果 |
+| **文本缓存** | 加权编辑距离模糊匹配 | 调用翻译接口 |
+| **数据库历史** | 256 位 hash 相似度分组（≥ 0.85） | 复用已存结果，同页多尺寸变体可切换 |
+| **内存 LRU** | 最近 20 条译文（游戏模式） | 重复请求 |
+
+纯色 / 无文字页面在入口处即被识别并跳过，不进行 OCR 与翻译；命中缓存的译文带 ⚡ 标记（可在开发者选项中关闭）。
+
+**翻译历史页面**（缓存对应的持久化数据在应用内的浏览入口）
+
+<p align="center">
+  <img src="images/history_page.gif" width="260" alt="历史记录页面">
+  &nbsp;&nbsp;
+  <img src="images/history_retranslate.gif" width="260" alt="历史记录重新翻译">
+  <br>
+  <em>历史记录页面 &nbsp;|&nbsp; 历史记录重新翻译</em>
+</p>
+
+- **双视图** — 默认视图按修改时间排序；管理视图按进程分组
+- **全屏翻页浏览** — 原图、译文详情面板、原文 / 译文切换与尺寸变体切换
+- **重新翻译** — 加载原始截图重新 OCR → 翻译 → 渲染，替换原有变体，无需启动翻译服务
+- **打包下载** — 按进程组导出 ZIP 到系统「下载」目录（写入失败时回退系统文件选择器）
+
+## 译文数据与渲染
+
+截屏路径与阅读器内嵌翻译都只持久化「译文文本 + 每页气泡坐标」（分别写入历史库与每页翻译记录），不落盘渲染后的译文位图。因此：
+
+- 修改字号、颜色、竖排方向、字距行距、重叠合并或译文替换规则后，**已翻译页面按当前设置重新渲染**，无需重新识别、翻译或截图
+- 三态切换与打包下载都基于这一份数据生成，而不是保存多份不同设置的图片
+- 渲染在打开页面时即时完成（毫秒级，并配有内存缓存）
+
+**排版规则**
+
+- **竖排 / 横排自适应** — 竖排文字按列排版，列距拉伸填满气泡宽度；横排文字自动填充行距与字距，在不超过选区的前提下尽量铺满
+- **竖排方向可配置** — 列从右到左（传统日漫）或从左到右，对所有结果实时生效，包括历史与缓存中的旧数据
+- **重叠白块合并** — 译文白块互相重叠时合并为一个块（默认关闭）
+- **省略号不拆行** — 模型偶尔会把译文写成多行（`.\n.\n.`），渲染前会将这些换行接回同一行，且排版时点串整体不拆分，避免「每行一个点」占满气泡、导致字号被压缩
+
+## 全局设置项
+
+| 设置 | 位置 | 说明 |
+|------|------|------|
+| 主题 | 主页右上角 | 跟随系统 / 浅色 / 深色 |
+| 译文替换表 | 个性化设置 → 漫画翻译结果设置 | 多条「查找 → 替换」规则，渲染译文时套用，修改后立即生效，已翻译页面同样生效 |
+| 译文字号 | 个性化设置 / 悬浮窗菜单 / 阅读器翻译面板 | 三处读写同一份设置，可选自动档或 8–48 固定档 |
+| 悬浮球外观 | 个性化设置 → 悬浮球 | 游戏与漫画各自的图标、大小（50%–200%）、不透明度（10%–100%）；调整后屏幕上的悬浮球立即更新 |
+| 悬浮球手势 | 个性化设置 → 悬浮球 | 单击 / 双击 / 长按的动作分配、长按判定时间 |
+| 自动翻译参数 | 个性化设置 → 自动翻译 | 像素变化阈值与检测间隔 |
+
+## 自动翻译与稳定性检测
+
+- **像素驱动检测** — 按 YIQ 感知色彩差异判断画面变化，画面稳定的页面不重复 OCR
+- **翻页稳定性检测** — 检测到画面变化后等待画面静止再触发翻译，适用于游戏与漫画翻页
+- **实时字幕模式** — 关闭稳定性检测，画面变化立即翻译，适用于视频字幕
+- **漫画自动翻页** — 用 pHash 检测页面变化，停稳约 1 秒后自动触发翻译
+- 同一页面长时间无变化时会自动停止并提示，避免因录屏冲突导致画面变化检测失效
+
+---
+
+# 四、开发
+
+## 环境要求
+
+| 项 | 版本 | 说明 |
+|----|------|------|
+| JDK | **17** | Gradle 与 AGP 要求；任意 JDK 17 发行版（Temurin / Zulu / Microsoft 等）均可 |
+| Android SDK | compileSdk 35 / targetSdk 35（minSdk 29） | 路径写在 `local.properties` |
+| **NDK** | **25.2.9519653** | 原生代码必需，**版本必须完全一致**（`app/build.gradle` 中写死） |
+| CMake | 3.22.1 | 在 SDK Manager 中勾选安装 |
+| 架构 | **仅 arm64-v8a** | 64 位 ARM 真机；x86 模拟器无法运行 |
+
+## 首次配置
+
+1. **`local.properties`**（已 gitignore，指向本机的 Android SDK，路径使用正斜杠）：
+   ```properties
+   # Windows
+   sdk.dir=C:/Users/<username>/AppData/Local/Android/Sdk
+   # macOS
+   sdk.dir=/Users/<username>/Library/Android/sdk
+   # Linux
+   sdk.dir=/home/<username>/Android/Sdk
+   ```
+2. 在 **SDK Manager** 中安装 `NDK 25.2.9519653` 与 `CMake 3.22.1`（版本不一致会直接构建失败）
+3. **拉取 llama.cpp 源码**（submodule，源码不进本仓库，缺了 `:llamacpp` 编不出来）：在仓库根目录执行
+   ```powershell
+   pwsh -File llamacpp/setup-submodule.ps1
+   ```
+   详见「原生代码与模型」一节。
+4. 验证：`./gradlew assembleDebug`
+
+## 常用命令
+
+```bash
+./gradlew assembleDebug                    # debug APK（首次需编译 C++，之后为增量构建）
+./gradlew assembleRelease                  # release APK（含 lint，缺少翻译会直接失败）
+./gradlew clean assembleDebug              # 清理后重新构建
+./gradlew :app:lintDebug                   # 单独运行 lint
+
+adb install -r app/build/outputs/apk/debug/app-debug.apk
+adb logcat --pid=$(adb shell pidof com.moe.starflow)      # 实时日志
+```
+
+`adb` 未加入 PATH 时使用完整路径，例如 Windows：
+
+```powershell
+& "$env:LOCALAPPDATA\Android\Sdk\platform-tools\adb.exe" install -r app\build\outputs\apk\debug\app-debug.apk
+```
+
+应用内提供**开发者选项**（4 个引擎的调试浮窗与参数实时调节、缓存命中标记开关）与**日志导出**，便于定位问题。
+
+## 单元测试
+
+```bash
+./gradlew test                                    # 全部单元测试（JUnit + Robolectric）
+./gradlew :app:testDebugUnitTest --tests "com.moe.starflow.mangaimport.reader.ExportNamingTest"
+```
+
+Robolectric 的 SDK 统一配置在 `app/src/test/resources/robolectric.properties`（`sdk=34`）。
+
+## 原生代码与模型
+
+原生代码分两个模块：
+
+- **`:llamacpp`** — llama.cpp 源码随 submodule 一起编译，产出 `libllamacpp.so`。**首次编译前必须在仓库根目录执行 `llamacpp/setup-submodule.ps1`**：llama.cpp 是**官方仓库**（pin 在 `1e411d8f`），源码不进本仓库；脚本会在 `llamacpp/src/main/cpp/llama.cpp` 放一份独立 clone，并配好 `core.longpaths` 与 sparse-checkout（排除 `tools/ examples/ docs/ tests/`，否则 Windows 下路径过长会 checkout 失败）。⚠️ 不要改用 `git submodule update --init`（同样会因长路径失败）；`git submodule status` 显示 `-<sha>` 是正常的，不影响构建。
+- **`:app`** — `app/src/main/cpp/` 走 CMake，保留 ONNX Runtime 与 sentencepiece 桥接。
+
+其余：
+
+- **PP-OCRv6 small 已内置**在 `assets/`；PP-OCRv5 全系、v6 medium、RT-DETR-V2、manga-ocr、预制 Hy-MT2 与 NLLB 均为运行时按需下载（模型管理页）
+- release 构建启用了 `minifyEnabled` 与 `shrinkResources`，JNI 回调接口由 `proguard-rules.pro` 的 `-keep` 规则保护 —— **修改 native 回调接口名时需同步修改 keep 规则**，否则会出现 debug 正常、release 崩溃
+- release 包只含 `libllamacpp.so` 与 `libc++_shared.so` 两个 native 库
+
+## 发布
+
+`app/build.gradle` 的 release 目前复用 debug 签名（无需额外 keystore），`./gradlew assembleRelease` 即可产出可安装包；正式发布走 GitHub Releases（应用内「检查更新」依赖 Release 的 APK 资产与说明中的网盘链接）。
+
+## 项目结构
+
+```
+app/src/main/java/
+├── com/moe/starflow/
+│   ├── manga/            漫画翻译引擎（截屏路线）
+│   │   ├── types/ config/   纯数据类 / 引擎组合与参数
+│   │   ├── engine/          检测与 OCR 引擎（PP-OCRv5/v6、ML Kit、manga-ocr、RT-DETR-V2）
+│   │   ├── pipeline/        分批翻译管线（与阅读器共用，含测试缝 BatchOcrOps）
+│   │   ├── render/          译文渲染（OverlayRenderer / VerticalTextRenderer）
+│   │   ├── merge/           文本区域合并与空间聚类
+│   │   ├── state/           自动翻译状态机 / 引擎管理 / 区域缓存
+│   │   ├── debug/           调试浮层渲染与参数面板
+│   │   └── MangaFloatingService.kt   主服务（TranslateUtils / OcrLock / OnnxUtils / GeometryUtils）
+│   ├── mangaimport/      漫画导入书架 + 阅读器
+│   │   ├── ImportMangaFragment.kt   书架（导入 / 多选管理 / 显示选项）
+│   │   ├── data/           导入存储、zip 读取、目录迁移
+│   │   ├── reader/         阅读器（4 阅读模式 / 翻页动画 / 进度胶囊 / 打包下载 ReaderExport）
+│   │   ├── translate/      阅读器内嵌翻译（三种模式控制器 + 每页记录编解码）
+│   │   └── ui/             导入对话框 / 显示选项面板 / 网格适配器
+│   ├── translate/        游戏与视频翻译引擎
+│   │   ├── screenshot/     双模式截图（MediaProjection / 无障碍）
+│   │   ├── autotranslate/  像素驱动自动翻译（状态机 / GameOcrEngine）
+│   │   ├── widget/         悬浮窗组件（结果容器 / 悬浮球状态 / 框选 / 弹窗）
+│   │   └── FloatingBallService.kt    主服务 + TranslationTextAPI/PicAPI 接口
+│   ├── chat/             文本聊天翻译（ChatEngine / 模板 / 历史）
+│   ├── ui/               历史记录列表 & 漫画查看器（history/ viewer/）
+│   ├── me/               设置与配置（about / apiconfig / model / settings 子包）
+│   ├── data/             Room 数据库（v17）与三层缓存
+│   ├── download/         模型下载流水线（断点续传 / 状态机 / MD5 校验）
+│   ├── utils/            工具（Constants / CustomPreference / LogCollector / FontSync 等）
+│   └── launch/           首次启动引导
+└── translationapi/       各厂商翻译 API 实现（含 LlamaCpp JNI 门面 / NLLB 本地引擎）
+```
+
+除 `:app` 外还有一个 `:llamacpp` 模块（`llamacpp/src/main/cpp/` — llama.cpp 源码 + JNI 桥 + CMake）、一个 `patches/`（llama.cpp 本地补丁留档）。
+
+- `translationapi/` 是历史遗留的独立顶层包（不在 `com.moe.starflow` 下）：JNI 符号与 proguard keep 规则硬编码该包名，直接移动会导致 `UnsatisfiedLinkError`
+- 原生代码：`:app` 的 `app/src/main/cpp/`（CMake，ONNX Runtime + sentencepiece）与 `:llamacpp` 模块（llama.cpp 源码 + JNI 桥）
+- 测试：`app/src/test/java/`（JUnit + Robolectric，与主源码同包名子目录）
+
+---
+
+# 致谢
+
+本项目 forked 自 [MoeTranslate](https://github.com/murangogo/MoeTranslate)。
+
+## 参考项目
+
+- [RapidOCR](https://github.com/RapidAI/RapidOCR) — 跨平台 OCR 推理
+- [RT-DETR](https://github.com/lyuwenyu/RT-DETR) — 实时目标检测 Transformer
+- [manga-ocr](https://github.com/kha-white/manga-ocr) — 日漫竖排文字 OCR
+- [manga-image-translator](https://github.com/zyddnys/manga-image-translator) — 漫画图片翻译
+- [Kototoro](https://github.com/Kototoro-app/Kototoro) — 漫画阅读器（阅读模式 / 翻页动画 / 页脚卷曲 / 进度条 / 点击分区）
+- [pixelmatch](https://github.com/mapbox/pixelmatch) — YIQ 感知像素比较
+- [ONNX Runtime](https://onnxruntime.ai/) — 模型推理引擎
+- [JTS](https://locationtech.github.io/jts/) — 多边形几何运算
+
+---
+
+# 许可证
+
+LGPL — 详见 [licenses/](licenses/) 目录。第三方库许可证见各项目主页。

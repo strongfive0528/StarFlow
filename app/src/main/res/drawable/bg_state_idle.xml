@@ -1,0 +1,8 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- 「未翻译 / 未识别」徽章底。
+     ⚠️ 徽章文字写死 `#FFFFFF`（见 `item_translate_page_state.xml`），所以底色必须够深：
+     `#9E9E9E` 上的白字对比度只有 ~2.8:1（灰底白字发虚），改成 `#757575` ≈ 4.6:1。 -->
+<shape xmlns:android="http://schemas.android.com/apk/res/android" android:shape="rectangle">
+    <solid android:color="#757575"/>
+    <corners android:radius="10dp"/>
+</shape>

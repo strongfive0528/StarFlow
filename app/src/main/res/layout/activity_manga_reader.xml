@@ -1,0 +1,316 @@
+<?xml version="1.0" encoding="utf-8"?>
+<FrameLayout
+    xmlns:android="http://schemas.android.com/apk/res/android"
+    xmlns:app="http://schemas.android.com/apk/res-auto"
+    android:layout_width="match_parent"
+    android:layout_height="match_parent"
+    android:background="#000000">
+
+    <!-- 翻页区（分页模式） -->
+    <androidx.viewpager2.widget.ViewPager2
+        android:id="@+id/viewPager"
+        android:layout_width="match_parent"
+        android:layout_height="match_parent"/>
+
+    <!-- Webtoon 连续滚动模式（竖列表，懒加载） -->
+    <androidx.recyclerview.widget.RecyclerView
+        android:id="@+id/webtoonList"
+        android:layout_width="match_parent"
+        android:layout_height="match_parent"
+        android:visibility="gone"/>
+
+    <!-- 顶部左侧返回按钮 -->
+    <FrameLayout
+        android:id="@+id/btn_back"
+        android:layout_width="wrap_content"
+        android:layout_height="wrap_content"
+        android:layout_gravity="top|start"
+        android:layout_marginStart="10dp"
+        android:layout_marginTop="34dp"
+        android:background="@drawable/bg_floating_btn_view"
+        android:padding="10dp"
+        android:clickable="true"
+        android:contentDescription="@string/reader_back">
+
+        <ImageView
+            android:layout_width="20dp"
+            android:layout_height="20dp"
+            android:src="@drawable/ic_reader_back"
+            android:contentDescription="@string/reader_back"/>
+    </FrameLayout>
+
+    <!-- 顶部右侧菜单按钮 -->
+    <FrameLayout
+        android:id="@+id/btn_menu"
+        android:layout_width="wrap_content"
+        android:layout_height="wrap_content"
+        android:layout_gravity="top|end"
+        android:layout_marginEnd="10dp"
+        android:layout_marginTop="34dp"
+        android:background="@drawable/bg_floating_btn_view"
+        android:padding="10dp"
+        android:clickable="true"
+        android:contentDescription="@string/reader_tab_more">
+
+        <ImageView
+            android:layout_width="20dp"
+            android:layout_height="20dp"
+            android:src="@drawable/ic_reader_more"
+            app:tint="#FFFFFF"
+            android:contentDescription="@string/reader_tab_more"/>
+    </FrameLayout>
+
+    <!-- 顶部中间页面指示。
+         ⚠️ **在提示条上面、但不要紧贴屏幕顶**（用户口径 2026-10）：「章节胶囊不要紧贴屏幕顶部，
+             保证提示在章节胶囊下面就行了」。所以胶囊留在它原本的 38dp（和返回/菜单同一行），
+             而**提示浮层的顶距由阅读器在运行时让到胶囊下面**（`TranslationStatusOverlay
+             .setTopOffsetDp(READER_TOP_OFFSET_DP)`，见那个常量的注释）。
+         ⚠️ 为什么必须让位：浮层是 `TYPE_APPLICATION_OVERLAY` **系统窗口**，会吞掉落在它矩形内的
+             触摸 —— 压住胶囊那一段就点不动，而「点胶囊开章节目录」正是用户报
+             "不知道怎么没有了"的那条路。
+         ⚠️ 改这里要**同时**改 `activity_novel_reader.xml` 的 `top_pill` 与
+             `TranslationStatusOverlay.READER_TOP_OFFSET_DP`。守卫 `ReaderTopPillInsetTest`。 -->
+    <TextView
+        android:id="@+id/tv_page_indicator"
+        android:layout_width="wrap_content"
+        android:layout_height="wrap_content"
+        android:layout_gravity="top|center_horizontal"
+        android:layout_marginTop="38dp"
+        android:background="@drawable/bg_pill_dark"
+        android:paddingStart="12dp"
+        android:paddingTop="5dp"
+        android:paddingEnd="12dp"
+        android:paddingBottom="5dp"
+        android:textColor="#FFFFFF"
+        android:textSize="13sp"/>
+
+    <!-- 底部透明胶囊进度条（左翻页 / 中间进度条 / 右翻页） -->
+    <LinearLayout
+        android:id="@+id/bottom_progress"
+        android:layout_width="match_parent"
+        android:layout_height="48dp"
+        android:layout_gravity="bottom"
+        android:orientation="horizontal"
+        android:gravity="center_vertical"
+        android:background="@drawable/bg_progress_pill"
+        android:layout_marginStart="24dp"
+        android:layout_marginEnd="24dp"
+        android:layout_marginBottom="10dp"
+        android:paddingStart="6dp"
+        android:paddingEnd="6dp">
+
+        <FrameLayout
+            android:id="@+id/btn_prev"
+            android:layout_width="44dp"
+            android:layout_height="match_parent"
+            android:gravity="center"
+            android:clickable="true"
+            android:contentDescription="@string/reader_prev">
+
+            <ImageView
+                android:layout_width="22dp"
+                android:layout_height="22dp"
+                android:layout_gravity="center"
+                android:src="@drawable/ic_reader_prev"
+                android:contentDescription="@string/reader_prev"/>
+        </FrameLayout>
+
+        <com.moe.starflow.mangaimport.reader.ReaderProgressBar
+            android:id="@+id/reader_progress"
+            android:layout_width="0dp"
+            android:layout_height="match_parent"
+            android:layout_weight="1"
+            android:layout_gravity="center_vertical"
+            android:layout_marginHorizontal="4dp"/>
+
+        <FrameLayout
+            android:id="@+id/btn_next"
+            android:layout_width="44dp"
+            android:layout_height="match_parent"
+            android:gravity="center"
+            android:clickable="true"
+            android:contentDescription="@string/reader_next">
+
+            <ImageView
+                android:layout_width="22dp"
+                android:layout_height="22dp"
+                android:layout_gravity="center"
+                android:src="@drawable/ic_reader_next"
+                android:contentDescription="@string/reader_next"/>
+        </FrameLayout>
+    </LinearLayout>
+
+    <!-- ⚠️ 底部两组浮层**不共用一个容器**：超分组贴左下、翻译组贴右下（用户口径 2026-10
+         「超分按钮放到左边，不是右边的上面」）。⚠️ 后来那句「和翻译一样……删除按钮都在
+         当前组件的最右边」说的是**组内按钮顺序**（删除放最右），**不是**把整组挪到右边 ——
+         别再套 floating_groups 之类的容器。 -->
+    <!-- ═══════════ 超分浮层组（**独立一组**，用户口径 2026-10）═══════════
+         与翻译浮层组完全分开：自己的背景、自己的显隐、自己的三枚按钮。
+         三枚按钮与翻译侧一一对应：
+           超分 / 重新超分（恒显示，有结果时图标变"重翻"）｜原图⇄超分（有结果才显示）｜删除（有结果才显示）
+         ⚠️ 超分功能关闭 / Webtoon / 隐藏上下 UI 时整组 GONE（`refreshSrButtons`）。 -->
+    <LinearLayout
+        android:id="@+id/sr_group"
+        android:layout_width="wrap_content"
+        android:layout_height="wrap_content"
+        android:layout_gravity="bottom|start"
+        android:layout_marginStart="20dp"
+        android:layout_marginBottom="62dp"
+        android:orientation="horizontal"
+        android:gravity="center"
+        android:padding="6dp"
+        android:visibility="gone"
+        android:background="@drawable/bg_reader_translate_group">
+
+        <!-- ═══════ 超分三件套（**在翻译三件套左边**，用户口径 2026-10）═══════
+             与翻译侧完全对称，职责不混：
+               btn_sr_page   超分 / 重新超分   —— 恒显示（有结果时图标变"重翻"样式）
+               btn_sr_toggle 原图 ⇄ 超分底图    —— **有结果才出现**（同三态按钮）
+               btn_sr_clear  删除本页超分结果  —— **有结果才出现**（同清除译文，要二次确认）
+             ⚠️ 以前只有一枚按钮、既跑超分又切换：用户看不出点下去会发生什么
+               （真机反馈「切换按钮和超分按钮重复了」「超分完之后为什么没办法切换」）。
+             ⚠️ 超分功能关闭时三枚一起隐藏（由 refreshTranslationChrome 置 GONE）。 -->
+        <FrameLayout
+            android:id="@+id/btn_sr_toggle"
+            android:layout_width="40dp"
+            android:layout_height="40dp"
+            android:gravity="center"
+            android:clickable="true"
+            android:visibility="gone"
+            android:contentDescription="@string/reader_sr_toggle_desc">
+            <ImageView
+                android:id="@+id/iv_sr_toggle"
+                android:layout_width="22dp"
+                android:layout_height="22dp"
+                android:layout_gravity="center"
+                android:src="@drawable/ic_reader_sr"
+                app:tint="#FFFFFF"
+                android:contentDescription="@string/reader_sr_toggle_desc"/>
+        </FrameLayout>
+
+                <FrameLayout
+            android:id="@+id/btn_sr_page"
+            android:layout_width="40dp"
+            android:layout_height="40dp"
+            android:gravity="center"
+            android:clickable="true"
+            android:visibility="gone"
+            android:contentDescription="@string/reader_sr_button_desc">
+            <ImageView
+                android:id="@+id/iv_sr_page"
+                android:layout_width="22dp"
+                android:layout_height="22dp"
+                android:layout_gravity="center"
+                android:src="@drawable/ic_reader_sr"
+                app:tint="#FFFFFF"
+                android:contentDescription="@string/reader_sr_button_desc"/>
+        </FrameLayout>
+<FrameLayout
+            android:id="@+id/btn_sr_clear"
+            android:layout_width="40dp"
+            android:layout_height="40dp"
+            android:gravity="center"
+            android:clickable="true"
+            android:visibility="gone"
+            android:contentDescription="@string/reader_sr_clear_desc">
+            <ImageView
+                android:id="@+id/iv_sr_clear"
+                android:layout_width="22dp"
+                android:layout_height="22dp"
+                android:layout_gravity="center"
+                android:src="@drawable/ic_action_delete"
+                app:tint="#FFFFFF"
+                android:contentDescription="@string/reader_sr_clear_desc"/>
+        </FrameLayout>
+
+    </LinearLayout>
+    <!-- 右下角翻译浮层组：翻译按钮 +（有翻译结果时出现）三态切换按钮，同一背景组件。
+         翻译按钮成功态图标变「重翻」（ic_refresh），点击即重新翻译；三态按钮点按循环 译文/原文/原图，长按开详情。 -->
+    <LinearLayout
+        android:id="@+id/translate_group"
+        android:layout_width="wrap_content"
+        android:layout_height="wrap_content"
+        android:layout_gravity="bottom|end"
+        android:layout_marginEnd="20dp"
+        android:layout_marginBottom="62dp"
+        android:orientation="horizontal"
+        android:gravity="center"
+        android:padding="6dp"
+        android:background="@drawable/bg_reader_translate_group">
+
+        <FrameLayout
+            android:id="@+id/btn_toggle_translate"
+            android:layout_width="40dp"
+            android:layout_height="40dp"
+            android:gravity="center"
+            android:clickable="true"
+            android:visibility="gone"
+            android:contentDescription="@string/reader_toggle_desc">
+            <ImageView
+                android:id="@+id/iv_toggle_translate"
+                android:layout_width="22dp"
+                android:layout_height="22dp"
+                android:layout_gravity="center"
+                android:src="@drawable/ic_reader_translate"
+                app:tint="#FFFFFF"
+                android:contentDescription="@string/reader_toggle_desc"/>
+        </FrameLayout>
+
+        <!-- 失败页：与三态按钮同位置显示感叹号；点击弹小气泡说明失败原因（不弹窗） -->
+        <FrameLayout
+            android:id="@+id/btn_fail_translate"
+            android:layout_width="40dp"
+            android:layout_height="40dp"
+            android:gravity="center"
+            android:clickable="true"
+            android:visibility="gone"
+            android:contentDescription="@string/reader_translate_failed_badge">
+            <ImageView
+                android:id="@+id/iv_fail_translate"
+                android:layout_width="22dp"
+                android:layout_height="22dp"
+                android:layout_gravity="center"
+                android:src="@drawable/ic_reader_warn"
+                app:tint="#FF8A80"
+                android:contentDescription="@string/reader_translate_failed_badge"/>
+        </FrameLayout>
+
+        <FrameLayout
+            android:id="@+id/btn_translate"
+            android:layout_width="40dp"
+            android:layout_height="40dp"
+            android:gravity="center"
+            android:clickable="true"
+            android:contentDescription="@string/reader_tab_translate">
+            <ImageView
+                android:id="@+id/iv_translate"
+                android:layout_width="22dp"
+                android:layout_height="22dp"
+                android:layout_gravity="center"
+                android:src="@drawable/ic_reader_translate"
+                app:tint="#FFFFFF"
+                android:contentDescription="@string/reader_tab_translate"/>
+        </FrameLayout>
+
+        <!-- 清除本页译文（**放在最右边**，用户口径）：只在当前页有译文时出现，
+             点击**必须二次确认**（所有删除/清空操作都要确认）。图标复用既有删除图标。 -->
+        <FrameLayout
+            android:id="@+id/btn_clear_translate"
+            android:layout_width="40dp"
+            android:layout_height="40dp"
+            android:gravity="center"
+            android:clickable="true"
+            android:visibility="gone"
+            android:contentDescription="@string/reader_clear_page_desc">
+            <ImageView
+                android:id="@+id/iv_clear_translate"
+                android:layout_width="22dp"
+                android:layout_height="22dp"
+                android:layout_gravity="center"
+                android:src="@drawable/ic_action_delete"
+                app:tint="#FFFFFF"
+                android:contentDescription="@string/reader_clear_page_desc"/>
+        </FrameLayout>
+    </LinearLayout>
+
+</FrameLayout>

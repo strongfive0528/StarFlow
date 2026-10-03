@@ -1,0 +1,97 @@
+# IDE
+/.idea
+.claude/
+.vscode/
+*.iml
+.idea/workspace.xml
+.idea/tasks.xml
+.idea/gradle.xml
+.idea/dictionaries
+
+# Build outputs
+app/build
+app/release
+.gradle/
+build/
+/framework/build/
+local.properties
+
+# cpp
+app/.cxx
+llamacpp/.cxx
+
+# OS-specific files
+.DS_Store
+.DS_Store?
+._*
+.Spotlight-V100
+.Trashes
+ehthumbs.db
+Thumbs.db
+
+# Logs
+*.log
+logs/
+
+# Gitignored directories
+.reference/
+tools/
+# ⚠️ 必须锚定到**根目录**：不锚定的话 `models/` 会顺带匹配
+#    app/src/main/assets/models/ —— 往那里新增资产文件会被**静默忽略**（审计发现）
+/models/
+scripts/
+markdown/
+superpowers/
+backup/
+.superpowers/
+# docs/ 一律只留本地，不提交到远端（含 docs/docs/ 架构文档与 superpowers 草稿）
+docs/
+# 临时调研脚本 / 分析草稿（本地）
+.research-tmp/
+# 本地构建工具链（JDK17 / Android SDK / NDK / Gradle 缓存），绝不入库
+.tools/
+# 本地构建出的安装包（百 MB 级二进制）
+*.apk
+
+# Claude Code
+# ⚠️ 这里**不再忽略** CLAUDE.md（2026-10-01 起）：根文件与各模块分册随仓库提交，
+#    clone 下来就带着，谁都能拿到同样的项目上下文。
+#    原来那行是裸的 `CLAUDE.md`（匹配任意层级）→ 8 份文档全被静默忽略，
+#    `git add .` 时无声漏掉、远端永远没有它们。
+#    想改回"只留本地"就把 `CLAUDE.md` 这行加回来，并同步改根 CLAUDE.md 的「目录规范」一节。
+
+# Superpowers plugin
+.agents/
+AGENTS.md
+
+# 模型文件 (太大不适合 git)
+# PP-OCRv6 small 内置模型例外
+!app/src/main/assets/ppocrv6/
+!app/src/main/assets/ppocrv6/*.onnx
+app/src/main/assets/**/*.onnx
+app/src/main/assets/**/*.onnx.bak
+app/src/main/assets/**/*.onnx.data
+app/src/main/assets/**/*.ckpt
+app/src/main/assets/**/*.safetensors
+
+# sentencepiece: tests, python, docs, data (not needed for Android build)
+app/src/main/cpp/data/
+app/src/main/cpp/doc/
+app/src/main/cpp/python/
+app/src/main/cpp/src/*_test.cc
+app/src/main/cpp/src/test_main.cc
+app/src/main/cpp/src/testharness.*
+app/src/main/cpp/src/spm_*_main.cc
+app/src/main/cpp/src/compile_charsmap_main.cc
+app/src/main/cpp/CONTRIBUTING.md
+app/src/main/cpp/README.md
+app/src/main/cpp/sentencepiece.pc.in
+
+# Local test files
+call_vision.py
+test_image.b64
+test_image.jpg
+.github/
+MANGA_CACHE_FLOW.md
+bilibili-intro.md
+bilibili-tutorial.md

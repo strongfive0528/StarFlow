@@ -1,0 +1,10 @@
+<vector xmlns:android="http://schemas.android.com/apk/res/android" android:width="24dp" android:height="24dp" android:viewportWidth="24" android:viewportHeight="24">
+  <!-- 「OCR / 识别」图标：四角取景框 + 中间两行文字（与翻译的「文/A」图标区分开）。
+       ⚠️ 只用 fill 路径（不用 stroke）：按钮上的 `app:tint` 对纯填充图形染色最稳。 -->
+  <path android:fillColor="#FF000000" android:pathData="M3,3h6v1.8h-4.2v4.2h-1.8z"/>
+  <path android:fillColor="#FF000000" android:pathData="M15,3h6v6h-1.8v-4.2h-4.2z"/>
+  <path android:fillColor="#FF000000" android:pathData="M3,15h1.8v4.2h4.2v1.8h-6z"/>
+  <path android:fillColor="#FF000000" android:pathData="M21,15v6h-6v-1.8h4.2v-4.2z"/>
+  <path android:fillColor="#FF000000" android:pathData="M7.5,9.2h9v1.7h-9z"/>
+  <path android:fillColor="#FF000000" android:pathData="M7.5,13.1h9v1.7h-9z"/>
+</vector>

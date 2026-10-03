@@ -1,0 +1,511 @@
+package com.moe.starflow.manga.render
+import com.moe.starflow.translate.widget.*
+import com.moe.starflow.translate.autotranslate.*
+import com.moe.starflow.translate.screenshot.*
+import com.moe.starflow.manga.state.*
+import com.moe.starflow.manga.*
+
+import com.moe.starflow.manga.engine.*
+import com.moe.starflow.manga.config.*
+import android.content.Context
+import android.graphics.Bitmap
+import android.graphics.Canvas
+import android.graphics.Color
+import android.graphics.Paint
+import android.graphics.Rect
+import android.graphics.Typeface
+import com.moe.starflow.manga.types.*
+import com.moe.starflow.manga.types.TextDirection
+import com.moe.starflow.manga.types.TextAlign
+import com.moe.starflow.utils.CustomPreference
+
+private const val MAX_RENDER_SCALE = 2f
+
+private val FILTER_PAINT = android.graphics.Paint(android.graphics.Paint.FILTER_BITMAP_FLAG)
+
+/**
+ * 叠加层画布的几何 —— **纯函数**，`OverlayCanvasGeometryTest` 钉死。
+ *
+ * 抽出来是因为这里有一类**只能靠构造保证、又极易写错**的东西：
+ * Robolectric 的 Canvas **既不兑现 `canvas.scale()`，也不兑现 `drawBitmap(src, srcRect, dstRect, paint)`
+ * 的目标矩形**（见 `manga/CLAUDE.md`）→ "叠加层会不会被放在正确的位置/大小"在单测里**看不到**。
+ * 所以把"要不要铺底图 / 叠加层放大多少"变成可断言的数据。
+ *
+ * 三个量的关系（全部由 `bubbleRects` 的坐标空间推出）：
+ * ```
+ * 底图宽 bitmapW = 坐标空间宽 spaceW × baseScale        （超分底图：baseScale = 2）
+ * 输出宽 outW    = spaceW × renderScale                （阅读器上屏：renderScale = 2）
+ * ```
+ *
+ * @property fillBase 底图要不要按目标矩形铺满输出。
+ *   ⚠️ `false` **不等于**"不用缩放叠加层" —— 超分底图那一路
+ *   （`baseScale == renderScale`）`outW` 恰好等于底图宽，走的是"直接 copy 底图"分支，
+ *   但叠加层**仍然**必须按 [scale] 放大。把这两件事混为一谈，译文就会缩在左上角 1/4 里。
+ */
+internal data class OverlayCanvasGeometry(
+    val spaceW: Int,
+    val spaceH: Int,
+    val outW: Int,
+    val outH: Int,
+    /** 叠加层的放大倍率（= 夹取后的 `renderScale`）。**恒要应用**。 */
+    val scale: Float,
+    /** true = 需要 `drawBitmap` 把底图铺满输出；false = 输出尺寸已等于底图，直接 copy。 */
+    val fillBase: Boolean,
+)
+
+internal fun solveOverlayCanvas(
+    bitmapW: Int,
+    bitmapH: Int,
+    baseScale: Float,
+    renderScale: Float,
+): OverlayCanvasGeometry {
+    val scale = renderScale.coerceIn(1f, MAX_RENDER_SCALE)
+    val base = baseScale.coerceAtLeast(0.01f)
+    // 坐标空间（= bubbleRects 的空间）尺寸。底图是 2x 超分图时它就是源图尺寸。
+    val spaceW = (bitmapW / base).toInt().coerceAtLeast(1)
+    val spaceH = (bitmapH / base).toInt().coerceAtLeast(1)
+    val outW = (spaceW * scale).toInt().coerceAtLeast(1)
+    val outH = (spaceH * scale).toInt().coerceAtLeast(1)
+    return OverlayCanvasGeometry(
+        spaceW = spaceW,
+        spaceH = spaceH,
+        outW = outW,
+        outH = outH,
+        scale = scale,
+        fillBase = outW != bitmapW || outH != bitmapH,
+    )
+}
+
+object OverlayRenderer {
+
+    /**
+     * 加载自定义结果字体（`Custom_Result_Font`，文件在 `getExternalFilesDir/font/`）。
+     * 无设置/文件缺失/加载失败返回 null（调用方用默认字体）。游戏与漫画模式共用。
+     */
+    fun loadResultTypeface(context: Context, prefs: CustomPreference): Typeface? {
+        val name = prefs.getString("Custom_Result_Font", "")
+        if (name.isEmpty()) return null
+        return try {
+            val file = java.io.File(context.getExternalFilesDir(null), "font/$name")
+            if (file.exists()) Typeface.createFromFile(file) else null
+        } catch (e: Exception) {
+            null
+        }
+    }
+
+    /** 合并 overlay 的分隔记号：竖排组间 / 横排组间 */
+    private const val VERTICAL_SEPARATOR = "◇"
+    private const val HORIZONTAL_SEPARATOR = "──"
+
+    /**
+     * 竖排字符步距系数。**单一来源已迁到 [LayoutEngine.VERTICAL_CHAR_RATIO]** ——
+     * 此前 OverlayRenderer 与 VerticalTextRenderer 各写一份并注释「必须一致」，
+     * 不一致即溢出（被 clipRect 静默裁掉）。这里保留别名只为合并块尺寸估算可读。
+     */
+    private const val VERTICAL_CHAR_RATIO = LayoutEngine.VERTICAL_CHAR_RATIO
+
+    /** 横排行距系数，单一来源同上。 */
+    private const val HORIZONTAL_LINE_RATIO = LayoutEngine.HORIZONTAL_LINE_RATIO
+
+    /** 单气泡的绘制参数（Phase 1 产物） */
+    private data class Param(
+        val region: TranslatedBubble,
+        val displayText: String,
+        val fitFontSize: Float,
+        val neededRect: Rect
+    )
+
+    /** 一个绘制单元：单气泡，或同方向合并组（多气泡文本用记号连接成一个白块） */
+    private data class DrawItem(
+        val drawRect: Rect,
+        val displayTexts: List<String>,
+        val direction: TextDirection,
+        val fitFontSize: Float,
+        val merged: Boolean,
+        val angle: Float = 0f,
+        val centerX: Float = -1f,
+        val centerY: Float = -1f
+    )
+
+    fun renderOverlay(
+        original: Bitmap,
+        regions: List<TranslatedBubble>,
+        fontSize: Float = 16f,
+        autoFit: Boolean = true,
+        textColor: Int = Color.BLACK,
+        bgColor: Int = Color.argb(200, 255, 255, 255),
+        useOriginalText: Boolean = false,
+        verticalDirection: TextDirection? = null,
+        fontTypeface: Typeface? = null,
+        showCacheMarker: Boolean = false,  // 缓存命中标记开关（⚡，默认关闭）
+        align: TextAlign = TextAlign.CENTER,          // 横排对齐（竖排不受影响）
+        trackingRatio: Float = LayoutEngine.TRACKING_DEFAULT_RATIO,  // 用户字间距（×字号）
+        leadingRatio: Float = LayoutEngine.LEADING_DEFAULT_RATIO,    // 用户行间距（×字号）
+        /** 渲染阶段重叠合并开关（个性化页可关，见 OverlayConfig.mergeOverlap）。 */
+        mergeOverlap: Boolean = true,
+        /**
+         * 用户「译文替换表」（漫画翻译结果设置 → 二级面板），**在渲染时套用**。
+         *
+         * 为什么不是翻译时：译文只存文本，overlay 是后期画上去的 —— 改完规则重新渲染该页即可，
+         * 没必要（也不该）逼用户重翻一遍 API。顺带覆盖历史/缓存里的老译文。
+         */
+        replacementRules: List<com.moe.starflow.manga.config.ReplacementRule> = emptyList(),
+        density: Float = 1f,                           // 用于把 MIN_PADDING_DP 换算成 px
+        /**
+         * 渲染超采样倍率（2026-10，修「低分辨率漫画译文模糊」）。
+         *
+         * **为什么需要它**：此前输出位图恒等于原图尺寸，气泡白块与译文就按**源分辨率**栅格化；
+         * 低分辨率页（如 800px 宽）被 `ZoomableImageView` 拉到屏幕宽（1080）时，
+         * **文字是被插值放大的像素** → 糊。而 Canvas 绘制时**字形是按当前 CTM 的有效缩放栅格化的**，
+         * 所以只要让文字在"已被放大的坐标系"里落笔，它天然清晰 —— 不需要超分、也不需要放大底图。
+         *
+         * ⚠️ **默认 1f 是刻意的**：导出 / `MangaViewerActivity` / `HistoryFragment` 不吃屏幕分辨率，
+         * 而它们的渲染结果还进 `BitmapLruCache`，放大尺寸纯属白占内存。只有阅读器上屏该传 >1f。
+         *
+         * ⚠️ 上限 [MAX_RENDER_SCALE]（2f）：倍率是**平方级**的内存代价（×2 = 4 倍像素）。
+         */
+        renderScale: Float = 1f,
+        /**
+         * **底图相对「坐标空间」的倍率**（2026-10 v2，超分底图用）。
+         *
+         * 默认 1f = 底图尺寸**就是**坐标空间（`bubbleRects` 所在的源图空间）。
+         * 传 2f 表示：底图是源图的精确 2x（超分底图）→
+         * - **坐标空间 = `original.width / baseScale`**（气泡坐标仍按源图解释）
+         * - 输出 = 坐标空间 × [renderScale]
+         * - 底图铺满输出：`baseScale == renderScale` 时**恰好 1:1 落上去、零重采样**
+         *
+         * ⚠️ **为什么必须是"精确"的倍率**：超分图的尺寸由 [com.moe.starflow.sr.AnimeJaNaiEngine]
+         * 的硬契约保证（`out.width == src.width * 2`，靠补边 + 精确裁剪，不是"大约 2 倍"）。
+         * 模型原始输出其实比 2x 少 72px（cunet）/ 32px（swin），直接按同一个倍率去映射会
+         * **整体平移**；所以契约必须由引擎兜住，这里才敢用纯缩放。
+         */
+        baseScale: Float = 1f
+    ): Bitmap {
+        val g = solveOverlayCanvas(original.width, original.height, baseScale, renderScale)
+
+        val result: Bitmap = if (!g.fillBase) {
+            // 输出尺寸 == 底图尺寸 → 直接复制（底图 1:1 落上去，零重采样）
+            original.copy(Bitmap.Config.ARGB_8888, true)
+        } else {
+            Bitmap.createBitmap(g.outW, g.outH, Bitmap.Config.ARGB_8888)
+        }
+        val canvas = Canvas(result)
+        if (g.fillBase) {
+            // 底图铺满输出。⚠️ baseScale < renderScale 时这里是放大（底图该多糊还多糊 —— 那是图源决定的）。
+            canvas.drawBitmap(
+                original, null,
+                android.graphics.RectF(0f, 0f, g.outW.toFloat(), g.outH.toFloat()),
+                FILTER_PAINT
+            )
+        }
+        // ⚠️ **无条件**按 [OverlayCanvasGeometry.scale] 放大 —— 所有绘制坐标都在**坐标空间**
+        // （`bubbleRects` 所在空间），字号/字距/气泡位置靠这一层自动跟着放大。
+        //
+        // ⚠️ **绝不能把它放进上面的 `if (g.fillBase)` 里**：超分底图那一路恰好是
+        // `baseScale == renderScale`（2x 底图 + renderScale 2）→ `outW` 正好等于底图宽 →
+        // 走的是"直接 copy 底图"分支，`fillBase = false`。放进 if 里就会漏掉缩放，
+        // 叠加层缩在左上角 1/4 区域里（底图铺满整张，译文却只有一半大小、位置全错）。
+        canvas.scale(g.scale, g.scale)
+
+        // 竖排方向覆盖：所有竖排气泡（RL 或 LR）统一用当前配置方向，横排保持。
+        // 保证历史/缓存命中的气泡（方向可能是旧设置时存的）也按当前设置实时渲染。
+        // ⚠️ 与字号模式（自动/非自动）**无关**：覆盖发生在排版之前，两条路径吃的是同一份 direction。
+        val effectiveRegions = applyVerticalDirectionOverride(regions, verticalDirection)
+
+        // Phase 1: 每气泡的绘制参数（文字、字号、所需矩形）
+        val params = effectiveRegions.map { region ->
+            // 实际显示的文字：原文模式用 originalText，否则用译文
+            // 注意：⚡ 标志只用于翻译进程中的内存缓存命中（isInMemoryCache），数据库反序列化的 bubbles 永远不显示 ⚡
+            // ⚠️ 这里跑译文文本规则：① 点串归一化（修复前存进库的 `.\n.\n.` 也要正常显示）
+            // ② 用户「译文替换表」。两步都幂等；放在渲染层 = 改完规则**重新渲染即生效，不用重翻**。
+            val rawText = if (useOriginalText) {
+                region.originalText
+            } else if (region.isInMemoryCache && showCacheMarker) {
+                "⚡${region.translatedText}"
+            } else {
+                region.translatedText
+            }
+            // ⚠️ 替换表只作用于**译文**：三态切到「原文」时不能把用户规则套在识别原文上
+            // （否则用户看到的"原文"是被改过的）。点串归一化两边都做 —— 它只是显示层修复。
+            val displayText = if (useOriginalText) {
+                TranslationTextRules.normalizeEllipsis(rawText)
+            } else {
+                TranslationTextRules.process(rawText, replacementRules)
+            }
+            // 自动模式的字号由 LayoutEngine 在绘制时按最终 drawRect 二分选定，此处不预估。
+            // ⚠️ 估计值只服务非自动路径的 calculateCompactRect：它决定 drawRect（收缩贴合 / 扩展），
+            // 而自动模式的 drawRect 恒为原气泡。
+            val fitFontSize = if (autoFit) {
+                region.fontSize
+            } else {
+                fontSize
+            }
+            // 自动模式：drawRect 用原始气泡（覆盖原文区域），文字靠 fit 字号 + 列距填满气泡宽
+            // 非自动模式：drawRect 贴合文字（收缩居中/平衡扩展）
+            val neededRect = if (autoFit) {
+                region.rect
+            } else {
+                // 非自动模式：字号由用户定，矩形随文字实际尺寸扩展/收缩（见 calculateCompactRect）
+                calculateCompactRect(
+                    region.rect, displayText, region.direction, fitFontSize,
+                    trackingRatio, leadingRatio, LayoutEngine.MIN_PADDING_DP * density, align
+                )
+            }
+            Param(region, displayText, fitFontSize, neededRect)
+        }
+
+        // Phase 2: neededRect 重叠的气泡合并成组（union-find 传递闭包）
+        val groupOf = if (mergeOverlap) mergeOverlapping(params) else IntArray(params.size) { it }
+
+        // Phase 3: 构建绘制单元。同方向合并组 → 一个大白块 + 记号分隔；异方向/倾斜/字号不一致 → 独立绘制
+        val drawItems = mutableListOf<DrawItem>()
+        params.indices.groupBy { groupOf[it] }.forEach { (_, ids) ->
+            val members = ids.map { params[it] }.filter { it.displayText.isNotEmpty() }
+            if (members.isEmpty()) return@forEach
+            // ⚠️ 「字号一致」这条只对**非自动**模式成立：那里字号由用户定，差异大时合并会比例失调。
+            // 自动模式下合并块由 LayoutEngine 的一次排版统一决定字号，「成员字号要一致」不再必要 ——
+            // 保留它反而会让原本能合并的组退回独立绘制，丢失 ◇ 分隔白块。
+            val sameFontOk = autoFit ||
+                members.all { kotlin.math.abs(it.fitFontSize - members[0].fitFontSize) < 2f }
+            if (members.size == 1) {
+                val m = members[0]
+                drawItems += DrawItem(
+                    m.neededRect, listOf(m.displayText), m.region.direction, m.fitFontSize,
+                    merged = false, m.region.angle, m.region.centerX, m.region.centerY
+                )
+            } else if (members.all { !hasTilt(it.region) } &&
+                members.all { it.region.direction == members[0].region.direction } &&
+                sameFontOk
+            ) {
+                // 同方向、无倾斜、字号一致 → 合并为一个白块，组内用记号分隔
+                drawItems += buildMergedItem(members)
+            } else {
+                // 异方向/倾斜/字号差异 → 各自独立绘制（不合并，允许重叠）
+                members.forEach { m ->
+                    drawItems += DrawItem(
+                        m.neededRect, listOf(m.displayText), m.region.direction, m.fitFontSize,
+                        merged = false, m.region.angle, m.region.centerX, m.region.centerY
+                    )
+                }
+            }
+        }
+
+        // 绘制（面积降序，避免小单元被大单元的白块覆盖）
+        val bgPaint = Paint().apply {
+            color = bgColor
+            style = Paint.Style.FILL
+        }
+        drawItems.sortedByDescending { it.drawRect.width() * it.drawRect.height() }.forEach { item ->
+            canvas.save()
+            if (kotlin.math.abs(item.angle) > 0.5f) {
+                canvas.rotate(item.angle, item.centerX, item.centerY)
+            }
+            canvas.save()
+            canvas.clipRect(item.drawRect)
+            // 在气泡框内重新铺一遍底图（白块是**半透明**的，底下这层原画是"透出来"的来源）。
+            //
+            // ⚠️ **必须映射到「坐标空间」的矩形，不能写 `drawBitmap(original, 0f, 0f, null)`**：
+            // 上面已经 `canvas.scale(scale, scale)`，而 `original` 的**像素尺寸**是
+            // `坐标空间 × baseScale` —— 直接按 0,0 落笔在超分底图那一路（baseScale = 2）
+            // 会画出 2 倍大的图，框内透出的是**放大的左上角裁片**（错位内容）。
+            // 映射到 `(0,0,spaceW,spaceH)` 之后，无论 baseScale 是多少都与结果位图逐像素对齐，
+            // 也就是"重新铺一层已经在那儿的底图"（baseScale = 1 时与原写法逐像素等价）。
+            canvas.drawBitmap(
+                original, null,
+                android.graphics.RectF(0f, 0f, g.spaceW.toFloat(), g.spaceH.toFloat()),
+                null
+            )
+            canvas.restore()
+
+            canvas.drawRect(item.drawRect, bgPaint)
+
+            canvas.save()
+            canvas.clipRect(item.drawRect)
+            val text = if (item.merged) {
+                val sep = if (item.direction == TextDirection.HORIZONTAL) HORIZONTAL_SEPARATOR else VERTICAL_SEPARATOR
+                item.displayTexts.joinToString(sep)
+            } else {
+                item.displayTexts[0]
+            }
+            // 统一排版内核：字号选择 + 断行/分列 + 字距行距分配一次算完，产物保证不越出 drawRect。
+            // 自动模式由内核二分选字号；非自动模式字号原样、间距不拉伸（见三态行为矩阵）。
+            val layout = LayoutEngine.plan(
+                measurer = PaintTextMeasurer(Paint().apply { isAntiAlias = true; typeface = fontTypeface }),
+                text = text,
+                region = Box.from(item.drawRect),
+                direction = item.direction,
+                requestedFontSize = item.fitFontSize,
+                autoFit = autoFit,
+                align = align,
+                trackingRatio = trackingRatio,
+                leadingRatio = leadingRatio,
+                // 绝对内边距：竖排左右、横排上下都留白，文字不贴 overlay 边缘。
+                // 用 px 而非「字号×比例」—— 自动字号会把字缩小，比例边距同步退化成 0。
+                minPaddingPx = LayoutEngine.MIN_PADDING_DP * density
+            )
+            VerticalTextRenderer.draw(canvas, layout, textColor, fontTypeface)
+            canvas.restore()
+            canvas.restore()
+        }
+
+        return result
+    }
+
+    private fun hasTilt(region: TranslatedBubble): Boolean = kotlin.math.abs(region.angle) > 0.5f
+
+    /**
+     * 渲染时的**竖排方向覆盖**（纯函数，供 [renderOverlay] 与单测共用）：
+     * 所有竖排气泡（RL/LR）统一改成 [direction]；横排原样保留；[direction] 为 null = 不改。
+     *
+     * 语义边界（两条都别动）：
+     * - **只改写竖排**：横排的列序语义是"上→下、左→右"，被改成 RL/LR 会把送进翻译/显示的顺序弄错。
+     * - **与字号模式无关**：覆盖只改 `direction` 字段，自动/非自动字号吃的是同一份结果 ——
+     *   「自动字号关闭时设置失效」那类问题只可能出在排版/绘制入口，不会出在这里。
+     */
+    internal fun applyVerticalDirectionOverride(
+        regions: List<TranslatedBubble>,
+        direction: TextDirection?
+    ): List<TranslatedBubble> {
+        if (direction == null) return regions
+        return regions.map { r ->
+            if (r.direction == TextDirection.VERTICAL_RL || r.direction == TextDirection.VERTICAL_LR) {
+                r.copy(direction = direction)
+            } else r
+        }
+    }
+
+    /** union-find：neededRect 两两相交 → 归为同一合并组 */
+    private fun mergeOverlapping(params: List<Param>): IntArray {
+        val n = params.size
+        val parent = IntArray(n) { it }
+        fun find(x: Int): Int {
+            if (parent[x] != x) parent[x] = find(parent[x])
+            return parent[x]
+        }
+        for (i in 0 until n) {
+            for (j in i + 1 until n) {
+                if (Rect.intersects(params[i].neededRect, params[j].neededRect)) {
+                    val ri = find(i)
+                    val rj = find(j)
+                    if (ri != rj) parent[rj] = ri
+                }
+            }
+        }
+        return IntArray(n) { find(it) }
+    }
+
+    /**
+     * 同方向合并组：各成员文本用记号连接成一个绘制单元。
+     *
+     * ⚠️ **绘制区恒等于「成员气泡区域的并集」，与合并后文字有多长无关** —— 这是硬约束，
+     * 踩过很惨的一次：旧实现按**文本长度**反推块尺寸（`balancedVerticalSize(合并文本长度, …)`
+     * 定宽、`maxOf(高度, 文字块高)` 定高，还不够就 `maxOf(blockSize, …)` 撑），
+     * 而块内字号又由 `LayoutEngine` 按**块尺寸**二分选定（区域越大字号上限越高），
+     * 于是「文本越长 → 块越大 → 字号越大 → 文本需要更多地方」形成正反馈 ——
+     * 真机上直接并出一个盖住大半页、里面文字同样巨大的白块。
+     * 按气泡取并集后，块永远不会超出这些气泡原本占的地方，字号也就跟着落回正常量级。
+     *
+     * 组内文本按阅读顺序用记号（[VERTICAL_SEPARATOR]/[HORIZONTAL_SEPARATOR]）连接后交给
+     * `LayoutEngine` 排版；文本超出并集区域时由它自行缩字号/断行，**不截断、也不越界**。
+     */
+    private fun buildMergedItem(members: List<Param>): DrawItem {
+        val direction = members[0].region.direction
+        val fontSize = members[0].fitFontSize
+        // 按各方向阅读顺序排列成员：
+        // VERTICAL_RL 列从右往左（右列先、同列上先）；VERTICAL_LR/HORIZONTAL 左→右、上→下
+        val sorted = when (direction) {
+            TextDirection.VERTICAL_RL -> members.sortedWith(
+                compareByDescending<Param> { it.neededRect.right }.thenBy { it.neededRect.top }
+            )
+            TextDirection.VERTICAL_LR -> members.sortedWith(
+                compareBy<Param> { it.neededRect.left }.thenBy { it.neededRect.top }
+            )
+            TextDirection.HORIZONTAL -> members.sortedWith(
+                compareBy<Param> { it.neededRect.top }.thenBy { it.neededRect.left }
+            )
+        }
+        val texts = sorted.map { it.displayText }
+        // 并集：必须用**成员的气泡矩形**（region.rect），不是非自动模式下扩过的 neededRect ——
+        // 「绝不超出原始两个气泡占据的空间」以气泡为准。
+        val drawRect = Rect(
+            members.minOf { it.region.rect.left },
+            members.minOf { it.region.rect.top },
+            members.maxOf { it.region.rect.right },
+            members.maxOf { it.region.rect.bottom }
+        )
+        return DrawItem(drawRect, texts, direction, fontSize, merged = true)
+    }
+
+    /**
+     * 非自动模式专用：计算文字实际所需矩形（字号由用户定，本函数只决定白块大小）。
+     *
+     * 用户明确要求：**大文字超出原气泡就扩展、小文字就收缩**，且边距统一、
+     * 字号/字间距/行间距严格等于用户设定值。因此这里用 [LayoutEngine] 在**不限尺寸**的
+     * 虚构区域里量一次文字块的真实尺寸：
+     * - 任意文本都能精确量出（旧实现套用「平衡扩展」公式，与绘制未必一致 → 极长文本可能裁切）
+     * - 用户字距/行距被如实计入（旧实现只加 padding，间距调大了就会被裁）
+     *
+     * 两侧边距严格相等：增长时以原气泡中心为锚点双向扩展（旧实现锚在「文字流向起始角」，
+     * 只往一侧长，看着像偏了）。
+     *
+     * ⚠️ **横排时白块的水平位置遵循用户「横排对齐」**（[align]）：非自动模式的白块会收缩到
+     * 文字本身，若恒居中就等于**在这条路径上「横排对齐」设置完全失效** —— RT-DETR 选
+     * 「横排渲染」时最明显（它的选区是宽矩形气泡框，文字通常远窄于框）。竖排不吃对齐设置，恒居中。
+     */
+    private fun calculateCompactRect(
+        rect: Rect,
+        text: String,
+        direction: TextDirection,
+        fontSize: Float,
+        trackingRatio: Float,
+        leadingRatio: Float,
+        minPaddingPx: Float,
+        align: TextAlign = TextAlign.CENTER
+    ): Rect {
+        if (text.isEmpty() || fontSize <= 0f) return rect
+        val pad = LayoutEngine.paddingFor(
+            rect.width().toFloat(), rect.height().toFloat(), minPaddingPx
+        ).toInt()
+
+        // 量尺寸的区域：**只让「生长轴」无界**，另一轴沿用气泡尺寸以保持原有形状比例。
+        // ⚠️ 两轴都设无界是错的：竖排的每列容量由高度决定，高度无界 ⇒ 永远 1 列 ⇒ 文字块变成
+        // 一根极细极高的柱子（实测踩过）。横排向右排、向下生长；竖排向下排、向两侧生长。
+        val huge = if (direction == TextDirection.HORIZONTAL) {
+            Rect(0, 0, rect.width(), 1 shl 20)
+        } else {
+            Rect(0, 0, 1 shl 20, rect.height())
+        }
+        val measured = LayoutEngine.plan(
+            measurer = PaintTextMeasurer(Paint().apply { textSize = fontSize; isAntiAlias = true }),
+            text = text,
+            region = Box.from(huge),
+            direction = direction,
+            requestedFontSize = fontSize,
+            autoFit = false,
+            align = TextAlign.LEFT,
+            trackingRatio = trackingRatio,
+            leadingRatio = leadingRatio,
+            minPaddingPx = 0f          // 尺寸已含 padding，这里不再叠加
+        )
+        if (measured.isEmpty) return rect
+
+        val w = (measured.totalWidth + 2 * pad).toInt().coerceAtLeast(1)
+        val h = (measured.totalHeight + 2 * pad).toInt().coerceAtLeast(1)
+
+        // 以原气泡中心为锚点：文字块比气泡小就收缩（露出原图），大就向外扩展
+        // ⚠️ 只有**白块装得进气泡**时才按对齐摆放：装不下说明文字比气泡还宽，那必须对称生长，
+        // 否则白块会朝一侧溢出、盖住相邻画面。
+        val fitsInside = direction == TextDirection.HORIZONTAL && w <= rect.width() - 2 * pad
+        val left = if (fitsInside) {
+            when (align) {
+                TextAlign.LEFT -> rect.left + pad
+                TextAlign.RIGHT -> rect.right - pad - w
+                TextAlign.CENTER -> rect.centerX() - w / 2
+            }
+        } else {
+            rect.centerX() - w / 2
+        }
+        val top = rect.centerY() - h / 2
+        return Rect(left, top, left + w, top + h)
+    }
+}

@@ -1,0 +1,48 @@
+<?xml version="1.0" encoding="utf-8"?>
+<LinearLayout xmlns:android="http://schemas.android.com/apk/res/android"
+    android:layout_width="match_parent"
+    android:layout_height="wrap_content"
+    android:orientation="vertical"
+    android:layout_marginTop="4dp">
+
+    <!-- 会话标题栏（时间 + 下载按钮） -->
+    <LinearLayout
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        android:orientation="horizontal"
+        android:gravity="center_vertical"
+        android:paddingHorizontal="24dp"
+        android:paddingVertical="6dp">
+
+        <TextView android:ellipsize="end" android:maxLines="1" android:autoSizeTextType="uniform" android:autoSizeMinTextSize="10sp" android:autoSizeMaxTextSize="12sp" android:autoSizeStepGranularity="1sp" 
+            android:id="@+id/tvSessionHeader"
+            android:layout_width="0dp"
+            android:layout_height="wrap_content"
+            android:layout_weight="1"
+            android:textColor="@color/text_tertiary"
+            android:textSize="12sp" />
+
+        <!-- 下载按钮 -->
+        <TextView
+            android:id="@+id/btnDownloadSession"
+            android:layout_width="wrap_content"
+            android:layout_height="wrap_content"
+            android:text="⬇"
+            android:textColor="@color/text_tertiary"
+            android:textSize="14sp"
+            android:paddingStart="12dp"
+            android:paddingEnd="4dp"
+            android:clickable="true"
+            android:focusable="true"
+            android:background="?attr/selectableItemBackgroundBorderless"
+            android:visibility="gone" />
+    </LinearLayout>
+
+    <!-- 会话内的历史记录 -->
+    <androidx.recyclerview.widget.RecyclerView
+        android:id="@+id/rvSessionEntries"
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        android:nestedScrollingEnabled="false" />
+
+</LinearLayout>

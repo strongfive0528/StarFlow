@@ -1,0 +1,486 @@
+/*
+ * Copyright (C) 2024 murangogo
+ *
+ * This library is free software; you can redistribute it and/or modify it under
+ * the terms of the GNU Lesser General Public License as published by the Free
+ * Software Foundation; either version 3 of the License, or (at your option)
+ * any later version.
+ *
+ * This library is distributed in the hope that it will be useful, but WITHOUT
+ * ANY WARRANTY; without even the implied warranty of MERCHANTABILITY or FITNESS
+ * FOR A PARTICULAR PURPOSE. See the GNU Lesser General Public License for more details.
+ *
+ * You should have received a copy of the GNU Lesser General Public License along
+ * with this library; if not, write to the Free Software Foundation, Inc.,
+ * 59 Temple Place, Suite 330, Boston, MA 02111-1307 USA
+ */
+
+package com.moe.starflow.translate.widget
+import com.moe.starflow.translate.widget.*
+import com.moe.starflow.translate.*
+import com.moe.starflow.manga.*
+import com.moe.starflow.manga.engine.*
+import com.moe.starflow.manga.types.*
+import com.moe.starflow.manga.config.*
+import com.moe.starflow.translate.autotranslate.*
+import com.moe.starflow.translate.screenshot.*
+
+import android.annotation.SuppressLint
+import android.content.Context
+import android.util.AttributeSet
+import android.graphics.Canvas
+import android.graphics.Color
+import android.graphics.Paint
+import android.graphics.Point
+import android.graphics.RectF
+import android.graphics.Typeface
+import android.util.Log
+import android.view.MotionEvent
+import android.view.View
+import android.view.ViewTreeObserver
+import com.moe.starflow.utils.LogCollector
+
+const val RECT_MIN_WIDTH = 50f//框选的最小宽度px
+const val RECT_MIN_HEIGHT = 50f//框选的最小高度px
+
+/** 本组件日志 tag：几何相关排查（横竖屏框选）都看它 */
+private const val TAG_CROP = "CropView"
+
+class CropView @JvmOverloads constructor(
+    ctx: Context,
+    attrs: AttributeSet? = null
+) : View(ctx, attrs) {
+    private val mActionMovePoint = Point()  //point，储存x，y两个坐标
+    private val mOriPoint = Point() //point，储存原来的x，y两个坐标
+    val absolutePointOffset = Point() //point，绝对坐标偏移量
+    lateinit var mRect : RectF  //矩形信息，mRect即为最初的矩形
+    private lateinit var mInitRect : RectF  //最开始的裁剪框
+    private var mRectLeft : RectF = RectF() //左侧矩形阴影区域
+    private var mRectTop : RectF = RectF()  //上侧矩形阴影区域
+    private var mRectRight : RectF = RectF()    //右侧矩形阴影区域
+    private var mRectBottom : RectF = RectF()   //下侧矩形阴影区域
+    private var mPressPointIndex = -1   //按下的8个顶点的编号，0-7表示顶点，-1表示松手
+    private var actionDownRectLeft = 0f //按下时的左
+    private var actionDownRectTop = 0f  //按下时的顶
+    private var actionDownRectRight = 0f    //按下时的右
+    private var actionDownRectBottom = 0f   //按下时的底
+
+    // 确认按钮
+    private val confirmButtonRect = RectF()
+    var onConfirmCrop: (() -> Unit)? = null
+
+    /** 比例框：最近一次 setRectCentered 用的比例，窗口尺寸变化时按它重算 */
+    private var lastWidthRatio = 0.9f
+    private var lastHeightRatio = 0.35f
+    /** 是否已有**用户确认过的**框（setRect 传入）；只有它才在几何变化时保留 */
+    private var hasExplicitRect = false
+    /**
+     * 当前 mRect 是否有效可用。
+     *
+     * 与 [hasExplicitRect] 的区别：`setRectCentered` 算出来的框**也是有效的**
+     * （用户上次就是这么看到它、只是没动过），几何没变时应当**原样保留** ——
+     * 否则每次打开框选界面都重新居中，用户看不到自己上次的框。
+     * 只有 `setRect` 传进来的已确认框才标记 [hasExplicitRect]。
+     */
+    private var hasValidRect = false
+
+    /**
+     * 禁用裁剪框**内部**拖动（position == 8）。
+     * 默认 false：维持原行为，框内触摸 = 移动整个裁剪框。
+     * 设为 true：框内触摸透传给下层 ImageView（典型用法：让 ZoomableImageView 接管缩放/平移）。
+     * 8 个 corner/edge 手柄（position 0-7）不受影响，仍可 resize 裁剪框。
+     */
+    var disableInternalDrag: Boolean = false
+
+    fun setRect(rectF: RectF) {  //设置初始矩形宽高
+        mRect = RectF(rectF)
+        mInitRect = RectF(rectF)
+        hasExplicitRect = true
+        hasValidRect = true
+
+        // 等待视图布局完成后再获取位置
+        viewTreeObserver.addOnGlobalLayoutListener(object : ViewTreeObserver.OnGlobalLayoutListener {
+            override fun onGlobalLayout() {
+                // 获取位置
+                absolutePointOffset.x = getViewOffset().x
+                absolutePointOffset.y = getViewOffset().y
+                Log.d("OFFSET", "x: ${absolutePointOffset.x} y: ${absolutePointOffset.y}")
+
+                // 移除监听器，避免重复调用
+                viewTreeObserver.removeOnGlobalLayoutListener(this)
+            }
+        })
+    }
+
+    /**
+     * 刷新 [absolutePointOffset]（= 本窗口左上角在**显示**上的位置）。
+     *
+     * ⚠️ 不能在 `onSizeChanged` 里直接取：那时窗口刚 resize，WMS 还没定位完，
+     * `getLocationOnScreen` 会返回 (0,0)（实测：窗口真原点 (138,0)，此处读到 (0,0)）。
+     * 而消费方（截图裁剪 / 结果浮层定位）在框选确认后读这个值，届时视图已被移除，
+     * 再想取就取不到了 —— 必须趁窗口还在、且**已经定位完成**时抓下来。
+     * `post` 排在本次布局之后执行，是能拿到真实位置的最近时机。
+     */
+    private fun refreshAbsoluteOffset() {
+        post {
+            val loc = IntArray(2)
+            getLocationOnScreen(loc)
+            if (loc[0] != absolutePointOffset.x || loc[1] != absolutePointOffset.y) {
+                absolutePointOffset.x = loc[0]
+                absolutePointOffset.y = loc[1]
+                LogCollector.d(TAG_CROP, "absolutePointOffset 更新为 (${loc[0]},${loc[1]})")
+            }
+        }
+    }
+
+    /**
+     * 用 view **自身尺寸**设置居中初始框选区域。
+     *
+     * ⚠️ 必须在拿到新几何之后算。overlay 窗口是「removeView → 改 LayoutParams → 再 addView」
+     * 来换尺寸的，参数更新后 `width/height` 要等下一次 traversal 才变。旧实现把算框
+     * 全押在 `OnGlobalLayout` 上，而这个监听器**对重新挂载不保证触发** —— 不触发就拿着
+     * 上一次（很可能是竖屏）的尺寸算框，横屏下叠出竖屏比例的框。
+     *
+     * 现在的分工：尺寸已就绪 → 立即算；未就绪 → 由 [onSizeChanged] 接手（它一定会在
+     * 新几何布局完成时被调用）。
+     *
+     * @param widthRatio 框选宽度占 view 宽度的比例
+     * @param heightRatio 框选高度占 view 高度的比例
+     */
+    fun setRectCentered(widthRatio: Float, heightRatio: Float) {
+        lastWidthRatio = widthRatio
+        lastHeightRatio = heightRatio
+        // ⚠️ 不在这里清 hasExplicitRect：框选界面每次打开都会调本方法（服务侧在
+        // 「无已确认框」时走的正是这条路），清了就等于每次重新居中 ——
+        // 用户看不到自己上次的框。真正的失效由【几何比对】负责（见 onSizeChanged）。
+        if (hasValidRect && hasExplicitRect && fitsIn(width, height)) {
+            LogCollector.d(TAG_CROP, "setRectCentered: 几何未变，保留已确认的框 $mRect")
+            return
+        }
+        hasExplicitRect = false
+        hasValidRect = false
+        if (width > 0 && height > 0) {
+            centerRect(width, height, widthRatio, heightRatio)
+        } else {
+            Log.d(TAG_CROP, "setRectCentered: 尚无尺寸，等 onSizeChanged 接手")
+        }
+    }
+
+    /**
+     * 窗口尺寸变化时重算框。
+     *
+     * ⚠️ overlay 窗口用 MATCH_PARENT，真实横竖由窗口几何体现。窗口尺寸一变（旋转，
+     * 或服务给的尺寸与显示不一致），旧框在新几何里可能整个落在外面 —— 那时用户看到的
+     * 是全屏遮罩、拖动一松手又被 ACTION_UP 的边界钳制拉走。所以：显式设过框且放得下 →
+     * 保留用户选择；否则按比例重新居中。
+     */
+    override fun onSizeChanged(w: Int, h: Int, oldw: Int, oldh: Int) {
+        super.onSizeChanged(w, h, oldw, oldh)
+        if (w <= 0 || h <= 0) return
+        // 这是本进程里唯一**不可能被冻结**的屏幕几何来源：窗口是 WMS 在当前配置下真布局出来的。
+        // ⚠️ 但窗口**不等于**屏幕：系统可能因手势条/导航栏把它缩小（实测竖屏 display 1220x2712
+        // 而 MATCH_PARENT 的窗口只有 1220x2660，原点却仍是 0）。是否被缩小交给
+        // DisplaySize.size() 与 Display 读数取较大者处理，这里只如实上报窗口几何。
+        com.moe.starflow.utils.DisplaySize.reportLaidOutSize(w, h)
+        val rectDesc = if (::mRect.isInitialized) mRect.toString() else "未初始化"
+        LogCollector.d(TAG_CROP, "onSizeChanged ${oldw}x$oldh -> ${w}x$h rect=$rectDesc 显式=$hasExplicitRect")
+        if (!hasValidRect || !::mRect.isInitialized || !fitsIn(w, h)) {
+            // 几何变化（或框放不下）→ 旧框作废，按比例重新居中（centerRect 会置 hasValidRect）
+            hasExplicitRect = false
+            centerRect(w, h, lastWidthRatio, lastHeightRatio)
+        }
+    }
+
+    /** 框是否完整落在 w×h 内（与 ACTION_UP 的边界钳制口径一致） */
+    private fun fitsIn(w: Int, h: Int): Boolean =
+        mRect.left >= 0f && mRect.top >= 0f && mRect.right <= w.toFloat() && mRect.bottom <= h.toFloat()
+
+    private fun centerRect(w: Int, h: Int, widthRatio: Float, heightRatio: Float) {
+        val rectWidth = w * widthRatio
+        val rectHeight = h * heightRatio
+        val left = (w - rectWidth) / 2f
+        val top = (h - rectHeight) / 2f
+        mRect = RectF(left, top, left + rectWidth, top + rectHeight)
+        mInitRect = RectF(mRect)
+        hasValidRect = true
+        refreshAbsoluteOffset()
+        invalidate()
+        LogCollector.d(
+            TAG_CROP,
+            "centerRect view=${w}x$h ratio=$widthRatio/$heightRatio → rect=$mRect"
+        )
+    }
+
+    @SuppressLint("DrawAllocation")
+    override fun onDraw(canvas: Canvas) {
+        super.onDraw(canvas)
+        val paint = Paint() //新建画笔
+        paint.color = Color.argb(136, 250, 199, 183) //画笔颜色，未被框选位置的透明黑色
+        paint.style = Paint.Style.FILL //设置画笔为填充，即填充未被框选部位的颜色（默认也是填充，这句代码可不写）
+        mRectTop.set(0f, 0f, width.toFloat(), mRect.top)
+        mRectLeft.set(0f, mRect.top, mRect.left, mRect.bottom)
+        mRectRight.set(mRect.right, mRect.top, width.toFloat(), mRect.bottom)
+        mRectBottom.set(0f, mRect.bottom, width.toFloat(), height.toFloat())
+        canvas.drawRect(mRectLeft, paint)
+        canvas.drawRect(mRectTop, paint)
+        canvas.drawRect(mRectRight, paint)
+        canvas.drawRect(mRectBottom, paint)
+
+        paint.color = Color.rgb(93,79,87) //画笔颜色，不必多说
+        paint.style = Paint.Style.STROKE //设置填充样式
+        paint.strokeWidth = 4f //画笔宽度
+        canvas.drawRect(mRect, paint) //开画选择框
+
+        //下面这些是画8个较粗边框的代码
+        val midHorizontal = (mRect.left + mRect.right) / 2 //水平方向中点
+        val midVertical = (mRect.top + mRect.bottom) / 2 //垂直方向中点
+        paint.strokeWidth = 10f
+        val pts = floatArrayOf(
+            mRect.left - 5, mRect.top, mRect.left + 40, mRect.top,
+            midHorizontal - 20, mRect.top, midHorizontal + 20, mRect.top,
+            mRect.right - 40, mRect.top, mRect.right + 5, mRect.top,
+            mRect.left, mRect.top, mRect.left, mRect.top + 40,
+            mRect.right, mRect.top, mRect.right, mRect.top + 40,
+            mRect.left, midVertical - 20, mRect.left, midVertical + 20,
+            mRect.right, midVertical - 20, mRect.right, midVertical + 20,
+            mRect.left, mRect.bottom, mRect.left, mRect.bottom - 40,
+            mRect.right, mRect.bottom, mRect.right, mRect.bottom - 40,
+            mRect.left - 5, mRect.bottom, mRect.left + 40, mRect.bottom,
+            midHorizontal - 20, mRect.bottom, midHorizontal + 20, mRect.bottom,
+            mRect.right - 40, mRect.bottom, mRect.right + 5, mRect.bottom
+        )
+        canvas.drawLines(pts, paint)
+
+        // 绘制确认按钮（框选内部底部，半透明）
+        val btnWidth = 240f
+        val btnHeight = 75f
+        val btnGap = 15f
+        val btnX = (mRect.left + mRect.right - btnWidth) / 2
+        val btnY = mRect.bottom - btnHeight - btnGap
+        confirmButtonRect.set(btnX, btnY, btnX + btnWidth, btnY + btnHeight)
+
+        val btnPaint = Paint().apply {
+            color = Color.argb(160, 66, 133, 244)
+            style = Paint.Style.FILL
+            isAntiAlias = true
+        }
+        canvas.drawRoundRect(confirmButtonRect, 30f, 30f, btnPaint)
+
+        val textPaint = Paint().apply {
+            color = Color.WHITE
+            textSize = 36f
+            textAlign = Paint.Align.CENTER
+            isAntiAlias = true
+            typeface = Typeface.DEFAULT_BOLD
+        }
+        canvas.drawText("确认", confirmButtonRect.centerX(), confirmButtonRect.centerY() + 18f, textPaint)
+    }
+
+    private fun getViewOffset(): Point {
+        val location = IntArray(2)
+        this.getLocationOnScreen(location)
+        return Point(location[0], location[1])
+    }
+
+    override fun onTouchEvent(event: MotionEvent): Boolean {
+
+        mActionMovePoint.x = event.x.toInt() //获取触摸的x坐标
+        mActionMovePoint.y = event.y.toInt() //获取触摸的y坐标
+
+        when (event.action) {
+            MotionEvent.ACTION_DOWN -> {
+                // 检查确认按钮点击
+                if (confirmButtonRect.contains(
+                        mActionMovePoint.x.toFloat(),
+                        mActionMovePoint.y.toFloat()
+                    )
+                ) {
+                    onConfirmCrop?.invoke()
+                    return true
+                }
+
+                mOriPoint.x = event.x.toInt()
+                mOriPoint.y = event.y.toInt()
+                actionDownRectLeft = mRect.left //按下左 = 原来左
+                actionDownRectTop = mRect.top //按下顶 = 原来顶
+                actionDownRectRight = mRect.right //按下右 = 原来右
+                actionDownRectBottom = mRect.bottom //按下底 = 原来底
+                // 关键修复：ACTION_DOWN 时锁定 mPressPointIndex 给后续 ACTION_MOVE 用。
+                // 缺少这一行，ACTION_MOVE 第一帧如果触摸点已经移出 50px 手柄区，
+                // getPosition 重算会返回 -1 → onTouchEvent 返回 false → 事件透传，
+                // 8 个手柄 resize 完全失效。
+                mPressPointIndex = getPosition(
+                    mActionMovePoint.x.toFloat(),
+                    mActionMovePoint.y.toFloat()
+                )
+                return mPressPointIndex != -1 //如果焦点不在八个点上则不消耗事件，由DragScaleView来处理
+            }
+
+            MotionEvent.ACTION_MOVE -> {
+                when (getPosition(mActionMovePoint.x.toFloat(), mActionMovePoint.y.toFloat())) {
+                    0 -> {
+                        mRect.left = mActionMovePoint.x.toFloat() //更新矩形框顶点
+                        mRect.top = mActionMovePoint.y.toFloat() //更新矩形框顶点
+                        //设置裁剪框可缩放到的最小区域大小
+                        if (actionDownRectRight - mActionMovePoint.x < RECT_MIN_WIDTH) {  //如果右减左（矩形框的宽）小于最小宽度
+                            mRect.left = actionDownRectRight - RECT_MIN_WIDTH //则矩形框宽度变为最小宽度
+                        }
+                        if (actionDownRectBottom - mActionMovePoint.y < RECT_MIN_HEIGHT) {    //如果下减上（矩形框的高）小于最小高度
+                            mRect.top = actionDownRectBottom - RECT_MIN_HEIGHT //则矩形框高度变为最小高度
+                        }
+                        mPressPointIndex = 0 //因为在拖动，因此不改变编号
+                    }
+
+                    1 -> {
+                        mRect.top = mActionMovePoint.y.toFloat()
+                        if (actionDownRectBottom - mActionMovePoint.y < RECT_MIN_HEIGHT) {
+                            mRect.top = actionDownRectBottom - RECT_MIN_HEIGHT
+                        }
+                        mPressPointIndex = 1
+                    }
+
+                    2 -> {
+                        mRect.right = mActionMovePoint.x.toFloat()
+                        mRect.top = mActionMovePoint.y.toFloat()
+                        if (mActionMovePoint.x - actionDownRectLeft < RECT_MIN_WIDTH) {
+                            mRect.right = actionDownRectLeft + RECT_MIN_WIDTH
+                        }
+                        if (actionDownRectBottom - mActionMovePoint.y < RECT_MIN_HEIGHT) {
+                            mRect.top = actionDownRectBottom - RECT_MIN_HEIGHT
+                        }
+                        mPressPointIndex = 2
+                    }
+
+                    3 -> {
+                        mRect.left = mActionMovePoint.x.toFloat()
+                        if (actionDownRectRight - mActionMovePoint.x < RECT_MIN_WIDTH) {
+                            mRect.left = actionDownRectRight - RECT_MIN_WIDTH
+                        }
+                        mPressPointIndex = 3
+                    }
+
+                    4 -> {
+                        mRect.right = mActionMovePoint.x.toFloat()
+                        if (mActionMovePoint.x - actionDownRectLeft < RECT_MIN_WIDTH) {
+                            mRect.right = actionDownRectLeft + RECT_MIN_WIDTH
+                        }
+                        mPressPointIndex = 4
+                    }
+
+                    5 -> {
+                        mRect.left = mActionMovePoint.x.toFloat()
+                        mRect.bottom = mActionMovePoint.y.toFloat()
+                        if (actionDownRectRight - mActionMovePoint.x < RECT_MIN_WIDTH) {
+                            mRect.left = actionDownRectRight - RECT_MIN_WIDTH
+                        }
+                        if (mActionMovePoint.y - actionDownRectTop < RECT_MIN_HEIGHT) {
+                            mRect.bottom = actionDownRectTop + RECT_MIN_HEIGHT
+                        }
+                        mPressPointIndex = 5
+                    }
+
+                    6 -> {
+                        mRect.bottom = mActionMovePoint.y.toFloat()
+                        if (mActionMovePoint.y - actionDownRectTop < RECT_MIN_HEIGHT) {
+                            mRect.bottom = actionDownRectTop + RECT_MIN_HEIGHT
+                        }
+                        mPressPointIndex = 6
+                    }
+
+                    7 -> {
+                        mRect.right = mActionMovePoint.x.toFloat()
+                        mRect.bottom = mActionMovePoint.y.toFloat()
+                        if (mActionMovePoint.x - actionDownRectLeft < RECT_MIN_WIDTH) {
+                            mRect.right = actionDownRectLeft + RECT_MIN_WIDTH
+                        }
+                        if (mActionMovePoint.y - actionDownRectTop < RECT_MIN_HEIGHT) {
+                            mRect.bottom = actionDownRectTop + RECT_MIN_HEIGHT
+                        }
+                        mPressPointIndex = 7
+                    }
+
+                    8 -> {
+                        //x的更新策略
+                        if ((mRect.left <= 5) && (mActionMovePoint.x - mOriPoint.x < 0)) {    //贴近左边缘
+                            Log.d("Message", "close to left edge")
+                        } else if ((mRect.right >= width - 5) && (mActionMovePoint.x - mOriPoint.x > 0)) { //贴近右边缘
+                            Log.d("Message", "close to right edge")
+                        } else {
+                            mRect.left = mRect.left + (mActionMovePoint.x - mOriPoint.x)
+                            mRect.right = mRect.right + (mActionMovePoint.x - mOriPoint.x)
+                        }
+                        //y的更新策略
+                        if ((mRect.top <= 5) && (mActionMovePoint.y - mOriPoint.y) < 0) {    //贴近左边缘
+                            Log.d("Message", "close to top edge")
+                        } else if ((mRect.bottom >= height - 5) && (mActionMovePoint.y - mOriPoint.y > 0)) { //贴近右边缘
+                            Log.d("Message", "close to bottom edge")
+                        } else {
+                            mRect.top = mRect.top + (mActionMovePoint.y - mOriPoint.y)
+                            mRect.bottom = mRect.bottom + (mActionMovePoint.y - mOriPoint.y)
+                        }
+                        mOriPoint.x = event.x.toInt()
+                        mOriPoint.y = event.y.toInt()
+                        mPressPointIndex = 8
+                    }
+                }
+                invalidate()
+                return mPressPointIndex != -1
+            }
+
+            MotionEvent.ACTION_UP -> {
+                //抬手检查
+                if(mRect.left<5){
+                    mRect.left = 5f
+                }
+                if(mRect.right>width-5){
+                    mRect.right = width-5f
+                }
+                if(mRect.top < 5){
+                    mRect.top = 5f
+                }
+                if(mRect.bottom > height-5){
+                    mRect.bottom = height-5f
+                }
+                invalidate()
+                mPressPointIndex = -1
+            }
+        }
+        return true
+    }
+
+    private fun getPosition(x: Float, y: Float): Int {
+        if (mPressPointIndex > -1 && mPressPointIndex < 9) {
+            return mPressPointIndex
+        }
+        val POINT_RADIUS = 2500 //触点可响应区域的半径平方
+        if ((x - mRect.left) * (x - mRect.left) + (y - mRect.top) * (y - mRect.top) < POINT_RADIUS) {
+            return 0
+        } else if ((x - (mRect.left + mRect.right) / 2) * (x - (mRect.left + mRect.right) / 2) +
+            (y - mRect.top) * (y - mRect.top) < POINT_RADIUS
+        ) {
+            return 1
+        } else if ((x - mRect.right) * (x - mRect.right) + (y - mRect.top) * (y - mRect.top) < POINT_RADIUS) {
+            return 2
+        } else if ((x - mRect.left) * (x - mRect.left) + (y - (mRect.top + mRect.bottom) / 2) *
+            (y - (mRect.top + mRect.bottom) / 2) < POINT_RADIUS
+        ) {
+            return 3
+        } else if ((x - mRect.right) * (x - mRect.right) + (y - (mRect.top + mRect.bottom) / 2) *
+            (y - (mRect.top + mRect.bottom) / 2) < POINT_RADIUS
+        ) {
+            return 4
+        } else if ((x - mRect.left) * (x - mRect.left) + (y - mRect.bottom) * (y - mRect.bottom) < POINT_RADIUS) {
+            return 5
+        } else if ((x - (mRect.left + mRect.right) / 2) * (x - (mRect.left + mRect.right) / 2) +
+            (y - mRect.bottom) * (y - mRect.bottom) < POINT_RADIUS
+        ) {
+            return 6
+        } else if ((x - mRect.right) * (x - mRect.right) + (y - mRect.bottom) * (y - mRect.bottom) < POINT_RADIUS) {
+            return 7
+        } else if ((x > mRect.left) && (x < mRect.right) && (y > mRect.top) && (y < mRect.bottom)) {
+            // disableInternalDrag=true 时，框内触摸透传给下层 ImageView（让 ZoomableImageView 缩放/平移）
+            return if (disableInternalDrag) -1 else 8
+        }
+        return -1
+    }
+}

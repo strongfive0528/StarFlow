@@ -1,0 +1,123 @@
+<?xml version="1.0" encoding="utf-8"?>
+<LinearLayout xmlns:android="http://schemas.android.com/apk/res/android"
+    android:layout_width="match_parent"
+    android:layout_height="wrap_content"
+    android:orientation="vertical"
+    android:layout_marginTop="2dp"
+    android:layout_marginBottom="2dp"
+    android:layout_marginStart="0dp"
+    android:layout_marginEnd="0dp"
+    android:paddingStart="10dp"
+    android:paddingEnd="10dp"
+    android:paddingTop="7dp"
+    android:paddingBottom="7dp">
+
+    <LinearLayout
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        android:orientation="horizontal"
+        android:gravity="center_vertical">
+
+        <!-- 标签（漫画=「P{n}」，小说=章名）。
+             ⚠️ `maxWidth` 是**长章名**的硬闸门：这一行是
+             `[标签][徽章][weight=1 的填充][详情]`，标签是 `wrap_content` —— 章名一长就把徽章和
+             「详情」挤出屏幕（`第一回　宴桃园豪杰三结义斩黄巾英雄首立功` 这种回目就够长）。
+             ⚠️ 加 maxWidth 而不是把标签改成 `0dp + weight=1`：后者会让徽章右移，**改动漫画面板的观感**；
+             maxWidth 只封顶，漫画的「P1」短得根本碰不到它，两个阅读器的行样式保持原样。
+             省略号由绑定处设置的 `singleLine + ellipsize=end` 生效。 -->
+        <TextView
+            android:id="@+id/tv_page_label"
+            android:layout_width="wrap_content"
+            android:layout_height="wrap_content"
+            android:maxWidth="180dp"
+            android:textSize="13sp"
+            android:textStyle="bold"/>
+
+        <TextView
+            android:id="@+id/tv_state_badge"
+            android:layout_width="wrap_content"
+            android:layout_height="wrap_content"
+            android:layout_marginStart="8dp"
+            android:paddingStart="6dp"
+            android:paddingEnd="6dp"
+            android:paddingTop="2dp"
+            android:paddingBottom="2dp"
+            android:textSize="11sp"
+            android:textColor="#FFFFFF"/>
+
+        <View
+            android:layout_width="0dp"
+            android:layout_height="1dp"
+            android:layout_weight="1"/>
+
+        <TextView
+            android:id="@+id/btn_row_detail"
+            android:layout_width="wrap_content"
+            android:layout_height="wrap_content"
+            android:padding="4dp"
+            android:textSize="13sp"
+            android:textColor="#55AEEA"/>
+
+        <!-- 删除**这一页的翻译数据**（整行：原文/译文/气泡坐标/状态，不是只删记录）。
+             ⚠️ **漫画独有**：本布局与小说面板共用（`NovelChapterStateAdapter`），
+             所以默认 gone，只有 `ReaderPageStateAdapter` 会在绑定时显式置 VISIBLE ——
+             小说那边不碰它，就永远不会冒出来。
+             位置按用户口径放在「详情」**后面**（同一个操作行，不用先展开详情）。 -->
+        <TextView
+            android:id="@+id/btn_row_delete"
+            android:layout_width="wrap_content"
+            android:layout_height="wrap_content"
+            android:padding="4dp"
+            android:textSize="13sp"
+            android:textColor="#CC5555"
+            android:text="@string/reader_translate_delete_page"
+            android:visibility="gone"/>
+    </LinearLayout>
+
+    <TextView
+        android:id="@+id/tv_fail_message"
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        android:layout_marginTop="2dp"
+        android:paddingStart="4dp"
+        android:textSize="11sp"
+        android:textColor="#CC5555"
+        android:visibility="gone"/>
+
+    <!-- 内联展开详情（点「详情/收起」切换；元数据 + 逐条原文/译文 + 复制全部），配色随面板主题 -->
+    <LinearLayout
+        android:id="@+id/detail_panel"
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        android:orientation="vertical"
+        android:layout_marginTop="8dp"
+        android:padding="8dp"
+        android:visibility="gone">
+
+        <TextView
+            android:id="@+id/tv_detail_meta"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:textSize="11sp"/>
+
+        <TextView
+            android:id="@+id/tv_detail_list"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:layout_marginTop="4dp"
+            android:textIsSelectable="true"
+            android:textSize="13sp"
+            android:lineSpacingExtra="2dp"/>
+
+        <TextView
+            android:id="@+id/tv_detail_collapse"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:layout_marginTop="6dp"
+            android:gravity="center"
+            android:padding="2dp"
+            android:text="@string/reader_translate_collapse"
+            android:textSize="12sp"
+            android:textColor="#55AEEA"/>
+    </LinearLayout>
+</LinearLayout>

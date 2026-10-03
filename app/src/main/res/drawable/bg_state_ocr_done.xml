@@ -1,0 +1,12 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+  「OCR完成」（识别已结束、还没翻译 / 翻译失败但识别成功）徽章底：**青色**。
+
+  ⚠️ 必须与 bg_state_ocr（「识别中」，蓝色 #1976D2）区分开：用户口径 2026-10
+  「识别中是一个过程状态，识别完成没有翻译就是 OCR 完成状态，要区分开」。
+  「识别中」是转瞬即逝的在途态，青色这枚是**结果态**（徽章文案也不同）。
+-->
+<shape xmlns:android="http://schemas.android.com/apk/res/android" android:shape="rectangle">
+    <solid android:color="#00796B"/>
+    <corners android:radius="10dp"/>
+</shape>

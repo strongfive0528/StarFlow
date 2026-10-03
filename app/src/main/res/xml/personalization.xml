@@ -1,0 +1,366 @@
+<?xml version="1.0" encoding="utf-8"?>
+
+<!--
+   * Copyright (C) 2024 murangogo
+   *
+   * This library is free software; you can redistribute it and/or modify it under
+   * the terms of the GNU Lesser General Public License as published by the Free
+   * Software Foundation; either version 3 of the License, or (at your option)
+   * any later version.
+   *
+   * This library is distributed in the hope that it will be useful, but WITHOUT
+   * ANY WARRANTY; without even the implied warranty of MERCHANTABILITY or FITNESS
+   * FOR A PARTICULAR PURPOSE. See the GNU Lesser General Public License for more details.
+   *
+   * You should have received a copy of the GNU Lesser General Public License along
+   * with this library; if not, write to the Free Software Foundation, Inc.,
+   * 59 Temple Place, Suite 330, Boston, MA 02111-1307 USA
+   *-->
+
+<androidx.preference.PreferenceScreen xmlns:android="http://schemas.android.com/apk/res/android"
+    xmlns:app="http://schemas.android.com/apk/res-auto">
+
+    <PreferenceCategory
+        android:title="@string/floating_ball"
+        app:iconSpaceReserved="false">
+
+        <com.moe.starflow.me.settings.PreferenceWithPreview
+            android:key="Icon_Game"
+            app:iconSpaceReserved="false"
+            app:prefKey="Icon_Game"
+            android:title="@string/floating_ball_game_icon_title" />
+
+        <com.moe.starflow.me.settings.PreferenceWithPreview
+            android:key="Icon_Comic"
+            app:iconSpaceReserved="false"
+            app:prefKey="Icon_Comic"
+            android:title="@string/floating_ball_comic_icon_title" />
+
+        <Preference
+            android:key="floating_ball_style"
+            app:iconSpaceReserved="false"
+            android:title="@string/floating_ball_style_title" />
+
+        <Preference
+            android:key="floating_ball_press"
+            app:iconSpaceReserved="false"
+            android:title="@string/floating_ball_press_title" />
+
+        <ListPreference
+            android:key="Ball_Gesture_Single_Click"
+            app:iconSpaceReserved="false"
+            android:defaultValue="0"
+            android:title="@string/ball_gesture_single_click"
+            android:entries="@array/ball_action_entries"
+            android:entryValues="@array/ball_action_values" />
+
+        <ListPreference
+            android:key="Ball_Gesture_Double_Click"
+            app:iconSpaceReserved="false"
+            android:defaultValue="2"
+            android:title="@string/ball_gesture_double_click"
+            android:entries="@array/ball_action_entries"
+            android:entryValues="@array/ball_action_values" />
+
+        <ListPreference
+            android:key="Ball_Gesture_Long_Press"
+            app:iconSpaceReserved="false"
+            android:defaultValue="1"
+            android:title="@string/ball_gesture_long_press"
+            android:entries="@array/ball_action_entries"
+            android:entryValues="@array/ball_action_values" />
+
+    </PreferenceCategory>
+
+    <PreferenceCategory
+        android:title="@string/translate_result_box_with_hint"
+        app:iconSpaceReserved="false">
+
+        <Preference
+            android:key="result_font_size"
+            android:title="@string/font_size_title"
+            app:iconSpaceReserved="false"/>
+
+        <com.jaredrummler.android.colorpicker.ColorPreferenceCompat
+            android:key="result_view_font_color"
+            app:iconSpaceReserved="false"
+            android:defaultValue="@color/result_view_font_color_default"
+            app:cpv_dialogTitle="@string/font_color"
+            android:title="@string/font_color"
+            android:summary="@string/font_color_summary"
+            app:cpv_showAlphaSlider="true" />
+
+        <com.jaredrummler.android.colorpicker.ColorPreferenceCompat
+            android:key="result_view_background_color"
+            app:iconSpaceReserved="false"
+            android:defaultValue="@color/result_view_background_color_default"
+            app:cpv_dialogTitle="@string/result_background_color"
+            android:title="@string/result_background_color"
+            android:summary="@string/result_background_color_summary"
+            app:cpv_showAlphaSlider="true" />
+
+        <ListPreference
+            android:key="show_source_text"
+            app:iconSpaceReserved="false"
+            android:defaultValue="0"
+            android:title="@string/show_source_text_title"
+            android:entries="@array/show_source_text_entries"
+            android:entryValues="@array/show_source_text_values"/>
+
+        <ListPreference
+            android:key="Game_Text_Direction"
+            app:iconSpaceReserved="false"
+            android:defaultValue="0"
+            android:title="@string/game_text_direction_title"
+            android:summary="@string/game_text_direction_summary"
+            android:entries="@array/manga_text_direction_entries"
+            android:entryValues="@array/manga_text_direction_values"/>
+
+        <SwitchPreference
+            android:key="text_shadow_enabled"
+            android:title="@string/text_shadow_title"
+            android:summary="@string/text_shadow_summary"
+            android:defaultValue="true"
+            app:iconSpaceReserved="false" />
+
+    </PreferenceCategory>
+
+    <PreferenceCategory
+        android:title="@string/manga_result_setting_title"
+        app:iconSpaceReserved="false">
+
+        <!-- 漫画翻译结果字号：**最初始的位置**。悬浮窗的「字体大小」菜单与阅读器翻译面板的
+             字号组件都读写同一对 prefs（Manga_Font_Size / Manga_Auto_Font_Size），
+             统一走 utils/MangaFontSize.kt。 -->
+        <Preference
+            android:key="manga_font_size"
+            app:iconSpaceReserved="false"
+            android:title="@string/manga_font_size_title" />
+
+        <ListPreference
+            android:key="Manga_Text_Direction"
+            app:iconSpaceReserved="false"
+            android:defaultValue="0"
+            android:title="@string/manga_text_direction_title"
+            android:summary="@string/manga_text_direction_summary"
+            android:entries="@array/manga_text_direction_entries"
+            android:entryValues="@array/manga_text_direction_values"/>
+
+        <ListPreference
+            android:key="manga_horizontal_align"
+            app:iconSpaceReserved="false"
+            android:defaultValue="1"
+            android:title="@string/manga_horizontal_align_title"
+            android:summary="@string/manga_horizontal_align_summary"
+            android:entries="@array/manga_horizontal_align_entries"
+            android:entryValues="@array/manga_horizontal_align_values"/>
+
+        <Preference
+            android:key="manga_spacing"
+            app:iconSpaceReserved="false"
+            android:title="@string/manga_spacing_title" />
+
+        <com.jaredrummler.android.colorpicker.ColorPreferenceCompat
+            android:key="manga_text_color"
+            app:iconSpaceReserved="false"
+            android:defaultValue="-16777216"
+            app:cpv_dialogTitle="@string/manga_text_color"
+            android:title="@string/manga_text_color"
+            android:summary="@string/manga_text_color_summary"
+            app:cpv_showAlphaSlider="false" />
+
+        <com.jaredrummler.android.colorpicker.ColorPreferenceCompat
+            android:key="manga_bg_color"
+            app:iconSpaceReserved="false"
+            android:defaultValue="-1"
+            app:cpv_dialogTitle="@string/manga_bg_color"
+            android:title="@string/manga_bg_color"
+            android:summary="@string/manga_bg_color_summary"
+            app:cpv_showAlphaSlider="true" />
+
+        <SwitchPreference
+            android:key="Incremental_Render"
+            android:title="@string/incremental_render_title"
+            android:summary="@string/incremental_render_summary"
+            android:defaultValue="true"
+            app:iconSpaceReserved="false" />
+
+        <SwitchPreference
+            android:key="Manga_Keep_Text_Free"
+            app:iconSpaceReserved="false"
+            android:defaultValue="true"
+            android:title="@string/manga_keep_text_free_title"
+            android:summary="@string/manga_keep_text_free_summary" />
+
+        <!-- RT-DETR-V2 + manga-ocr 的渲染方向：该组合只有矩形气泡框、且只识别日文，
+             所以**不做横竖判断**（"气泡高>宽⇒竖排"对多列竖排的宽气泡必反），默认竖排右→左。
+             ⚠️ 与上面的「竖排方向」(Manga_Text_Direction) 不是一回事：那个管竖排列序（右→左/左→右）、
+             只对 PP-OCRv5/v6 生效；本项管 RT 路径「竖排还是横排」，PP 路径自动判断、忽略本项。 -->
+        <ListPreference
+            android:key="Manga_RT_Text_Direction"
+            app:iconSpaceReserved="false"
+            android:defaultValue="0"
+            android:title="@string/manga_rt_text_direction_title"
+            android:summary="@string/manga_rt_text_direction_summary"
+            android:entries="@array/manga_rt_text_direction_entries"
+            android:entryValues="@array/manga_rt_text_direction_values"/>
+
+        <SwitchPreference
+            android:key="Manga_Text_Merge"
+            app:iconSpaceReserved="false"
+            android:defaultValue="true"
+            android:title="@string/manga_text_merge_title"
+            android:summary="@string/manga_text_merge_summary" />
+
+        <!-- 翻译结果与**原文区域**重叠时的处理：开启=并成一个大白块（默认），
+             关闭=各自独立绘制并允许叠白块。
+             ⚠️ 与上面那个 Manga_Text_Merge 完全不是一回事：`Manga_Text_Merge` 是
+             **检测阶段的识别后合并**（TextRegionMerger，管"哪些文字行属于同一句"），
+             本项是**渲染阶段的重叠合并**（OverlayRenderer，管"输出的白块画几块"）。 -->
+        <SwitchPreference
+            android:key="Manga_Overlap_Merge"
+            app:iconSpaceReserved="false"
+            android:defaultValue="false"
+            android:title="@string/manga_overlap_merge_title"
+            android:summary="@string/manga_overlap_merge_summary" />
+
+        <!-- 译文替换表：二级面板（app:fragment 点进去换成子 Preference 屏，返回键回本页） -->
+        <PreferenceScreen
+            android:key="manga_translation_replacements"
+            app:iconSpaceReserved="false"
+            app:fragment="com.moe.starflow.me.settings.TranslationReplacementFragment"
+            android:title="@string/manga_replacement_title"
+            android:summary="@string/manga_replacement_summary_empty" />
+
+    </PreferenceCategory>
+
+    <PreferenceCategory
+        android:title="@string/auto_translate"
+        app:iconSpaceReserved="false">
+
+        <SwitchPreference
+            android:key="pixel_stability_check"
+            app:iconSpaceReserved="false"
+            android:defaultValue="false"
+            android:title="@string/pixel_stability_title"
+            android:summary="@string/pixel_stability_summary"/>
+
+        <ListPreference
+            android:key="pixel_check_interval"
+            app:iconSpaceReserved="false"
+            android:defaultValue="300"
+            android:title="@string/pixel_check_interval_title"
+            android:entries="@array/pixel_check_interval_entries"
+            android:entryValues="@array/pixel_check_interval_values"/>
+
+        <ListPreference
+            android:key="pixel_threshold"
+            app:iconSpaceReserved="false"
+            android:defaultValue="1"
+            android:title="@string/pixel_threshold_title"
+            android:entries="@array/pixel_threshold_entries"
+            android:entryValues="@array/pixel_threshold_values"/>
+
+    </PreferenceCategory>
+
+    <PreferenceCategory
+        android:title="@string/game_context_title"
+        app:iconSpaceReserved="false">
+
+        <SwitchPreference
+            android:key="game_context_enabled"
+            app:iconSpaceReserved="false"
+            android:defaultValue="false"
+            android:title="@string/game_context_title"
+            android:summary="@string/game_context_summary"/>
+
+        <ListPreference
+            android:key="ctx_token_budget"
+            app:iconSpaceReserved="false"
+            android:defaultValue="32768"
+            android:title="@string/game_context_budget_title"
+            android:entries="@array/ctx_token_budget_entries"
+            android:entryValues="@array/ctx_token_budget_values"
+            android:dependency="game_context_enabled"/>
+
+    </PreferenceCategory>
+
+    <PreferenceCategory
+        android:title="@string/status_overlay_category"
+        app:iconSpaceReserved="false">
+
+        <SwitchPreference
+            android:key="status_overlay_enabled"
+            app:iconSpaceReserved="false"
+            android:defaultValue="true"
+            android:title="@string/status_overlay_enabled_title"
+            android:summary="@string/status_overlay_enabled_summary"/>
+
+        <ListPreference
+            android:key="Status_Position"
+            app:iconSpaceReserved="false"
+            android:defaultValue="top"
+            android:title="@string/status_overlay_position_title"
+            android:entries="@array/status_overlay_position_entries"
+            android:entryValues="@array/status_overlay_position_values"
+            android:dependency="status_overlay_enabled"/>
+
+        <ListPreference
+            android:key="Status_Duration"
+            app:iconSpaceReserved="false"
+            android:defaultValue="2000"
+            android:title="@string/status_overlay_duration_title"
+            android:entries="@array/status_overlay_duration_entries"
+            android:entryValues="@array/status_overlay_duration_values"
+            android:dependency="status_overlay_enabled"/>
+
+    </PreferenceCategory>
+
+    <PreferenceCategory
+        android:title="@string/other_setting"
+        app:iconSpaceReserved="false">
+
+        <!-- 字体是游戏/漫画通用设置（Custom_Result_Font 两个模式共用），故放在"其他"而非游戏分类 -->
+        <Preference
+            android:key="result_font"
+            android:title="@string/font_title"
+            app:iconSpaceReserved="false" />
+
+        <SwitchPreference
+            android:key="ui_apply_custom_font"
+            android:title="@string/ui_apply_custom_font_title"
+            android:summary="@string/ui_apply_custom_font_summary"
+            android:defaultValue="false"
+            app:iconSpaceReserved="false" />
+
+        <ListPreference
+            android:key="app_language"
+            app:iconSpaceReserved="false"
+            android:defaultValue="system"
+            android:title="@string/language_setting_title"
+            android:entries="@array/language_entries"
+            android:entryValues="@array/language_values" />
+
+    </PreferenceCategory>
+
+    <!-- ════════════════════════════════════════════════════════════
+         超分（SR）—— 2026-10
+
+         ⚠️ 这里**只有模型管理入口**，没有开关：
+         - 超分**只服务阅读器**（先原图 OCR → 再超分 → 译文画在超分底图上），开关在**阅读器调色面板**上。
+           按用户口径「截图/录屏链路不做超分」，所以个性化里不设总开关/游戏/漫画开关。
+         - Anime4K 的开关与档位同样在阅读器调色面板（它作用在阅读器的底图上）。
+         ════════════════════════════════════════════════════════════ -->
+    <PreferenceCategory
+        android:title="@string/sr_settings_category"
+        app:iconSpaceReserved="false">
+
+        <Preference
+            android:key="sr_model_manage"
+            android:title="@string/sr_model_manage_title"
+            android:summary="@string/sr_model_manage_summary"
+            app:iconSpaceReserved="false" />
+
+    </PreferenceCategory>
+
+</androidx.preference.PreferenceScreen>

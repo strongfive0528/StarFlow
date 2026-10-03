@@ -1,0 +1,26 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+   * Floating ball root layout.
+   *   floating_ball_icon      — main icon (ImageView), looked up by FloatingBallService / MangaFloatingService
+   *   floating_ball_error_ring — overlay ring shown when the manager is in the Error state
+-->
+<FrameLayout xmlns:android="http://schemas.android.com/apk/res/android"
+    android:layout_width="wrap_content"
+    android:layout_height="wrap_content">
+
+    <ImageView
+        android:id="@+id/floating_ball_icon"
+        android:layout_width="65dp"
+        android:layout_height="65dp"
+        android:padding="2dp"
+        android:src="@drawable/floating_ball_icon" />
+
+    <View
+        android:id="@+id/floating_ball_error_ring"
+        android:layout_width="65dp"
+        android:layout_height="65dp"
+        android:background="@drawable/floating_ball_error_ring"
+        android:visibility="gone"
+        android:clickable="false" />
+
+</FrameLayout>

@@ -1,0 +1,206 @@
+package com.moe.starflow.data
+
+import androidx.room.Room
+import kotlinx.coroutines.runBlocking
+import org.junit.After
+import org.junit.Assert.assertEquals
+import org.junit.Assert.assertNull
+import org.junit.Test
+import org.junit.runner.RunWith
+import org.robolectric.RobolectricTestRunner
+import org.robolectric.RuntimeEnvironment
+
+@RunWith(RobolectricTestRunner::class)
+class ImportedPageTranslationDaoTest {
+
+    private var db: TranslationHistoryDatabase? = null
+    private fun dao() = db!!.importedPageTranslationDao()
+
+    @After
+    fun tearDown() {
+        db?.close()
+        db = null
+    }
+
+    private fun row(page: Int, state: Int) = ImportedPageTranslation(
+        mangaId = 7L, pageIndex = page,
+        state = state,
+        sourceText = "[1] src-$page", translatedText = "[1] t-$page",
+        bubbleRects = null, failCode = null, failMessage = null, updatedAtMs = page.toLong(),
+        mangaKey = "manga|1",
+    )
+
+    /** 同 [row]，但**没有 OCR 原文** —— 用来区分 `resetTranslating` 的两条分支。 */
+    private fun rowWithoutSource(page: Int, state: Int) = row(page, state).copy(
+        sourceText = null, translatedText = null,
+    )
+
+    @Test
+    fun upsertThenGetRoundTrip() = runBlocking {
+        db = Room.inMemoryDatabaseBuilder(
+            RuntimeEnvironment.getApplication(), TranslationHistoryDatabase::class.java
+        ).build()
+        dao().upsert(row(3, ImportedPageTranslation.STATE_SUCCESS))
+        val one = dao().get(7L, 3)
+        assertEquals(ImportedPageTranslation.STATE_SUCCESS, one?.state)
+        assertEquals("[1] t-3", one?.translatedText)
+    }
+
+    @Test
+    fun upsertReplacesSameKeyAndKeepsOrderedList() = runBlocking {
+        db = Room.inMemoryDatabaseBuilder(
+            RuntimeEnvironment.getApplication(), TranslationHistoryDatabase::class.java
+        ).build()
+        dao().upsert(row(5, ImportedPageTranslation.STATE_IDLE))
+        // REPLACE 覆盖同 key
+        dao().upsert(row(5, ImportedPageTranslation.STATE_FAILED).copy(failCode = "OCR_EMPTY"))
+        dao().upsert(row(1, ImportedPageTranslation.STATE_SUCCESS))
+        dao().upsert(row(3, ImportedPageTranslation.STATE_TRANSLATING))
+
+        val updated = dao().get(7L, 5)
+        assertEquals(ImportedPageTranslation.STATE_FAILED, updated?.state)
+        assertEquals("OCR_EMPTY", updated?.failCode)
+
+        val all = dao().forManga(7L, "manga|1")
+        assertEquals(listOf(1, 3, 5), all.map { it.pageIndex })
+        assertEquals(listOf(ImportedPageTranslation.STATE_SUCCESS, ImportedPageTranslation.STATE_TRANSLATING, ImportedPageTranslation.STATE_FAILED), all.map { it.state })
+        assertNull(dao().get(7L, 4))
+    }
+
+    @Test
+    fun rowsWithDifferentMangaKeyAreIgnored() = runBlocking {
+        // 根因用例：删除漫画后重导复用同一 mangaId，但身份指纹（title|addedAt）不同，
+        // 旧孤儿记录绝不串到新漫画。
+        db = Room.inMemoryDatabaseBuilder(
+            RuntimeEnvironment.getApplication(), TranslationHistoryDatabase::class.java
+        ).build()
+        dao().upsert(row(1, ImportedPageTranslation.STATE_SUCCESS).copy(mangaKey = "old-title|100"))
+        dao().upsert(row(2, ImportedPageTranslation.STATE_SUCCESS).copy(mangaKey = "manga|1"))
+        assertEquals(listOf(2), dao().forManga(7L, "manga|1").map { it.pageIndex })
+        assertEquals(1, dao().forManga(7L, "old-title|100").size)
+    }
+
+    @Test
+    fun deleteMangaScopesToMangaId() = runBlocking {
+        db = Room.inMemoryDatabaseBuilder(
+            RuntimeEnvironment.getApplication(), TranslationHistoryDatabase::class.java
+        ).build()
+        dao().upsert(row(1, ImportedPageTranslation.STATE_SUCCESS))
+        dao().upsert(row(1, ImportedPageTranslation.STATE_SUCCESS).copy(mangaId = 99L))
+        dao().deleteManga(7L)
+        assertEquals(0, dao().forManga(7L, "manga|1").size)
+        assertEquals(1, dao().forManga(99L, "manga|1").size)
+    }
+
+    /**
+     * 书架删除走这条：**按 (id, 指纹) 成对删**。
+     *
+     * ⚠️ 为什么必须带指纹：漫画 id 会被复用（id = 清单最大 id + 1），而删除是异步的 ——
+     * 只按 id 删的话，用户完全可能在它落地前就导入了一本复用同 id 的新书并翻了几页，
+     * 把那本**新书**的记录一起删掉。这里断言「同 id 但不同指纹的行必须留下」。
+     */
+    @Test
+    fun deleteMangaScoped_keepsRowsOfOtherIdentity() = runBlocking {
+        db = Room.inMemoryDatabaseBuilder(
+            RuntimeEnvironment.getApplication(), TranslationHistoryDatabase::class.java
+        ).build()
+        dao().upsert(row(1, ImportedPageTranslation.STATE_SUCCESS))                        // id7 + "manga|1"
+        dao().upsert(row(2, ImportedPageTranslation.STATE_SUCCESS))                        // id7 + "manga|1"
+        // 同 id 的另一本书（删掉重导复用 id 的形态）
+        dao().upsert(row(1, ImportedPageTranslation.STATE_SUCCESS).copy(mangaKey = "1789000000000"))
+        // 别的 mangaId
+        dao().upsert(row(1, ImportedPageTranslation.STATE_SUCCESS).copy(mangaId = 99L))
+
+        dao().deleteMangaScoped(7L, "manga|1")
+
+        assertEquals(0, dao().forManga(7L, "manga|1").size)
+        assertEquals("同 id 的另一本书不能被删", 1, dao().forManga(7L, "1789000000000").size)
+        assertEquals(1, dao().forManga(99L, "manga|1").size)
+    }
+
+    /** 升级前写入的 key 为 NULL 的残留行，跟着同 id 的删除一起清掉。 */
+    @Test
+    fun deleteMangaScoped_alsoClearsLegacyNullKeyRows() = runBlocking {
+        db = Room.inMemoryDatabaseBuilder(
+            RuntimeEnvironment.getApplication(), TranslationHistoryDatabase::class.java
+        ).build()
+        dao().upsert(row(1, ImportedPageTranslation.STATE_SUCCESS).copy(mangaKey = null))
+
+        dao().deleteMangaScoped(7L, "1789000000000")
+
+        assertEquals(0, dao().forManga(7L, "1789000000000").size)
+    }
+
+    /**
+     * 删除前的「这本书有译文，删了不可恢复」提示靠它判断。
+     *
+     * ⚠️ 必须按身份指纹过滤：删掉再导入会复用同一个 mangaId，孤儿行不能算成新书的译文
+     * （否则会提示用户「有翻译记录」而实际什么都没有）。
+     */
+    @Test
+    fun countForFiltersByMangaKey() = runBlocking {
+        db = Room.inMemoryDatabaseBuilder(
+            RuntimeEnvironment.getApplication(), TranslationHistoryDatabase::class.java
+        ).build()
+        // 同 id 的孤儿行（旧指纹）
+        dao().upsert(row(1, ImportedPageTranslation.STATE_SUCCESS).copy(mangaKey = "old-title|100"))
+        assertEquals(0, dao().countFor(7L, "manga|1"))
+
+        dao().upsert(row(2, ImportedPageTranslation.STATE_SUCCESS))
+        assertEquals(1, dao().countFor(7L, "manga|1"))
+        assertEquals(1, dao().countFor(7L, "old-title|100"))
+        assertEquals(0, dao().countFor(8L, "manga|1"))
+    }
+
+    /**
+     * `resetTranslating` 是「记录永久卡在翻译中」的唯一兜底：该状态在翻译**开始时**写库，
+     * 退出阅读器/崩溃会让它停在 TRANSLATING，之后该页既不显示译文也再也翻不了。
+     *
+     * ⚠️ @Query 里写的是字面量（注解里引用不了 Kotlin 常量），所以这条断言同时也锁住
+     * 「常量值 ↔ 查询字面量」这个契约：改常量必须同步改查询。
+     *
+     * **契约（2026-10-01 起，随 `STATE_OCR` 一起变）**：卡在 `TRANSLATING` 的行按**有没有 OCR 原文**
+     * 决定退回哪里 ——
+     * - `sourceText` 非空（已经识别出字了）→ `STATE_OCR`(4)，面板显示「识别完成待翻译」，
+     *   用户不用重跑一遍 OCR
+     * - `sourceText` 空（OCR 都没做完）→ `STATE_IDLE`(0)，与以前一样
+     *
+     * 以前是一律回 `IDLE`；`STATE_OCR` 加了之后那句 `SET state = 0` 必须跟着改成 `CASE WHEN …`
+     * （两边不同步的话，识别结果会被静默丢掉、用户重开会发现又要重新 OCR 一遍）。
+     */
+    @Test
+    fun resetTranslatingOnlyClearsTranslatingOfSameMangaKey() = runBlocking {
+        db = Room.inMemoryDatabaseBuilder(
+            RuntimeEnvironment.getApplication(), TranslationHistoryDatabase::class.java
+        ).build()
+        // 契约守卫：查询把 1 当 TRANSLATING、0 当 IDLE、4 当 OCR
+        assertEquals(1, ImportedPageTranslation.STATE_TRANSLATING)
+        assertEquals(0, ImportedPageTranslation.STATE_IDLE)
+        assertEquals(4, ImportedPageTranslation.STATE_OCR)
+
+        dao().upsert(row(1, ImportedPageTranslation.STATE_TRANSLATING))
+        dao().upsert(row(2, ImportedPageTranslation.STATE_SUCCESS))
+        dao().upsert(row(3, ImportedPageTranslation.STATE_FAILED))
+        // 没有 OCR 原文的那一行：应当退回 IDLE（另一条分支）
+        dao().upsert(rowWithoutSource(5, ImportedPageTranslation.STATE_TRANSLATING))
+        // 别的漫画（指纹不同）不得被清
+        dao().upsert(row(4, ImportedPageTranslation.STATE_TRANSLATING).copy(mangaKey = "other|9"))
+
+        dao().resetTranslating(7L, "manga|1")
+
+        assertEquals(
+            "有 OCR 原文的中断行退回「OCR 完成待翻译」，不能丢识别结果",
+            ImportedPageTranslation.STATE_OCR, dao().get(7L, 1)?.state,
+        )
+        assertEquals(
+            "没有 OCR 原文的中断行退回「未翻译」",
+            ImportedPageTranslation.STATE_IDLE, dao().get(7L, 5)?.state,
+        )
+        assertEquals(ImportedPageTranslation.STATE_SUCCESS, dao().get(7L, 2)?.state)
+        assertEquals(ImportedPageTranslation.STATE_FAILED, dao().get(7L, 3)?.state)
+        assertEquals(
+            "不同 mangaKey 的记录不得被清",
+            ImportedPageTranslation.STATE_TRANSLATING, dao().get(7L, 4)?.state
+        )
+    }
+}

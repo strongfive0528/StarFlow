@@ -1,0 +1,29 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <color name="black">#212121</color>
+    <color name="white">#fafafa</color>
+    <color name="red">#FA3B55</color>
+
+    <!-- 文字颜色 -->
+    <color name="primary">#55AEEA</color>
+    <color name="accent">#33B5E5</color>
+
+    <!-- 个性化设置默认颜色 -->
+    <color name="result_view_font_color_default">#E8DCD1</color>
+    <color name="result_view_background_color_default">#D91E2C3A</color>
+
+    <!-- Card背景颜色 -->
+    <color name="card_background">#FFF7F7</color>
+
+    <!-- 语义色（暗色模式迁移统一源；夜间值见 values-night/colors.xml） -->
+    <color name="surface">#FFFFFF</color>
+    <color name="surface_variant">#EFF7FB</color>
+    <color name="surface_secondary">#F5F5F5</color>
+    <color name="text_primary">#333333</color>
+    <color name="text_secondary">#666666</color>
+    <color name="text_hint">#888888</color>
+    <color name="text_tertiary">#999999</color>
+    <color name="divider">#E0E0E0</color>
+    <color name="success">#4CAF50</color>
+
+</resources>

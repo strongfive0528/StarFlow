@@ -1,0 +1,140 @@
+<?xml version="1.0" encoding="utf-8"?>
+<manifest xmlns:android="http://schemas.android.com/apk/res/android"
+    xmlns:tools="http://schemas.android.com/tools">
+
+    <uses-permission android:name="android.permission.GET_PACKAGE_INFO" />
+    <uses-permission android:name="android.permission.POST_NOTIFICATIONS" />
+    <uses-permission android:name="android.permission.FOREGROUND_SERVICE" />
+    <uses-permission android:name="android.permission.FOREGROUND_SERVICE_DATA_SYNC" />
+    <uses-permission android:name="android.permission.SYSTEM_ALERT_WINDOW" />
+    <uses-permission android:name="android.permission.FOREGROUND_SERVICE_MEDIA_PROJECTION" />
+    <uses-permission android:name="android.permission.FOREGROUND_SERVICE_SPECIAL_USE" />
+    <uses-permission android:name="android.permission.DOWNLOAD_WITHOUT_NOTIFICATION"/>
+    <uses-permission
+        android:name="android.permission.QUERY_ALL_PACKAGES"
+        tools:ignore="QueryAllPackagesPermission" />
+    <uses-permission android:name="android.permission.ACCESS_NETWORK_STATE" />
+    <uses-permission android:name="android.permission.INTERNET" />
+    <uses-permission android:name="android.permission.REQUEST_INSTALL_PACKAGES" />
+
+    <application
+        android:name=".StarFlowApplication"
+        android:allowBackup="true"
+        android:dataExtractionRules="@xml/data_extraction_rules"
+        android:fullBackupContent="@xml/backup_rules"
+        android:icon="@mipmap/ic_launcher"
+        android:label="@string/app_name"
+        android:supportsRtl="true"
+        android:theme="@style/Theme.MT"
+        android:networkSecurityConfig="@xml/network_security_config"
+        tools:targetApi="31">
+        <activity
+            android:name=".me.ManageActivity"
+            android:exported="false"
+            android:theme="@style/Base.Theme.MT" />
+        <activity
+            android:name=".me.settings.SettingPageActivity"
+            android:exported="false"
+            android:theme="@style/settheme" />
+        <activity
+            android:name=".ui.viewer.MangaViewerActivity"
+            android:exported="false"
+            android:theme="@style/Theme.MaterialComponents.DayNight.NoActionBar" />
+        <activity
+            android:name=".mangaimport.reader.MangaReaderActivity"
+            android:exported="false"
+            android:theme="@style/Theme.MaterialComponents.DayNight.NoActionBar"
+            android:configChanges="orientation|screenSize|screenLayout|smallestScreenSize|uiMode|keyboardHidden" />
+        <!-- 小说阅读器：与漫画阅读器同样锁定竖屏 + 自处理配置变化（避免旋转时重走一遍加载） -->
+        <activity
+            android:name=".novel.reader.NovelReaderActivity"
+            android:exported="false"
+            android:theme="@style/Theme.MaterialComponents.DayNight.NoActionBar"
+            android:configChanges="orientation|screenSize|screenLayout|smallestScreenSize|uiMode|keyboardHidden" />
+        <activity
+            android:name=".launch.FirstLaunchPage"
+            android:exported="false"
+            android:theme="@style/Base.Theme.MT" />
+        <activity
+            android:name=".MainActivity"
+            android:exported="true"
+            android:launchMode="singleTask"
+            android:theme="@style/Base.Theme.MT" />
+        <activity
+            android:name=".launch.LaunchActivity"
+            android:exported="true"
+            android:theme="@style/Base.Theme.MT">
+            <intent-filter>
+                <action android:name="android.intent.action.MAIN" />
+                <category android:name="android.intent.category.LAUNCHER" />
+            </intent-filter>
+        </activity>
+
+        <service
+            android:name=".translate.screenshot.ScreenShotAccessibilityService"
+            android:enabled="true"
+            android:exported="true"
+            android:label="@string/accessibility_service_label"
+            android:permission="android.permission.BIND_ACCESSIBILITY_SERVICE">
+            <intent-filter>
+                <action android:name="android.accessibilityservice.AccessibilityService" />
+            </intent-filter>
+            <meta-data
+                android:name="android.accessibilityservice"
+                android:resource="@xml/accessibility_service_config" />
+        </service>
+
+        <service
+            android:name=".translate.FloatingBallService"
+            android:enabled="true"
+            android:exported="false"
+            android:foregroundServiceType="mediaProjection" />
+
+        <!-- 漫画翻译悬浮窗服务 -->
+        <provider
+            android:name="androidx.core.content.FileProvider"
+            android:authorities="${applicationId}.fileprovider"
+            android:exported="false"
+            android:grantUriPermissions="true">
+            <meta-data
+                android:name="android.support.FILE_PROVIDER_PATHS"
+                android:resource="@xml/file_paths" />
+        </provider>
+
+        <service
+            android:name=".manga.MangaFloatingService"
+            android:enabled="true"
+            android:exported="false"
+            android:foregroundServiceType="mediaProjection|specialUse">
+            <property
+                android:name="android.app.PROPERTY_SPECIAL_USE_FGS_SUBTYPE"
+                android:value="漫画翻译悬浮窗服务，通过录屏或无障碍服务截屏后进行 OCR 识别和翻译" />
+        </service>
+
+        <service
+            android:name=".download.ModelDownloadService"
+            android:foregroundServiceType="dataSync"
+            android:exported="false" />
+
+        <!-- 章节批量翻译的前台服务：通知栏每章一条进度（可暂停/继续/取消） -->
+        <service
+            android:name=".translate.batch.TranslationJobService"
+            android:foregroundServiceType="dataSync"
+            android:exported="false" />
+
+        <activity
+            android:name=".translate.screenshot.ScreenCapturePermissionActivity"
+            android:exported="false"
+            android:theme="@android:style/Theme.Translucent.NoTitleBar" />
+
+        <!-- 超分基准的调试触发器：只创建 Application、不起 Activity → 不会触发本地大模型预热 -->
+        <receiver
+            android:name=".sr.SrBenchReceiver"
+            android:exported="true">
+            <intent-filter>
+                <action android:name="com.moe.starflow.SR_BENCH" />
+            </intent-filter>
+        </receiver>
+    </application>
+
+</manifest>

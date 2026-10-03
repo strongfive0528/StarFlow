@@ -1,0 +1,3892 @@
+package com.moe.starflow.manga
+import com.moe.starflow.translate.widget.*
+import com.moe.starflow.translate.autotranslate.*
+import com.moe.starflow.translate.screenshot.*
+import com.moe.starflow.manga.state.*
+import com.moe.starflow.manga.render.*
+import com.moe.starflow.manga.merge.*
+
+import com.moe.starflow.manga.engine.*
+import com.moe.starflow.manga.types.*
+import com.moe.starflow.manga.config.*
+import com.moe.starflow.manga.pipeline.BatchOutcome
+import com.moe.starflow.manga.pipeline.BatchPipelineConfig
+import com.moe.starflow.manga.pipeline.BatchPipelineHost
+import com.moe.starflow.manga.pipeline.IncrementalBatchPipeline
+import com.moe.starflow.manga.debug.MangaDebugOverlays
+import com.moe.starflow.manga.debug.MangaDebugPanelController
+import com.moe.starflow.manga.debug.MangaDebugSliders
+import android.annotation.SuppressLint
+import android.app.AlertDialog
+import android.app.Notification
+import android.app.NotificationChannel
+import android.app.NotificationManager
+import android.app.PendingIntent
+import android.content.Context
+import android.content.Intent
+import android.content.SharedPreferences
+import android.content.pm.ServiceInfo
+import android.widget.Toast
+import android.graphics.Bitmap
+import android.graphics.Color
+import android.graphics.PixelFormat
+import android.graphics.Point
+import android.graphics.Rect
+import android.graphics.RectF
+import android.os.Build
+import android.os.Handler
+import android.os.Looper
+import android.util.Log
+import com.moe.starflow.utils.LogCollector
+import com.moe.starflow.utils.MangaFontSize
+import com.moe.starflow.utils.MangaFontSizeDialog
+import com.moe.starflow.utils.OcrEngineManager
+import android.view.Gravity
+import android.view.LayoutInflater
+import android.view.MotionEvent
+import android.view.View
+import android.view.ViewGroup
+import android.widget.FrameLayout
+import android.view.WindowManager
+import android.widget.ImageView
+import androidx.core.app.NotificationCompat
+import androidx.lifecycle.LifecycleService
+import androidx.lifecycle.lifecycleScope
+import com.moe.starflow.MainActivity
+import com.moe.starflow.R
+import com.moe.starflow.me.apiconfig.BuiltinProviders
+import com.moe.starflow.me.apiconfig.ConfigurationStorage
+import com.moe.starflow.me.apiconfig.OpenAIProviderConfig
+import com.moe.starflow.translate.screenshot.AccessibilityProvider
+import com.moe.starflow.translate.screenshot.AccessibilityEventHandler
+import com.moe.starflow.translate.screenshot.AccessibilityServiceManager
+import com.moe.starflow.translate.widget.BallStateManager
+import com.moe.starflow.translate.widget.CropView
+import com.moe.starflow.translate.widget.Dialogs
+import com.moe.starflow.translate.screenshot.MediaProjectionProvider
+import com.moe.starflow.translate.screenshot.ScreenshotData
+import com.moe.starflow.translate.screenshot.ScreenshotManager
+import com.moe.starflow.translate.screenshot.MediaProjectionIntentHolder
+import com.moe.starflow.translate.screenshot.ScreenshotProvider
+import com.moe.starflow.translate.screenshot.ScreenCapturePermissionActivity
+import com.moe.starflow.translate.TranslationTextAPI
+import com.moe.starflow.translate.isLocalHeavyEngine
+import com.moe.starflow.utils.Constants
+import com.moe.starflow.utils.ContextBudget
+import com.moe.starflow.utils.CustomPreference
+import com.moe.starflow.utils.FloatingBallStyle
+import com.moe.starflow.utils.KeystoreManager
+import com.moe.starflow.utils.TextSimilarity
+import com.moe.starflow.utils.TranslationExecutionMode
+import com.moe.starflow.utils.TranslationBusyRegistry
+import com.moe.starflow.utils.LocalTranslationCoordinator
+import com.moe.starflow.utils.ThemeManager
+import com.moe.starflow.translate.TranslationStatusOverlay
+import com.moe.starflow.utils.UtilTools
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.Job
+import kotlinx.coroutines.delay
+import kotlinx.coroutines.cancel
+import kotlinx.coroutines.launch
+import kotlinx.coroutines.runBlocking
+import kotlinx.coroutines.withContext
+import translationapi.bingtranslation.BingTranslation
+import translationapi.niutrans.NiuTranslation
+import translationapi.openaitranslation.OpenAITranslation
+import translationapi.doubaotranslation.DoubaoTranslation
+import translationapi.volctranslation.VolcTranslation
+import translationapi.azuretranslation.AzureTranslation
+import translationapi.deepltranslation.DeepLTranslation
+import translationapi.baidutranslation.BaiduTranslationText
+import translationapi.tencentcloud.TencentTranslationText
+import translationapi.customtranslation.CustomTranslationText
+import translationapi.nllbtranslation.NLLBTranslation
+import translationapi.TranslatorFactory
+import com.moe.starflow.data.CacheEntry
+import com.moe.starflow.data.TranslationCacheManager
+import com.moe.starflow.data.TranslationCacheUtils
+import com.moe.starflow.utils.PerceptualHash
+import org.json.JSONArray
+import org.json.JSONObject
+import java.util.LinkedList
+import kotlin.math.abs
+import kotlin.math.roundToInt
+
+class MangaFloatingService : LifecycleService() {
+
+    /** 与 Activity 对称：Service 不走 attachBaseContext 的本地化，这里补上，悬浮菜单随应用语言。 */
+    override fun attachBaseContext(newBase: android.content.Context) {
+        super.attachBaseContext(com.moe.starflow.utils.LanguageManager.applyLanguage(newBase))
+    }
+
+    companion object {
+        private const val TAG = "MangaFloatingService"
+        /** 自动翻译下连续多少次 OCR 空才提示（节流） */
+        private const val AUTO_EMPTY_NOTICE_AT = 3
+        /** 自动翻译下连续多少次 OCR 空就关闭自动翻译（避免一直空转） */
+        private const val AUTO_EMPTY_ABORT_COUNT = 20
+        private const val NOTIFICATION_CHANNEL_ID = "manga_floating_service"
+        private const val NOTIFICATION_ID = 7
+
+        // 前台服务通知 ID（MediaProjection 模式需要）
+        private const val FOREGROUND_NOTIFICATION_ID = 34766
+        private const val SCREEN_CAPTURE_CHANNEL_ID = "screen_capture"
+
+        private const val CLICK_SLOP = 5f
+        private const val LONG_PRESS_SLOP = 10f
+        private const val DOUBLE_CLICK_DELAY = 300L
+
+        fun start(context: Context) {
+            androidx.core.content.ContextCompat.startForegroundService(
+                context, Intent(context, MangaFloatingService::class.java)
+            )
+        }
+
+        fun stop(context: Context) {
+            context.stopService(Intent(context, MangaFloatingService::class.java))
+        }
+    }
+
+    private var longPressDelay = 500L
+
+    // 手势动作配置
+    private var singleClickAction = Constants.BallAction.TRANSLATE
+    private var doubleClickAction = Constants.BallAction.AUTO_TRANSLATE
+    private var longPressAction = Constants.BallAction.MENU
+
+    // 双击检测
+    private var lastClickTime = 0L
+    private val singleClickRunnable = Runnable { executeAction(singleClickAction) }
+
+    private lateinit var windowManager: WindowManager
+    private lateinit var floatingBallView: View
+    /** 在屏的悬浮菜单：AlertDialog 的 window 背景/主题上下文都是建时定死的，主题切换要重建它。 */
+    private var menuDialog: android.app.AlertDialog? = null
+    /** 悬浮球视图是否已添加到窗口（主题重建的守卫，lateinit 用 `?.` 不防未初始化）。 */
+    private var ballViewAdded = false
+    private lateinit var resultOverlayView: FrameLayout
+    private lateinit var resultOverlayImage: ImageView  // overlay 内的图片子 View
+
+    private var floatingBallParams: WindowManager.LayoutParams? = null
+    private var resultOverlayParams: WindowManager.LayoutParams? = null
+
+    private var ballInitialX = 0
+    private var ballInitialY = 0
+    private var ballInitialTouchX = 0f
+    private var ballInitialTouchY = 0f
+
+    private var isProcessing = false
+    @Volatile private var translationCancelled = false  // 用户强制停止翻译：不保存结果；跨线程读（TranslateUtils 取消轮询）需 volatile
+    /** 本次翻译是否已有部分气泡渲染上屏（分批渲染首批 / 本地模型流式出字）：决定单击悬浮球是直接终止还是弹确认 */
+    private var partialRenderShown = false
+    /** 流式渲染协程的 Job 跟踪：processMangaScreenshot 收尾 join 后再 recycle 截图，避免读取已回收 bitmap 崩溃 */
+    private val streamingRenderJobs = java.util.Collections.synchronizedList(mutableListOf<kotlinx.coroutines.Job>())
+    private var isResultShowing = false
+    private var isMenuShowing = false
+
+    // 翻译状态提示条
+    private lateinit var statusOverlay: TranslationStatusOverlay
+
+    // SharedPreferences listener（防止被 GC 回收）
+    private var prefChangeListener: SharedPreferences.OnSharedPreferenceChangeListener? = null
+
+    // 悬浮球图标变更广播接收器（防止被 GC 回收，跨 onCreate/onDestroy 复用同一实例）
+    private var iconChangeReceiver: android.content.BroadcastReceiver? = null
+
+    // 悬浮球状态机
+    private var ballStateManager: BallStateManager? = null
+
+    // Long press detection
+    private val handler = Handler(Looper.getMainLooper())
+    private val longPressRunnable = Runnable { handleLongPress() }
+    private var currentGesture: GestureType? = null
+
+    // AI 上下文（批次间增量渲染用；见 TranslateUtils.translateBubbles 的 forceContext）
+    //
+    // ⚠️ 这里**没有**上下文开关/预算字段：漫画的正常翻译刻意不使用上下文（`forceContext=false`），
+    //    只有增量渲染的两批之间才用一次、用完回滚（`IncrementalBatchPipeline` 按 size 回滚）。
+    //    预算是每次现读的（`ContextBudget.budgetOf`，在 `TranslateUtils` 里），因此设置项改动
+    //    **不需要**在下面的 watchedKeys 里登记 —— 登记只会白白触发一次 config 重载与语言提示。
+    //    原先那两个 `contextEnabled`/`contextMaxCount` 字段是死的（只赋值、从不读），已删。
+    private val contextHistory = LinkedList<Pair<String, String>>()  // (原文, 译文) 对
+
+    // Auto-translate — 基于图像哈希 + 区域级缓存的智能自动翻译
+    // 状态机（autoTranslateEngine.isAutoTranslating/autoTranslateEngine.detectState/hash 等）移入 MangaAutoTranslateEngine
+    private var wasAutoTranslatingBeforeCrop = false  // 框选前的自动翻译状态
+    private var consecutiveEmptyCount = 0  // 连续未检测到文字的计数（用于检测受保护区域）
+
+    /**
+     * 「未检测到文字」等待发提示（string res）。
+     *
+     * ⚠️ 不能在判定当场发：`processMangaScreenshot` 的 `finally` 会调 `dismissProgressOverlay()`
+     * → `statusOverlay.dismiss()` **清空全部 chip**，当场发的提示会被几毫秒后的清屏吃掉，
+     * 用户只看到「检测中」然后什么都没了。因此统一记在这里、由 finally 在清屏**之后**发。
+     * 分批管线（`IncrementalBatchPipeline` 的 `HandledEmpty`）与普通 OCR 空两条路径共用。
+     */
+    private var pendingEmptyNoticeRes: Int? = null
+    private var pendingAutoStart = false   // 等待权限授权后自动启动
+    private lateinit var autoTranslateEngine: MangaAutoTranslateEngine
+    private lateinit var engineManager: MangaEngineManager
+    // 区域级翻译缓存（TranslatedRegion/translatedRegions 移入 RegionCacheManager）
+    private val regionCache = RegionCacheManager()
+
+    // Crop selection
+    private lateinit var cropView: CropView
+    private var cropViewParams: WindowManager.LayoutParams? = null
+    private var cropRect: RectF? = null
+    private var isCropActive = false
+    /**
+     * `cropRect` 是在哪套几何下选出来的 —— **记的是那次截图帧的实测尺寸**（而非 `getScreenSize()`）。
+     * 后者依赖 `CropView.onSizeChanged` 上报，框选确认后 CropView 已移除、该值不再更新，
+     * 「几何变化」在框选界面关着时检测不到。帧尺寸每次截图都新鲜，且与框选窗口同几何。
+     */
+    private var cropRectFrameSize: android.util.Size? = null
+
+    private lateinit var prefs: CustomPreference
+    private lateinit var config: MangaModeConfig
+
+    // ── 引擎组合：单一数据源，所有标签/切换/初始化共用 ──
+    private data class ComboDef(
+        val key: String,
+        val detEngine: DetEngine,
+        val ocrEngine: OcrEngine,
+        val labelRes: Int,
+        val needsDownloadCheck: Boolean = false
+    )
+
+    /** 切换顺序：mlkit → ppocr → ppocrv6 → manga → mlkit */
+    private val engineCombos = listOf(
+        ComboDef("mlkit", DetEngine.MLKIT, OcrEngine.MLKit, R.string.manga_model_mlkit),
+        ComboDef("ppocr", DetEngine.PP_OCR_V5, OcrEngine.PPOcrV5, R.string.manga_model_ppocr, needsDownloadCheck = true),
+        ComboDef("ppocrv6", DetEngine.PP_OCR_V6, OcrEngine.PPOcrV6, R.string.manga_model_ppocrv6),
+        ComboDef("manga", DetEngine.RT_DETR_V2, OcrEngine.MangaOcr, R.string.manga_model_manga_ocr, needsDownloadCheck = true),
+    )
+
+    /** 当前 config 匹配的组合（兜底 mlkit） */
+    private fun currentCombo(): ComboDef = engineCombos.firstOrNull {
+        it.detEngine == config.detEngine && it.ocrEngine == config.ocrEngine
+    } ?: engineCombos[0]
+
+    /** combo key → 显示标签 */
+    private fun comboLabel(combo: ComboDef): String = getString(combo.labelRes)
+
+    /** 检查需下载的组合是否可用 */
+    private fun isComboAvailable(combo: ComboDef): Boolean = when {
+        !combo.needsDownloadCheck -> true
+        combo.key == "ppocr" -> PPOcrModelFiles.isV5DetDownloaded(this) && PPOcrModelFiles.isV5RecZhDownloaded(this)
+        else -> RTDetrModelFiles.isModelAvailable(this) && MangaOcrModelFiles.isModelDownloaded(this)
+    }
+
+    /** 应用组合：更新 config + 持久化 + 初始化引擎 */
+    private fun applyCombo(combo: ComboDef) {
+        config = config.copy(detEngine = combo.detEngine, ocrEngine = combo.ocrEngine)
+        val group = OcrEngineGroup.entries.firstOrNull {
+            it.mangaDet == combo.detEngine && it.mangaOcr == combo.ocrEngine
+        } ?: OcrEngineGroup.MLKIT
+        OcrEngineManager.setOcrEngineGroup(prefs.getSharedPreferences(), group)
+        showToast(getString(combo.labelRes), true)
+        when (combo.key) {
+            "ppocr" -> lifecycleScope.launch { engineManager.initPPOcrV5("检测器+识别器") }
+            "ppocrv6" -> lifecycleScope.launch { engineManager.initPPOcrV6("检测器+识别器") }
+            "manga" -> lifecycleScope.launch { engineManager.initRTDetrV2(); engineManager.ensureMangaOcrInitialized() }
+            else -> {} // MLKit 无需初始化
+        }
+    }
+    private var translatorText: TranslationTextAPI? = null
+
+    // 截图提供者
+    private var screenshotProvider: ScreenshotProvider? = null
+
+    // 缓存管理
+    private lateinit var cacheManager: TranslationCacheManager
+    private var forceRefresh = false
+    private var isForceRefreshActive = false  // 保存 forceRefresh 状态，用于保存缓存时判断
+    private var lastCachedHistoryId: Long = 0  // 缓存命中的 historyId，用于强制刷新时删除旧记录
+    private var lastCachedPHash: Long = 0      // 缓存命中的 pHash，用于验证 historyId 有效性
+
+    // 复制模式
+    private var isCopyMode = false
+    private var copyOriginalMode = false  // false=译文, true=原文
+    private var copyClickLayer: android.widget.FrameLayout? = null
+    private var copyBubbleViews: MutableList<View> = mutableListOf()
+    private var copyButtonsContainer: android.widget.LinearLayout? = null
+
+    private var currentShowBubbles: List<TranslatedBubble> = emptyList()  // 当前显示的翻译气泡（非缓存）
+    private var renderToggleJob: kotlinx.coroutines.Job? = null  // toggle 渲染协程，避免重复渲染
+    @Volatile private var currentOriginalBitmap: Bitmap? = null  // 原始截图（用于原文模式重新渲染）
+    private var currentOverlayBitmapW: Int = 0  // 当前 overlay 对应的 bitmap 宽度（用于坐标映射）
+    private var currentOverlayBitmapH: Int = 0  // 当前 overlay 对应的 bitmap 高度（用于坐标映射）
+    private var lastCacheBubbleRects: String? = null  // 缓存命中的气泡 rect JSON
+    private var cachedOriginalTextList: List<String> = emptyList()  // 缓存结果解析后的原文列表
+    private var cachedTranslatedTextList: List<String> = emptyList()  // 缓存结果解析后的译文列表
+
+    // 翻译会话 ID（每次服务启动生成新的）
+    private val sessionId = java.util.UUID.randomUUID().toString()
+    private var currentPHash = 0L
+    private var currentExtHashes: LongArray? = null  // 256-bit 扩展哈希（用于缓存匹配和存储）
+    private var cacheOverlayContainer: android.widget.FrameLayout? = null
+    private var cacheOverlayImage: ImageView? = null  // cache overlay 中的 ImageView 引用
+
+    // 无障碍重截图：干净截图到达后拦截处理
+    private var pendingCleanScreenshot = false
+    private var pendingDetectionPHash = 0L
+    private var pendingDetectionExtHashes: LongArray? = null
+
+    // 当前翻译的原始全屏截图（未裁剪），用于缓存 originalBitmap
+    // 注意：MediaProjectionProvider 和 AccessibilityProvider 的 data.fullBitmap 均为全屏截图，
+    // 不会被裁剪。如果以后有截图提供者在 emit 前裁剪 fullBitmap，此处需同步更新。
+    private var pendingFullBitmap: Bitmap? = null
+
+    private lateinit var debugPanel: MangaDebugPanelController
+
+    private sealed class GestureType {
+        object Click : GestureType()
+        object LongPress : GestureType()
+        object Drag : GestureType()
+    }
+
+    // ---------- Lifecycle ----------
+
+    override fun onCreate() {
+        super.onCreate()
+        prefs = CustomPreference.getInstance(this)
+
+        // 注册悬浮球图标变更广播（Personalization 设置页改图标时实时刷新）
+        val receiver = object : android.content.BroadcastReceiver() {
+            override fun onReceive(context: android.content.Context?, intent: android.content.Intent?) {
+                val key = intent?.getStringExtra("extra_icon_key") ?: return
+                if (key == "Icon_Comic") {
+                    // 重读状态机的 Idle 图标路径
+                    ballStateManager?.setState(BallStateManager.State.Idle)
+                }
+            }
+        }
+        iconChangeReceiver = receiver
+        androidx.localbroadcastmanager.content.LocalBroadcastManager.getInstance(this)
+            .registerReceiver(receiver, android.content.IntentFilter("action_floating_ball_icon_changed"))
+
+        statusOverlay = TranslationStatusOverlay.getInstance(this)
+        cacheManager = TranslationCacheManager(this)
+        // 读取手势动作配置
+        singleClickAction = Constants.BallAction.fromValue(prefs.getString("Ball_Gesture_Single_Click", "0").toIntOrNull() ?: 0)
+        doubleClickAction = Constants.BallAction.fromValue(prefs.getString("Ball_Gesture_Double_Click", "2").toIntOrNull() ?: 2)
+        longPressAction = Constants.BallAction.fromValue(prefs.getString("Ball_Gesture_Long_Press", "1").toIntOrNull() ?: 1)
+        config = loadConfig()
+        // 自动翻译状态机（副作用经回调注入服务）
+        autoTranslateEngine = MangaAutoTranslateEngine(
+            context = this,
+            isResultOrMenuShowing = { isResultShowing || isMenuShowing },
+            isProcessing = { isProcessing },
+            onShowProgress = { showProgressOverlay(it) },
+            onDismissProgress = { dismissProgressOverlay() },
+            onTriggerTranslation = { triggerTranslation() },
+            onClearRegionCache = { regionCache.clear() },
+            onShowToast = { showToast(it) }
+        )
+        // OCR 引擎初始化/释放管理器（引擎为静态单例，UI 副作用经回调）
+        engineManager = MangaEngineManager(
+            context = this,
+            scope = lifecycleScope,
+            onShowToast = { showToast(it) },
+            loadConfig = { loadConfig() },
+            onMangaOcrError = { msg ->
+                statusOverlay.showError(msg)
+                ballStateManager?.setState(BallStateManager.State.Error)
+            },
+            onMangaOcrDownloadRequired = { msg ->
+                statusOverlay.showImmediate(msg)
+                ballStateManager?.setState(BallStateManager.State.Idle)
+            }
+        )
+        checkLanguageHints()
+        initTranslator()
+
+        // 新会话开始：清掉共享引擎（LlamaCppSharedHolder 是进程级实例）里可能残留的上下文
+        clearContext()
+
+        // 监听源语言、引擎、结果样式变化，实时检查语言/模型提示并刷新 config
+        val watchedKeys = setOf(
+            "Ocr_Engine_Group",
+            "Source_Language",
+            "Manga_Det_Model",
+            "Manga_Rec_Model",
+            com.moe.starflow.manga.config.MangaModeConfig.KEY_KEEP_TEXT_FREE,
+            "Manga_Text_Color",
+            "Manga_BG_Color",
+            "Manga_Text_Direction",
+            // RT-DETR + manga-ocr 的渲染方向（在【识别自由文字】正下方）：改完立刻重读 config
+            com.moe.starflow.manga.config.RtTextDirection.KEY,
+            TranslationCacheManager.KEY_MANGA_HORIZONTAL_ALIGN,
+            TranslationCacheManager.KEY_MANGA_TRACKING,
+            TranslationCacheManager.KEY_MANGA_LEADING,
+            // 字号：设置页 / 阅读器面板改完要立刻重读 config，否则悬浮窗还用旧字号渲染
+            com.moe.starflow.utils.MangaFontSize.KEY_SIZE,
+            com.moe.starflow.utils.MangaFontSize.KEY_AUTO
+        )
+        prefChangeListener = SharedPreferences.OnSharedPreferenceChangeListener { _, key ->
+            when {
+                // 翻译模型切换：重建 translator（共享 Hy-MT2 实例由 Holder 换出/重建，无需重启服务）
+                key == "Text_API" || key == "Text_AI" -> initTranslator()
+                // 主题切换：Service 不随 AppCompat 重建，在屏的悬浮球/弹窗要手动重建才跟上
+                key == ThemeManager.KEY -> rebuildThemedWindows()
+                // 悬浮球大小 / 透明度：设置页拖完立刻应用到在屏的球
+                key in FloatingBallStyle.KEYS -> applyBallStyle()
+                key in watchedKeys -> {
+                    config = loadConfig()
+                    checkLanguageHints()
+                }
+            }
+        }
+        prefs.getSharedPreferences().registerOnSharedPreferenceChangeListener(prefChangeListener)
+        rebuildThemedWindows()
+
+        // 互斥：停止普通翻译服务
+        try {
+            stopService(Intent(this, com.moe.starflow.translate.FloatingBallService::class.java))
+        } catch (e: Exception) {
+            LogCollector.w(TAG, "Could not stop FloatingBallService", e)
+        }
+
+        createNotificationChannel()
+        // 先用 specialUse 启动（兼容无障碍模式），需要 MediaProjection 时再升级
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
+            startForeground(NOTIFICATION_ID, buildNotification(), android.content.pm.ServiceInfo.FOREGROUND_SERVICE_TYPE_SPECIAL_USE)
+        } else {
+            startForeground(NOTIFICATION_ID, buildNotification())
+        }
+
+        // 先初始化截图提供者，权限检查在 UI 初始化之前
+        initScreenshotProvider()
+
+        if (screenshotProvider is MediaProjectionProvider) {
+            updateForegroundTypeForMediaProjection()
+            if (!(screenshotProvider as MediaProjectionProvider).ensureInitialized()) {
+                LogCollector.d(TAG, "MediaProjection needs permission, deferring UI init")
+                ScreenCapturePermissionActivity.start(this, "manga")
+                // 不创建 UI，等授权后再初始化
+                return
+            }
+        }
+
+        // 权限就绪，正常初始化 UI
+        initializeViews()
+        setupScreenshotCollector()
+
+        // 初始化 OCR 引擎（识别器）
+        when (config.ocrEngine) {
+            OcrEngine.MLKit -> {}  // MLKit 无需初始化
+            OcrEngine.MangaOcr -> lifecycleScope.launch { engineManager.ensureMangaOcrInitialized() }
+            OcrEngine.PPOcrV5 -> lifecycleScope.launch { engineManager.initPPOcrV5("识别器") }
+            OcrEngine.PPOcrV6 -> lifecycleScope.launch { engineManager.initPPOcrV6("识别器") }
+        }
+
+        // 初始化检测引擎（检测器）
+        when (config.detEngine) {
+            DetEngine.MLKIT -> {}
+            DetEngine.RT_DETR_V2 -> lifecycleScope.launch { engineManager.initRTDetrV2() }
+            DetEngine.PP_OCR_V5 -> lifecycleScope.launch { engineManager.initPPOcrV5("检测器") }
+            DetEngine.PP_OCR_V6 -> lifecycleScope.launch { engineManager.initPPOcrV6("检测器") }
+        }
+
+        LogCollector.d(TAG, "MangaFloatingService created")
+    }
+
+    override fun onTaskRemoved(rootIntent: Intent?) {
+        super.onTaskRemoved(rootIntent)
+        // 清除后台时停止服务
+        stopSelf()
+    }
+
+    override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
+        if (intent?.getBooleanExtra("PERMISSION_RESULT", false) == true) {
+            LogCollector.d(TAG, "Permission granted, initializing Shooter")
+            updateForegroundTypeForMediaProjection()
+            val initialized = (screenshotProvider as? MediaProjectionProvider)?.ensureInitialized() ?: false
+            LogCollector.d(TAG, "Shooter init result: $initialized")
+            if (pendingAutoStart && initialized) {
+                pendingAutoStart = false
+                LogCollector.d(TAG, "Starting pending auto-translate")
+                startAutoTranslate()
+            } else if (autoTranslateEngine.isAutoTranslating && initialized) {
+                LogCollector.d(TAG, "Resuming auto-translate")
+                autoTranslateEngine.scheduleNextDetection(0L)
+            }
+        }
+        return super.onStartCommand(intent, flags, startId)
+    }
+
+    override fun onDestroy() {
+        super.onDestroy()
+        // 服务停止 = 一次翻译会话结束 → 清空上下文（用户口径：「关闭截屏翻译进程等待」）。
+        // 关键是**引擎侧**那份：LlamaCpp 是进程级共享实例，服务重建后还是同一个对象，
+        // 不清就会把上一个会话的历史接着当上下文用。本字段随 Service 实例一起销毁，清它只是顺带。
+        clearContext()
+        // 注销悬浮球图标变更广播
+        iconChangeReceiver?.let {
+            androidx.localbroadcastmanager.content.LocalBroadcastManager.getInstance(this).unregisterReceiver(it)
+        }
+        iconChangeReceiver = null
+        // 释放截图提供者
+        screenshotProvider?.release()
+        stopForegroundForScreenshot()
+        // 注销 SharedPreferences listener
+        prefChangeListener?.let {
+            prefs.getSharedPreferences().unregisterOnSharedPreferenceChangeListener(it)
+        }
+        prefChangeListener = null
+        // 先取消协程，防止 View 清理后又由协程回调添加新 View
+        lifecycleScope.cancel()
+        removeAllViews()
+        statusOverlay.release()
+        ballStateManager?.release()
+        ballStateManager = null
+        translatorText?.release()
+        autoTranslateEngine.clearScheduled()
+        regionCache.clear()
+
+        // 等待正在执行的 ONNX 推理完成后再释放资源
+        // 防止 session.close() 和 session.run() 并发导致 native 内存损坏
+        runBlocking(Dispatchers.IO) {
+            coroutineContext[Job]?.children?.forEach { it.join() }
+        }
+
+        // 释放 OCR 引擎资源
+        when (config.ocrEngine) {
+            OcrEngine.MLKit -> {}
+            OcrEngine.MangaOcr -> engineManager.releaseMangaOcr()
+            OcrEngine.PPOcrV5 -> engineManager.releasePPOcrV5()
+            OcrEngine.PPOcrV6 -> engineManager.releasePPOcrV6()
+        }
+
+        // 释放检测引擎资源
+        when (config.detEngine) {
+            DetEngine.MLKIT -> {}
+            DetEngine.RT_DETR_V2 -> engineManager.releaseRTDetrV2()
+            DetEngine.PP_OCR_V5 -> engineManager.releasePPOcrV5()
+            DetEngine.PP_OCR_V6 -> engineManager.releasePPOcrV6()
+        }
+
+        // 发送广播通知 UI 更新按钮状态
+        val stopIntent = Intent(com.moe.starflow.translate.BroadcastAction.ACTION_MANGA_SERVICE_STOPPED)
+        androidx.localbroadcastmanager.content.LocalBroadcastManager.getInstance(this).sendBroadcast(stopIntent)
+        LogCollector.d(TAG, "MangaFloatingService destroyed")
+    }
+
+    // ---------- Initialization ----------
+
+    /**
+     * 清空 AI 上下文（内存历史 + 引擎里已推入的那份）。
+     * 时机：**新会话开始**（`onCreate`）与**服务停止**（`onDestroy`）——
+     * 与 `FloatingBallService.clearContext` 同一口径，理由见那边的注释。
+     */
+    private fun clearContext() {
+        if (contextHistory.isNotEmpty()) {
+            LogCollector.d(TAG, "清空 AI 上下文（${contextHistory.size} 轮）")
+            contextHistory.clear()
+        }
+        ContextBudget.clear(translatorText)
+    }
+
+    // 初始化截图提供者
+    private fun initScreenshotProvider() {
+        val method = prefs.getString("Screenshot_Method", "0").toIntOrNull() ?: 0
+        screenshotProvider = when (method) {
+            0 -> MediaProjectionProvider(this)
+            1 -> AccessibilityProvider()
+            else -> MediaProjectionProvider(this)
+        }
+        LogCollector.d(TAG, "Screenshot provider initialized: ${screenshotProvider?.javaClass?.simpleName}")
+    }
+
+    private fun reloadConfig() {
+        config = loadConfig()
+        translatorText?.release()
+        initTranslator()
+    }
+
+    private fun initTranslator() {
+        LogCollector.d(TAG, "initTranslator: Text_API=${prefs.getInt("Text_API", Constants.TextApi.BING.id)}")
+        try {
+            translatorText = TranslatorFactory.create(this, prefs, TranslatorFactory.Mode.MANGA)
+            if (translatorText == null) {
+                LogCollector.e(TAG, "initTranslator: 引擎创建失败")
+                showToast(getString(R.string.toast_engine_init_failed))
+            }
+        } catch (e: Exception) {
+            LogCollector.e(TAG, "initTranslator: Exception", e)
+            showToast(getString(R.string.toast_init_error_format, e.message ?: ""))
+        }
+
+        // 显示翻译 API 初始化成功的消息
+        if (translatorText != null) {
+            val apiName = translatorText!!::class.simpleName ?: "Translation API"
+            showToast(getString(R.string.toast_engine_init_ok, apiName))
+        }
+
+        LogCollector.d(TAG, "initTranslator: result translatorText=${translatorText?.javaClass?.simpleName}")
+    }
+
+
+    private fun loadConfig(): MangaModeConfig {
+        // det/ocr 统一从 Ocr_Engine_Group 读（旧 Manga_Det_Model/Manga_Rec_Model 仅作为一次迁移输入，见 OcrEngineManager）
+        val group = OcrEngineManager.getOcrEngineGroup(prefs.getSharedPreferences())
+        val detEngine = group.mangaDet
+        // RT-DETR-V2 检测器已输出气泡/区域级结果，不需要 BubbleDetector 再次聚类
+        val autoDetectBubble = if (detEngine == DetEngine.RT_DETR_V2) {
+            false
+        } else {
+            prefs.getBoolean("Manga_Auto_Detect_Bubble", true)
+        }
+        return MangaModeConfig(
+            enabled = true,
+            textDirection = VerticalFlow.fromPref(prefs.getString("Manga_Text_Direction", "0")).toTextDirection(),
+            smartBackground = prefs.getBoolean("Manga_Smart_Background", true),
+            autoDetectBubble = autoDetectBubble,
+            fontSize = prefs.getFloat("Manga_Font_Size", 16f),
+            autoFontSize = prefs.getBoolean("Manga_Auto_Font_Size", true),
+            sourceLang = prefs.getString("Source_Language", "ja"),
+            targetLang = prefs.getString("Target_Language", "zh"),
+            textColor = prefs.getInt("Manga_Text_Color", android.graphics.Color.BLACK),
+            bgColor = prefs.getInt("Manga_BG_Color", android.graphics.Color.argb(200, 255, 255, 255)),
+            ocrEngine = group.mangaOcr,
+            detEngine = detEngine,
+            keepTextFree = prefs.getBoolean(
+                com.moe.starflow.manga.config.MangaModeConfig.KEY_KEEP_TEXT_FREE, true
+            ),
+            horizontalAlign = when (prefs.getString(TranslationCacheManager.KEY_MANGA_HORIZONTAL_ALIGN, "1")) {
+                "0" -> TextAlign.LEFT
+                "2" -> TextAlign.RIGHT
+                else -> TextAlign.CENTER
+            },
+            trackingRatio = prefs.getInt(TranslationCacheManager.KEY_MANGA_TRACKING, 0) / 100f,
+            leadingRatio = prefs.getInt(TranslationCacheManager.KEY_MANGA_LEADING, 0) / 100f,
+            // RT-DETR-V2 + manga-ocr 的渲染方向（两态，默认竖排右→左）：该路径不做横竖判断
+            rtTextDirection = RtTextDirection.load(prefs.getSharedPreferences())
+        )
+    }
+
+    @SuppressLint("InflateParams")
+    private fun initializeViews() {
+        windowManager = getSystemService(WINDOW_SERVICE) as WindowManager
+        debugPanel = MangaDebugPanelController(
+            this,
+            windowManager,
+            onDismissAll = { dismissResultOverlay() },
+            onBringFront = { bringFloatingBallToFront() }
+        )
+
+        // Create floating ball using original layout (65dp icon)
+        floatingBallView = LayoutInflater.from(this).inflate(R.layout.floatball_layout, null)
+        // UI 同步字体（开关开启时）：Service 无 Factory2，树遍历应用
+        com.moe.starflow.utils.FontSync.applyToTree(floatingBallView!!)
+
+        floatingBallParams = WindowManager.LayoutParams().apply {
+            type = WindowManager.LayoutParams.TYPE_APPLICATION_OVERLAY
+            format = PixelFormat.RGBA_8888
+            flags = WindowManager.LayoutParams.FLAG_NOT_FOCUSABLE
+            width = WindowManager.LayoutParams.WRAP_CONTENT
+            height = WindowManager.LayoutParams.WRAP_CONTENT
+            gravity = Gravity.START or Gravity.TOP
+            x = 80
+            y = 300
+        }
+
+        windowManager.addView(floatingBallView, floatingBallParams)
+        ballViewAdded = true
+
+        ballStateManager = BallStateManager(this, floatingBallView, BallStateManager.Mode.Comic)
+        ballStateManager?.setState(BallStateManager.State.Idle)
+
+        // 加载自定义悬浮球图标
+        // 一次性迁移：旧 Custom_Floating_Pic 首次遇到时复制到 Icon_Comic
+        if (!prefs.contains("Icon_Comic")) {
+            val legacy = prefs.getString("Custom_Floating_Pic", "")
+            if (legacy.isNotEmpty()) prefs.setString("Icon_Comic", legacy)
+        }
+
+        val iconName = prefs.getString("Icon_Comic", "comic-1.准备识别-打开漫画页面.png")
+        val iconView = floatingBallView.findViewById<ImageView>(R.id.floating_ball_icon)
+        if (iconName.isEmpty()) {
+            iconView.setImageResource(R.mipmap.icon_comic_default)
+        } else {
+            val iconFile = java.io.File(getExternalFilesDir(null), "icon/$iconName")
+            try {
+                if (iconFile.exists()) {
+                    val bitmap = android.graphics.BitmapFactory.decodeFile(iconFile.absolutePath)
+                    iconView.setImageBitmap(bitmap)
+                } else {
+                    iconView.setImageResource(R.mipmap.icon_comic_default)
+                }
+            } catch (e: Exception) {
+                LogCollector.w(TAG, "Failed to load custom icon", e)
+                iconView.setImageResource(R.mipmap.icon_comic_default)
+            }
+        }
+
+        // 悬浮球配色跟着应用主题（Service 自己不随 AppCompat 重建）
+        rebuildThemedWindows()
+
+        // 悬浮球大小 / 透明度（个性化设置；游戏与漫画共用同一份，改完由 prefChangeListener 实时应用）
+        // 走 applyBallStyle() 而不是裸 apply：它同时按新尺寸把窗口夹回屏内（球变大只向右下长）
+        applyBallStyle()
+
+        // 加载长按判定时间
+        longPressDelay = prefs.getLong("Custom_Long_Press_Delay", 300L)
+
+        setupTouchListener()
+
+        // Result overlay (initially not added) — FrameLayout 包含 ImageView，按钮可加入同一窗口
+        resultOverlayImage = ImageView(this).apply {
+            scaleType = ImageView.ScaleType.FIT_XY
+        }
+        resultOverlayView = FrameLayout(this).apply {
+            setBackgroundColor(Color.argb(180, 0, 0, 0))
+            addView(resultOverlayImage, FrameLayout.LayoutParams(
+                FrameLayout.LayoutParams.MATCH_PARENT,
+                FrameLayout.LayoutParams.MATCH_PARENT
+            ))
+        }
+
+        resultOverlayParams = WindowManager.LayoutParams().apply {
+            type = WindowManager.LayoutParams.TYPE_APPLICATION_OVERLAY
+            format = PixelFormat.RGBA_8888
+            flags = WindowManager.LayoutParams.FLAG_NOT_FOCUSABLE or
+                    WindowManager.LayoutParams.FLAG_LAYOUT_IN_SCREEN
+            width = WindowManager.LayoutParams.MATCH_PARENT
+            height = WindowManager.LayoutParams.MATCH_PARENT
+            gravity = Gravity.START or Gravity.TOP
+        }
+
+        // Progress overlay (initially not added)
+        // Crop view (initially not added)
+        cropView = CropView(this)
+        // ⚠️ MATCH_PARENT，与游戏模式口径一致（原先这里用 getScreenSize() 的像素值，
+        // 而该方法在横屏下会被冻结成竖屏 → 窗口与真实显示不一致）。此值虽会被
+        // startCropSelection() 覆盖，但留着错误的初值是误导 —— 任何"只 addView 一次"的路径都会中招。
+        cropViewParams = WindowManager.LayoutParams().apply {
+            type = WindowManager.LayoutParams.TYPE_APPLICATION_OVERLAY
+            format = PixelFormat.TRANSLUCENT
+            flags = WindowManager.LayoutParams.FLAG_NOT_FOCUSABLE or
+                    WindowManager.LayoutParams.FLAG_LAYOUT_IN_SCREEN or
+                    WindowManager.LayoutParams.FLAG_LAYOUT_NO_LIMITS
+            // ⚠️ ALWAYS：默认挖孔模式下窗口会避开刘海（横屏实测 display 2712x1220 而窗口
+            // 只有 2574x1220、原点 (138,0)），于是「窗口坐标」与「显示坐标」相差一个刘海宽度，
+            // 结果浮层按显示原点定位、crop 却是窗口局部坐标 → 译文整体偏移。
+            // 覆盖整个 display 让两套坐标重合。
+            com.moe.starflow.translate.screenshot.OverlayWindow.applyFullDisplayCutout(this)
+            width = WindowManager.LayoutParams.MATCH_PARENT
+            height = WindowManager.LayoutParams.MATCH_PARENT
+            gravity = Gravity.START or Gravity.TOP
+            x = 0
+            y = 0
+        }
+    }
+
+    /**
+     * 获取屏幕真实物理像素尺寸（横屏/竖屏都正确，包含系统栏区域）
+     * resources.displayMetrics 在 Service 上下文中可能返回竖屏尺寸
+     */
+    @Suppress("DEPRECATION")
+    private fun getScreenSize(): android.util.Size {
+        val p = com.moe.starflow.utils.DisplaySize.size(this)
+        return android.util.Size(p.x, p.y)
+    }
+
+    private fun dpToPx(dp: Int): Int {
+        return (dp * resources.displayMetrics.density).toInt()
+    }
+
+    // ---------- Touch handling (matches original FloatingBallService pattern) ----------
+
+    @SuppressLint("ClickableViewAccessibility")
+    private fun setupTouchListener() {
+        floatingBallView.setOnTouchListener { _, event ->
+            when (event.action) {
+                MotionEvent.ACTION_DOWN -> {
+                    ballInitialX = floatingBallParams?.x ?: 0
+                    ballInitialY = floatingBallParams?.y ?: 0
+                    ballInitialTouchX = event.rawX
+                    ballInitialTouchY = event.rawY
+
+                    // Start long press detection
+                    handler.postDelayed(longPressRunnable, longPressDelay)
+                    currentGesture = null
+                    true
+                }
+                MotionEvent.ACTION_MOVE -> {
+                    val totalMoveX = abs(event.rawX - ballInitialTouchX)
+                    val totalMoveY = abs(event.rawY - ballInitialTouchY)
+
+                    // Cancel long press if moved too much
+                    if (totalMoveX > LONG_PRESS_SLOP || totalMoveY > LONG_PRESS_SLOP) {
+                        handler.removeCallbacks(longPressRunnable)
+                    }
+
+                    // Drag if moved enough
+                    if (totalMoveX > CLICK_SLOP || totalMoveY > CLICK_SLOP) {
+                        currentGesture = GestureType.Drag
+                        floatingBallParams?.apply {
+                            x = (ballInitialX + (event.rawX - ballInitialTouchX)).toInt()
+                            y = (ballInitialY + (event.rawY - ballInitialTouchY)).toInt()
+                            windowManager.updateViewLayout(floatingBallView, this)
+                        }
+                    }
+                    true
+                }
+                MotionEvent.ACTION_UP, MotionEvent.ACTION_CANCEL -> {
+                    handler.removeCallbacks(longPressRunnable)
+
+                    // Click if no gesture detected and within slop
+                    if (currentGesture == null) {
+                        val totalMoveX = abs(event.rawX - ballInitialTouchX)
+                        val totalMoveY = abs(event.rawY - ballInitialTouchY)
+                        if (totalMoveX <= CLICK_SLOP && totalMoveY <= CLICK_SLOP) {
+                            // 双击检测
+                            val now = System.currentTimeMillis()
+                            if (now - lastClickTime < DOUBLE_CLICK_DELAY) {
+                                // 双击：取消单击计时器，执行双击动作
+                                handler.removeCallbacks(singleClickRunnable)
+                                lastClickTime = 0L
+                                // 双击反馈动画（快速双脉冲）
+                                floatingBallView.animate()
+                                    .scaleX(0.85f).scaleY(0.85f)
+                                    .setDuration(60)
+                                    .withEndAction {
+                                        floatingBallView.animate()
+                                            .scaleX(1.1f).scaleY(1.1f)
+                                            .setDuration(60)
+                                            .withEndAction {
+                                                floatingBallView.animate()
+                                                    .scaleX(1f).scaleY(1f)
+                                                    .setDuration(60)
+                                                    .start()
+                                            }
+                                            .start()
+                                    }
+                                    .start()
+                                executeAction(doubleClickAction)
+                            } else {
+                                // 可能是单击，延迟等待第二次点击
+                                lastClickTime = now
+                                handler.removeCallbacks(singleClickRunnable)
+                                handler.postDelayed(singleClickRunnable, DOUBLE_CLICK_DELAY)
+                            }
+                        }
+                    }
+
+                    currentGesture = null
+                    true
+                }
+                else -> false
+            }
+        }
+    }
+
+    // ---------- Long press menu ----------
+
+    private fun handleLongPress() {
+        currentGesture = GestureType.LongPress
+        // 长按震动反馈动画（缩放+透明度）；透明度以用户设置值为基准，收尾必须回到设置值，
+        // 否则一次长按就把用户设的透明度抹成不透明
+        val ballAlpha = FloatingBallStyle.alpha(prefs.getSharedPreferences())
+        floatingBallView.animate()
+            .scaleX(1.2f).scaleY(1.2f)
+            .alpha(ballAlpha * 0.7f)
+            .setDuration(100)
+            .withEndAction {
+                floatingBallView.animate()
+                    .scaleX(1f).scaleY(1f)
+                    .alpha(ballAlpha)
+                    .setDuration(100)
+                    .start()
+            }
+            .start()
+        executeAction(longPressAction)
+    }
+
+    private fun showMenu() {
+        val cropLabel = if (cropRect != null) {
+            getString(R.string.manga_mode_crop)
+        } else {
+            getString(R.string.manga_mode_fullscreen)
+        }
+
+        isMenuShowing = true
+
+        // 普通模式：固定搭配，3 个合法组合循环（高级模式菜单已删除）
+        showMenuSimple(cropLabel)
+    }
+
+    /**
+     * 普通模式菜单：从 engineCombos 读取当前标签
+     */
+    private fun showMenuSimple(cropLabel: String) {
+        val modelLabel = comboLabel(currentCombo())
+
+        // ⚠️ 必须用 ThemeManager.dialogContext：Service 自己拿的是系统默认浅色主题，
+        // 标题/正文恒为深色字，压在 dialog_background 翻出来的深色背景上会看不清
+        val dlgCtx = ThemeManager.dialogContext(this)
+        val langName = getCurrentSourceLangName(dlgCtx)
+        val (dialog, listView, _, dlgBg) = Dialogs.mangaMenuDialogSimple(
+            dlgCtx, autoTranslateEngine.isAutoTranslating, cropLabel, modelLabel, langName
+        )
+
+        listView.onItemClickListener = android.widget.AdapterView.OnItemClickListener { _, _, which, _ ->
+            when (which) {
+                0 -> {
+                    // 切换全屏/框选
+                    if (cropRect != null) {
+                        cropRect = null
+                        showToast(getString(R.string.manga_mode_fullscreen), true)
+                        val adapter = listView.adapter as com.moe.starflow.translate.widget.MenuDialogAdapter
+                        adapter.updateLabel(0, "${getString(R.string.manga_crop_toggle)}：${getString(R.string.manga_mode_fullscreen)}")
+                    } else {
+                        dialog.dismiss()
+                        handler.postDelayed({ startCropSelection() }, 200)
+                    }
+                }
+                1 -> {
+                    if (autoTranslateEngine.isAutoTranslating) {
+                        showToast(getString(R.string.auto_translate_disabled_hint), true)
+                    } else {
+                        showFontSizeDialog()
+                    }
+                }
+                2 -> {
+                    if (autoTranslateEngine.isAutoTranslating) {
+                        showToast(getString(R.string.auto_translate_disabled_hint), true)
+                    } else {
+                        // 切换模型（固定搭配）
+                        toggleModelSimple(dialog, listView)
+                    }
+                }
+                3 -> {
+                    if (autoTranslateEngine.isAutoTranslating) {
+                        showToast(getString(R.string.auto_translate_no_switch), true)
+                    } else {
+                        // 循环切换源语言，不关闭菜单
+                        cycleSourceLang()
+                        val adapter = listView.adapter as com.moe.starflow.translate.widget.MenuDialogAdapter
+                        adapter.updateLabel(3, "${dlgCtx.getString(R.string.game_switch_language)}：${getCurrentSourceLangName(dlgCtx)}")
+                    }
+                }
+                4 -> {
+                    // 自动翻译
+                    toggleAutoTranslate()
+                    val adapter = listView.adapter as com.moe.starflow.translate.widget.MenuDialogAdapter
+                    if (autoTranslateEngine.isAutoTranslating) {
+                        adapter.updateLabel(4, getString(R.string.manga_menu_stop_auto))
+                        adapter.updateIcon(4, R.drawable.stop_auto)
+                    } else {
+                        adapter.updateLabel(4, getString(R.string.manga_menu_auto_translate))
+                        adapter.updateIcon(4, R.drawable.start_auto)
+                    }
+                }
+                5 -> {
+                    dialog.dismiss()
+                    stopSelf()
+                }
+                6 -> {
+                    dialog.dismiss()
+                    backToMainActivity()
+                }
+            }
+        }
+
+        dialog.window?.setType(WindowManager.LayoutParams.TYPE_APPLICATION_OVERLAY)
+        dialog.show()
+        dialog.window?.setBackgroundDrawableResource(dlgBg)
+        applyMenuWindowSize(dialog)
+        menuDialog = dialog
+        dialog.setOnDismissListener {
+            isMenuShowing = false
+            menuDialog = null
+        }
+    }
+
+    /** 菜单窗口尺寸：竖屏限宽 80%、横屏限 40%×70%（重建菜单时同样要应用）。 */
+    private fun applyMenuWindowSize(dialog: android.app.AlertDialog) {
+        val screenSize = getScreenSize()
+        if (resources.configuration.orientation == android.content.res.Configuration.ORIENTATION_LANDSCAPE) {
+            dialog.window?.setLayout((screenSize.width * 0.4).toInt(), (screenSize.height * 0.7).toInt())
+        } else {
+            dialog.window?.setLayout((screenSize.width * 0.80f).toInt(), ViewGroup.LayoutParams.WRAP_CONTENT)
+        }
+    }
+
+    /** 重建菜单时复用同一套标题文案（与长按入口一致）。 */
+    private fun currentCropLabelForMenu(): String = if (cropRect != null) {
+        getString(R.string.manga_mode_crop)
+    } else {
+        getString(R.string.manga_mode_fullscreen)
+    }
+
+    /**
+     * 应用主题切换后重建在屏窗口。
+     *
+     * 悬浮窗是长命 Service，`AppCompatDelegate` 重建 Activity 时不会重建它，Service 自己的
+     * Resources 又恒定跟随系统 → 不主动重建的话：开着的菜单要等用户关掉重开才变色，悬浮球
+     * 一直停在旧配色。悬浮球用与主题同源的底色盘托住（自定义图标是用户 PNG，不能变色）。
+     */
+    private fun rebuildThemedWindows() {
+        // lateinit 字段在服务刚起、球还没加进窗口时不可读（`?.` 不防未初始化），先挡住
+        if (!ballViewAdded) return
+
+        floatingBallView.setBackground(ThemeManager.ballPlateDrawable(this))
+        // 在屏的菜单：AlertDialog 的 window 背景与主题上下文都是建时定死的，只能重建
+        val menu = menuDialog
+        if (menu != null && menu.isShowing) {
+            isMenuShowing = false
+            menu.setOnDismissListener(null)   // 别让 dismiss 把重建出来的菜单标记抹掉
+            menu.dismiss()
+            showMenuSimple(currentCropLabelForMenu())
+        }
+    }
+
+    /** 把「悬浮球大小 / 透明度」设置应用到在屏的球（球还没加进窗口时跳过）。 */
+    private fun applyBallStyle() {
+        if (!ballViewAdded) return
+        val sp = prefs.getSharedPreferences()
+        FloatingBallStyle.apply(floatingBallView, sp)
+        // 尺寸变了球只向右下长 → 贴边会出屏，转屏后甚至整球不可达：按新尺寸把窗口夹回屏内
+        val screen = getScreenSize()
+        val params = floatingBallParams
+        if (FloatingBallStyle.clampIntoDisplay(
+                params, FloatingBallStyle.sizePx(this, sp), screen.width, screen.height
+            )
+        ) {
+            params?.let { windowManager.updateViewLayout(floatingBallView, it) }
+        }
+    }
+
+    private fun backToMainActivity() {
+        val intent = Intent(this, MainActivity::class.java).apply {
+            flags = Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_SINGLE_TOP
+        }
+        startActivity(intent)
+    }
+
+    // ---------- Fullscreen translate ----------
+
+    private fun clearCrop() {
+        cropRect = null
+        showToast(getString(R.string.manga_mode_fullscreen))
+    }
+
+    // ---------- Menu actions ----------
+
+    /**
+     * 语言/模型可用性提示（系统 Toast）
+     * 触发点：onCreate、toggleModelSimple、SharedPreferences listener
+     *
+     * 场景：
+     * 1. 漫画翻译运行中 + 非日文 → 提示
+     * 2. 韩文 + PP引擎 + KO未下载 → 提示下载
+     * 3. 俄文 + 非PP引擎 → 提示切换到PP
+     * 4. 俄文 + PP引擎 + RU未下载 → 提示下载
+     */
+    private fun checkLanguageHints() {
+        val isPPv5 = config.ocrEngine == OcrEngine.PPOcrV5 || config.detEngine == DetEngine.PP_OCR_V5
+        val isMangaOcr = config.ocrEngine == OcrEngine.MangaOcr
+        val src = config.sourceLang
+
+        // 俄文：仅 PP-OCRv5 支持（v6 / ML Kit / manga-ocr 均不支持西里尔文）
+        if (src == "ru" && !isPPv5) {
+            showSystemToast(getString(R.string.ru_need_ppocrv5_engine))
+            return
+        }
+        // PP-OCRv5：检查 KO/RU 等需要下载独立模型的语言
+        if (isPPv5) {
+            val (_, hint) = PPOcrV5Engine.resolveRecLang(this, src)
+            if (hint != null) {
+                showSystemToast(hint)
+                return
+            }
+        }
+        // PP-OCRv6：多语言模型内置，无需额外下载检查
+
+        // manga-ocr 模型 + 非日文 → 提示
+        if (isMangaOcr && src != "ja") {
+            showSystemToast(getString(R.string.manga_ocr_non_ja_hint))
+        }
+    }
+
+    private fun showSystemToast(message: String) {
+        Toast.makeText(this, message, Toast.LENGTH_SHORT).show()
+    }
+
+    /**
+     * 循环切换源语言：仅中(繁)/日/英/韩等常用语言（与主页共用 Source_Language pref）。
+     * 只循环当前 OCR 组支持的语言，跳过不支持的。逻辑统一收敛到 OcrEngineManager.cycleFloatingSourceLang。
+     */
+    private fun cycleSourceLang() {
+        val next = com.moe.starflow.utils.OcrEngineManager.cycleFloatingSourceLang(prefs.getSharedPreferences())
+            ?: run { showToast(getString(R.string.no_available_ocr_model), true); return }
+        config = loadConfig()  // 写 pref 之后再读，刷新内存 config.sourceLang
+        val langName = com.moe.starflow.translate.CustomLocale.getInstance(next).getDisplayName()
+        showToast(getString(R.string.language_switched_to, langName), true)
+        checkLanguageHints()
+    }
+
+    /**
+     * 获取当前源语言的显示名称
+     */
+    private fun getCurrentSourceLangName(): String = getCurrentSourceLangName(this)
+
+    /** 语言显示名的本地化跟随**弹窗上下文**：Service 自己的 Resources 不随 App_Language 变。 */
+    private fun getCurrentSourceLangName(ctx: android.content.Context): String {
+        val lang = prefs.getString("Source_Language", "ja")
+        return com.moe.starflow.translate.CustomLocale.getInstance(lang).getDisplayName(ctx)
+    }
+
+    /**
+     * 切换模型组合（循环遍历 engineCombos，跳过不可用的）
+     */
+    private fun toggleModelSimple(@Suppress("UNUSED_PARAMETER") dialog: AlertDialog, listView: android.widget.ListView) {
+        val cur = currentCombo()
+        val curIdx = engineCombos.indexOf(cur).coerceAtLeast(0)
+
+        // 找下一个可用组合（向前循环，最多绕过一圈）
+        var nextIdx = curIdx
+        var next: ComboDef
+        do {
+            nextIdx = (nextIdx + 1) % engineCombos.size
+            next = engineCombos[nextIdx]
+        } while (!isComboAvailable(next) && nextIdx != curIdx)
+
+        // 释放所有旧引擎
+        engineManager.releaseMangaOcr()
+        engineManager.releasePPOcrV5()
+        engineManager.releasePPOcrV6()
+        engineManager.releaseRTDetrV2()
+
+        applyCombo(next)
+
+        // 更新菜单标签
+        val adapter = listView.adapter as com.moe.starflow.translate.widget.MenuDialogAdapter
+        adapter.updateLabel(2, "${getString(R.string.manga_model_toggle)}：${comboLabel(next)}")
+    }
+
+    /**
+     * 「字体大小」菜单弹窗。
+     *
+     * 读写一律走 [MangaFontSize]（个性化设置页 / 阅读器翻译面板也用它）——
+     * 三个入口共用同一对 prefs，任何一处改完另两处立刻一致。
+     */
+    private fun showFontSizeDialog() {
+        // 三处共用的弹窗实现（设置页 / 悬浮窗 / 阅读器面板）；悬浮窗是 overlay 窗口，需设类型。
+        // ⚠️ 深浅来源因入口而异：**设置页与悬浮窗走全局主题**（[ThemeManager.isNight]），
+        // **阅读器面板走它自己的内置主题**（darkPanel，随阅读背景）—— 不要混用。
+        val dark = ThemeManager.isNight(this)
+        val dialog = MangaFontSizeDialog.create(ThemeManager.dialogContext(this), dark = dark) {
+            // 弹窗里改完要立刻反映到下一次渲染：config 是启动时读一次的快照
+            config = config.copy(
+                fontSize = MangaFontSize.size(this),
+                autoFontSize = MangaFontSize.isAuto(this)
+            )
+        }
+        dialog.window?.setType(WindowManager.LayoutParams.TYPE_APPLICATION_OVERLAY)
+        dialog.show()
+    }
+
+    // ---------- Auto-translate — 智能状态机 ----------
+
+    private fun toggleAutoTranslate() {
+        if (autoTranslateEngine.isAutoTranslating) {
+            stopAutoTranslate()
+        } else {
+            startAutoTranslate()
+        }
+    }
+
+    private fun startAutoTranslate() {
+        if (TranslationExecutionMode.isOcrOnly(this)) {
+            showToast(getString(R.string.execution_ocr_only_auto_disabled), true)
+            return
+        }
+        // 只在 AccessibilityService 模式下检查无障碍服务
+        val isMediaProjection = screenshotProvider is MediaProjectionProvider
+        if (!isMediaProjection && AccessibilityServiceManager.getService() == null) {
+            showToast(getString(R.string.accessibility_recycle), true)
+            return
+        }
+        // MediaProjection 模式：检查权限，未授权则请求并等待回调
+        if (isMediaProjection && !(screenshotProvider as MediaProjectionProvider).ensureInitialized()) {
+            LogCollector.d(TAG, "startAutoTranslate: MediaProjection not ready, requesting permission")
+            pendingAutoStart = true
+            ScreenCapturePermissionActivity.start(this, "manga")
+            return
+        }
+        pendingAutoStart = false
+        consecutiveEmptyCount = 0
+        // 状态初始化/首检调度/region 缓存清空/toast 由状态机处理
+        autoTranslateEngine.start()
+    }
+
+    private fun stopAutoTranslate() {
+        consecutiveEmptyCount = 0
+        autoTranslateEngine.stop()
+        // 自动翻译中强制关闭：若有翻译在途，同样丢弃部分结果不保存
+        if (isProcessing) {
+            cancelInFlightTranslation(showMessage = false)
+        }
+    }
+
+
+    // ---------- Crop selection ----------
+
+    private fun startCropSelection() {
+        if (isCropActive) {
+            showToast(getString(R.string.manga_crop_active), true)
+            return
+        }
+
+        // 暂停自动翻译
+        if (autoTranslateEngine.isAutoTranslating) {
+            wasAutoTranslatingBeforeCrop = true
+            stopAutoTranslate()
+            LogCollector.d(TAG, "框选模式：暂停自动翻译")
+        }
+
+        val screenSize = getScreenSize()
+        // ⚠️ 原先判据是 `resources.configuration.orientation == 1` —— 该值在该机横屏下**恒为 1**
+        // （进程 configuration 被冻结在初始方向），于是条件退化成 `cropRect != null`，
+        // 横屏照样复用竖屏的旧框。改为几何比对：几何不同就不套旧框、重新居中。
+        if (cropRect != null && !cropGeometryChanged()) {
+            cropView.setRect(cropRect!!)
+        } else {
+            // 等布局完成后用 view 自身尺寸计算居中框选区域
+            cropView.setRectCentered(0.8f, 0.6f)
+        }
+
+        cropView.onConfirmCrop = { confirmCrop() }
+        // 每次显示时重置 overlay 几何。
+        // ⚠️ MATCH_PARENT 而不是像素值：Service 的 Display 取值会被冻结在进程初始化方向，
+        // 照它定尺寸会让框选窗口与真实显示不一致 —— CropView 用自己的 width/height 算居中框，
+        // 横屏下就叠出竖屏形状的框。MATCH_PARENT 由 WMS 按**当前**显示几何解析。
+        cropViewParams?.apply {
+            com.moe.starflow.translate.screenshot.OverlayWindow.applyFullDisplayCutout(this)
+            width = WindowManager.LayoutParams.MATCH_PARENT
+            height = WindowManager.LayoutParams.MATCH_PARENT
+            x = 0
+            y = 0
+        }
+        windowManager.addView(cropView, cropViewParams)
+        LogCollector.d(
+            TAG,
+            "setCropView: cropRect=${cropRect?.toString() ?: "null"} " +
+                "cfgOrientation=${resources.configuration.orientation} " +
+                "getScreenSize=${screenSize.width}x${screenSize.height} " +
+                "可靠=${com.moe.starflow.utils.DisplaySize.isReliable}"
+        )
+        isCropActive = true
+
+        bringFloatingBallToFront()
+    }
+
+    /**
+     * 屏幕几何是否与「框选时」不同 —— 比的是**截图帧的实测尺寸**。
+     *
+     * ⚠️ 判据**不能用** `resources.configuration.orientation` —— 该值在 Service 进程里可能被
+     * 冻结在初始化方向（横屏实测恒为 1），拿它比会恒为「未变化」。
+     * ⚠️ 也不能用 `getScreenSize()`：它依赖 `CropView.onSizeChanged` 上报，框选确认后
+     * CropView 已移除 → 该值冻结在框选那一刻，比对恒为「未变化」（与旧判据同样的失效模式）。
+     */
+    private fun cropGeometryChanged(): Boolean {
+        val saved = cropRectFrameSize ?: return false
+        // ⚠️ 基准与比较**必须同源**：都是 `getScreenSize()`。
+        // 曾用「框选时记 cropView 尺寸、之后比截图帧尺寸」——那两个不是同一个量
+        // （窗口避开手势条时 1080x2400，而 DisplaySize 会与 Display 读数取大补回屏幕），
+        // 于是**每次框选都被判「几何变化」**（实测稳态复现，不是偶发）。
+        val now = getScreenSize()
+        return now.width != saved.width || now.height != saved.height
+    }
+
+    /**
+     * 屏幕变化 → 旧框选坐标失效。
+     *
+     * 与游戏模式口径一致：**清空框选回退全屏**（而不是弹框选界面）—— 因为
+     * [triggerTranslation] 是自动翻译循环每帧都会过的路径，在那儿弹界面会让自动翻译彻底停摆。
+     * 用户想重新框选再点一次即可。**横→竖、竖→横两个方向都会走到这里。**
+     *
+     * 幂等：没有框选时什么也不做。`onConfigurationChanged`（显示变化的直接证据）与
+     * 截图帧尺寸比对共用本入口。
+     */
+    private fun clearCropForScreenChange(): Boolean {
+        // ⚠️ 框选界面**开着**时转屏：必须退出框选并重置。
+        // 否则界面还开着、用户点确认 → confirmCrop() 拿**旧几何**的 mRect 存为新框 →
+        // 之后按旧坐标裁，位置必错。此处直接撤掉界面、恢复悬浮球。
+        if (isCropActive) {
+            LogCollector.d(TAG, "框选界面开着时屏幕变化 → 退出框选并重置")
+            try {
+                if (cropView.isAttachedToWindow || isViewAdded(cropView)) windowManager.removeView(cropView)
+            } catch (e: Exception) {
+                LogCollector.e(TAG, "移除框选界面失败", e)
+            }
+            isCropActive = false
+            bringFloatingBallToFront()
+        }
+        val hadCrop = cropRect != null
+        if (hadCrop) {
+            LogCollector.d(TAG, "屏幕变化：清除旧框选，回退全屏翻译")
+            cropRect = null
+            cropRectFrameSize = null
+        }
+        // ⚠️ 无论有没有框选，屏幕方向变化都要**停止自动翻译** ——
+        // 自动翻译是围绕框选区域做定时的像素/OCR 循环，几何一变它的坐标系就不可信了。
+        val wasAuto = autoTranslateEngine.isAutoTranslating
+        if (wasAuto) stopAutoTranslate()
+        if (!hadCrop && !wasAuto) return false
+        statusOverlay.showSticky(
+            getString(
+                if (wasAuto) R.string.manga_crop_cleared_orientation_auto
+                else R.string.manga_crop_cleared_orientation
+            ))
+        // 返回「框是否被清掉」：调用方据此决定是否作废本帧
+        return hadCrop
+    }
+
+    /**
+     * 截图帧几何与「框选时」不一致 → 清框选回退全屏。
+     *
+     * @return true 表示已判定失效并处理
+     */
+    private fun ensureCropStillValid(): Boolean {
+        if (cropRect == null || !cropGeometryChanged()) return false
+        return clearCropForScreenChange()
+    }
+
+    /**
+     * ⚠️ 漫画此前**完全没有**这个回调 —— 而它是「显示变了」的**直接证据**。
+     * 这里直接清框，不经过几何查询：几何查询（`getScreenSize` → `CropView.onSizeChanged`
+     * 上报）在框选确认、CropView 已移除之后是**冻结**的，问它必然答「没变」。
+     */
+    override fun onConfigurationChanged(newConfig: android.content.res.Configuration) {
+        super.onConfigurationChanged(newConfig)
+        // ⚠️ 上报当前朝向：转屏后这是进程里**唯一新鲜**的方向信号。
+        // 不报的话 DisplaySize 会拿「框选窗已移除→窗口读数陈旧」+「Display 冻结」两个
+        // 都指向旧方向的来源去建帧 → 设备已横屏而帧仍是竖屏 → OCR 跑在转了 90° 的图上。
+        val nowLandscape =
+            newConfig.orientation == android.content.res.Configuration.ORIENTATION_LANDSCAPE
+        // ⚠️ **先读旧朝向，再上报新朝向**。反过来的话下面那个比较会拿刚写进去的值跟自己比，
+        // 条件恒为假 → `clearCropForScreenChange()` 一次都不执行 → 整个「回退全屏 + 提示」
+        // 链路被静默关掉（实测踩过：两模式的回退与提示完全失效）。
+        val knownBefore = com.moe.starflow.utils.DisplaySize.currentOrientation()
+        com.moe.starflow.utils.DisplaySize.reportOrientation(nowLandscape)
+        // ⚠️ 只在本回调**朝向真的翻转**时清框。`onConfigurationChanged` 对**任何**配置变更
+        // 都会触发（改字号 / 语言 / 密度 / uiMode…），那些不涉及坐标，无条件清框会把用户
+        // 刚框好、正在自动翻译的会话平白毁掉。
+        //
+        // 比较基准是「上报**之前**的已知朝向」（= 我们正在用的几何）：
+        // `knownBefore == null` 说明还没有任何几何信息，此时**照清不误** ——
+        // 宁可多清一次（用户重框一次），也不要漏掉转屏导致按旧坐标出结果。
+        if (knownBefore == null || knownBefore != nowLandscape) clearCropForScreenChange()
+    }
+
+    private fun confirmCrop() {
+        cropRect = RectF(cropView.mRect)
+        // ⚠️ 记的必须是 `getScreenSize()`（= DisplaySize.size()），**不能**用 cropView 尺寸 ——
+        // 二者不是同一个量（窗口避开手势条 1080x2400，DisplaySize 补回屏幕 1080x2400+），
+        // 拿窗口值当基准会让之后每次比对都不等 → 每次框选都被判「几何变化」。见 cropGeometryChanged。
+        cropRectFrameSize = getScreenSize()
+        isCropActive = false
+
+        try {
+            windowManager.removeView(cropView)
+        } catch (e: Exception) {
+            LogCollector.e(TAG, "Error removing crop view", e)
+        }
+
+        bringFloatingBallToFront()
+
+        // 日志写清「什么朝向、框多大、屏幕多大」—— 排查横竖屏问题全看这一行
+        val r = cropRect!!
+        LogCollector.d(
+            TAG,
+            "翻译区域已设置: ${com.moe.starflow.utils.DisplaySize.describeCurrent(this)} " +
+                "框=[${r.left.toInt()},${r.top.toInt()}][${r.right.toInt()},${r.bottom.toInt()}] " +
+                "框尺寸=${com.moe.starflow.utils.DisplaySize.describe(r.width().toInt(), r.height().toInt())} " +
+                "框选窗=${cropView.width}x${cropView.height}"
+        )
+        showToast(getString(R.string.manga_crop_confirm), true)
+
+        // 恢复自动翻译
+        if (wasAutoTranslatingBeforeCrop) {
+            wasAutoTranslatingBeforeCrop = false
+            startAutoTranslate()
+            LogCollector.d(TAG, "框选完成：恢复自动翻译")
+        }
+    }
+
+    // ---------- Click handler ----------
+
+    private fun executeAction(action: Constants.BallAction) {
+        when (action) {
+            Constants.BallAction.TRANSLATE -> doTranslate()
+            Constants.BallAction.MENU -> showMenu()
+            Constants.BallAction.AUTO_TRANSLATE -> toggleAutoTranslate()
+            Constants.BallAction.CLOSE_FLOATING -> stop(this)
+        }
+    }
+
+    private fun doTranslate() {
+        // 点击脉冲动画
+        floatingBallView.animate()
+            .scaleX(0.85f).scaleY(0.85f)
+            .setDuration(80)
+            .withEndAction {
+                floatingBallView.animate()
+                    .scaleX(1f).scaleY(1f)
+                    .setDuration(80)
+                    .start()
+            }
+            .start()
+        // 自动翻译中点击 → 手动翻译，暂停自动检测
+        if (autoTranslateEngine.isAutoTranslating) {
+            autoTranslateEngine.isManualTranslating = true
+        }
+        triggerTranslation()
+    }
+
+    private fun triggerTranslation() {
+        LogCollector.d(TAG, "========== triggerTranslation START ==========")
+        if (isProcessing) {
+            LogCollector.d(TAG, "triggerTranslation: already processing, skipping")
+            if (autoTranslateEngine.isAutoTranslating) {
+                // 自动翻译中：只提示（取消翻译请双击悬浮球关闭自动翻译）
+                showToast(getString(R.string.is_translating_auto), true)
+            } else if (partialRenderShown) {
+                // 手动翻译中且已有部分结果上屏（分批渲染首批 / 本地流式出字）→ 确认后停止，避免误丢已出结果
+                showStopTranslationDialog()
+            } else {
+                // 手动翻译中且尚无任何结果上屏 → 直接终止 + 提示，不弹确认
+                stopTranslationNow()
+            }
+            return
+        }
+        if (isCropActive) {
+            LogCollector.d(TAG, "triggerTranslation: crop is active, skipping")
+            return
+        }
+        // 屏幕几何变化 → 清框选回退全屏 + 停自动翻译（与游戏模式口径一致）。
+        // 放在这里是因为 triggerTranslation 是自动翻译循环每帧都会过的路径，覆盖最全。
+        if (ensureCropStillValid()) return
+
+        // 只在 AccessibilityService 模式下检查无障碍服务
+        val isMediaProjection = screenshotProvider is MediaProjectionProvider
+        if (!isMediaProjection) {
+            val service = AccessibilityServiceManager.getService()
+            LogCollector.d(TAG, "triggerTranslation: accessibilityService=$service")
+            if (service == null) {
+                showToast(getString(R.string.accessibility_recycle), true)
+                return
+            }
+        } else {
+            LogCollector.d(TAG, "triggerTranslation: MediaProjection mode, skipping accessibility check")
+        }
+
+        // 只重新加载视觉配置（文字方向、字体等），不重新初始化翻译API
+        config = loadConfig()
+
+        isProcessing = true
+        translationCancelled = false  // 每次翻译开始重置取消标志
+        partialRenderShown = false    // 每次翻译开始重置部分结果标志
+
+        // 先关闭所有overlay再截图，避免截到进度条/翻译结果
+        dismissResultOverlay()
+        dismissProgressOverlay()
+
+        // 延迟截图，确保 overlay 从屏幕上完全消失（需要等下一帧渲染）
+        lifecycleScope.launch {
+            kotlinx.coroutines.delay(150)
+            LogCollector.d(TAG, "triggerTranslation: translatorText=${translatorText?.javaClass?.simpleName}")
+            LogCollector.d(TAG, "triggerTranslation: cropRect=$cropRect")
+            if (cropRect != null) {
+                LogCollector.d(TAG, "triggerTranslation: taking cropped screenshot")
+            } else {
+                LogCollector.d(TAG, "triggerTranslation: taking full screenshot")
+            }
+            val screenshotStarted = takeScreenshotWithProvider(cropRect, cropView.absolutePointOffset)
+            if (!screenshotStarted) {
+                LogCollector.w(TAG, "Screenshot not started (permission needed?), resetting isProcessing")
+                isProcessing = false
+            }
+            LogCollector.d(TAG, "========== triggerTranslation END ==========")
+        }
+    }
+
+    // 使用 ScreenshotProvider 截图
+    // @return true 截图已启动，false 截图未启动（需要权限等）
+    private fun takeScreenshotWithProvider(cropRect: RectF?, offset: Point): Boolean {
+        val provider = screenshotProvider ?: return false
+        LogCollector.d(TAG, "takeScreenshotWithProvider: provider=${provider.javaClass.simpleName}, cropRect=$cropRect")
+
+        var ballWasShowing = false
+
+        if (provider is MediaProjectionProvider) {
+            // MediaProjection 模式：需要已初始化（权限在服务启动时请求）
+            if (!provider.ensureInitialized()) {
+                LogCollector.w(TAG, "MediaProjection not initialized, permission not granted yet")
+                showToast(getString(R.string.toast_screen_capture_permission), true)
+                return false
+            }
+            // 手动模式：截图前隐藏悬浮球，避免遮挡页面内容影响 pHash
+            // 自动模式：不隐藏（由 collector 中 STABLE 后的重截图逻辑获取干净截图）
+            if (!autoTranslateEngine.isAutoTranslating) {
+                ballWasShowing = ::floatingBallView.isInitialized &&
+                    isViewAdded(floatingBallView) &&
+                    floatingBallView.visibility == View.VISIBLE
+            }
+            // 异步截图：先获取全屏，再由服务层裁剪（保留全屏 bitmap 供缓存使用）
+            lifecycleScope.launch {
+                if (!autoTranslateEngine.isAutoTranslating && ballWasShowing) {
+                    floatingBallView.visibility = View.GONE
+                    LogCollector.d(TAG, "takeScreenshotWithProvider: 手动模式隐藏悬浮球")
+                    // 等至少一个 VSYNC 周期，确保 VD 产出无球的新帧
+                    delay(50)
+                }
+                LogCollector.d(TAG, "Taking MediaProjection screenshot")
+                try {
+                    val fullBitmap = provider.takeScreenshot(null, offset)
+                    if (fullBitmap != null) {
+                        LogCollector.d(TAG, "Full screenshot: ${fullBitmap.width}x${fullBitmap.height}")
+                        val croppedBitmap = if (cropRect != null) {
+                            val cropped = ScreenshotManager.cropBitmap(fullBitmap, cropRect, offset)
+                            // 裁不出有效区域（cropBitmap 返回 null）→ 交给下游按全屏处理，
+                            // 而不是让 croppedBitmap 退化成与 fullBitmap 同一个实例
+                            if (cropped != null) {
+                                LogCollector.d(TAG, "Cropped screenshot: ${cropped.width}x${cropped.height}")
+                            } else {
+                                LogCollector.w(TAG, "裁剪区域无效，按全屏翻译")
+                            }
+                            cropped
+                        } else null
+                        ScreenshotManager.emitScreenshot(ScreenshotData(fullBitmap, croppedBitmap))
+                    } else {
+                        LogCollector.w(TAG, "Screenshot returned null")
+                        isProcessing = false
+                        if (autoTranslateEngine.isAutoTranslating) {
+                            stopAutoTranslate()
+                        }
+                    }
+                } catch (e: Exception) {
+                    LogCollector.e(TAG, "Screenshot exception", e)
+                    isProcessing = false
+                    if (autoTranslateEngine.isAutoTranslating) {
+                        stopAutoTranslate()
+                    }
+                } finally {
+                    if (ballWasShowing) {
+                        floatingBallView.visibility = View.VISIBLE
+                        LogCollector.d(TAG, "takeScreenshotWithProvider: 恢复悬浮球")
+                    }
+                }
+            }
+            return true
+        } else {
+            // AccessibilityService 模式：手动模式截图前隐藏悬浮球
+            // 自动模式：不隐藏（由 collector 中 STABLE 后的重截图逻辑获取干净截图）
+            if (!autoTranslateEngine.isAutoTranslating) {
+                ballWasShowing = ::floatingBallView.isInitialized &&
+                    isViewAdded(floatingBallView) &&
+                    floatingBallView.visibility == View.VISIBLE
+                if (ballWasShowing) {
+                    floatingBallView.visibility = View.GONE
+                }
+            }
+            lifecycleScope.launch {
+                if (ballWasShowing) delay(50)
+                LogCollector.d(TAG, "Taking AccessibilityService screenshot")
+                try {
+                    provider.takeScreenshot(cropRect, offset)
+                } finally {
+                    if (ballWasShowing) {
+                        floatingBallView.visibility = View.VISIBLE
+                    }
+                }
+            }
+            return true
+        }
+    }
+
+    // 启动前台服务（MediaProjection 模式需要）
+    private fun startForegroundForScreenshot() {
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
+            val channel = NotificationChannel(
+                SCREEN_CAPTURE_CHANNEL_ID,
+                getString(R.string.foreground_service_notification_title),
+                NotificationManager.IMPORTANCE_LOW
+            ).apply {
+                description = getString(R.string.foreground_service_notification_text)
+            }
+            val manager = getSystemService(NotificationManager::class.java)
+            manager.createNotificationChannel(channel)
+        }
+
+        val notification = NotificationCompat.Builder(this, SCREEN_CAPTURE_CHANNEL_ID)
+            .setContentTitle(getString(R.string.foreground_service_notification_title))
+            .setContentText(getString(R.string.foreground_service_notification_text))
+            .setSmallIcon(R.drawable.ic_launcher_foreground)
+            .setPriority(NotificationCompat.PRIORITY_LOW)
+            .build()
+
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
+            startForeground(
+                FOREGROUND_NOTIFICATION_ID,
+                notification,
+                ServiceInfo.FOREGROUND_SERVICE_TYPE_MEDIA_PROJECTION
+            )
+        } else {
+            startForeground(FOREGROUND_NOTIFICATION_ID, notification)
+        }
+    }
+
+    // 停止前台服务
+    private fun stopForegroundForScreenshot() {
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.N) {
+            stopForeground(STOP_FOREGROUND_REMOVE)
+        } else {
+            @Suppress("DEPRECATION")
+            stopForeground(true)
+        }
+    }
+
+    /**
+     * 更新前台服务类型为 MEDIA_PROJECTION
+     * 服务在 onCreate 中以默认类型启动，使用 MediaProjection 前需要更新类型
+     */
+    private fun updateForegroundTypeForMediaProjection() {
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
+            val notification = buildNotification()
+            startForeground(NOTIFICATION_ID, notification, ServiceInfo.FOREGROUND_SERVICE_TYPE_MEDIA_PROJECTION)
+            LogCollector.d(TAG, "Updated foreground service type to MEDIA_PROJECTION")
+        }
+    }
+
+    // ---------- Screenshot collection ----------
+
+    private fun setupScreenshotCollector() {
+        LogCollector.d(TAG, "setupScreenshotCollector: starting collector coroutine")
+        ScreenshotManager.setEventMode(AccessibilityEventHandler.Mode.MANGA)
+        lifecycleScope.launch {
+            LogCollector.d(TAG, "Screenshot collector: coroutine started, waiting for screenshots...")
+            ScreenshotManager.screenshotFlow.collect { data ->
+                // ocrBitmap: 用于 OCR 和翻译流程的 bitmap（裁剪后或全屏）
+                val ocrBitmap = data.croppedBitmap ?: data.fullBitmap
+                LogCollector.d(
+                    TAG,
+                    "Screenshot collector: RECEIVED! " +
+                        "帧=${com.moe.starflow.utils.DisplaySize.describe(data.fullBitmap.width, data.fullBitmap.height)} " +
+                        "裁剪后=${com.moe.starflow.utils.DisplaySize.describe(ocrBitmap.width, ocrBitmap.height)} " +
+                        "当前屏幕=${com.moe.starflow.utils.DisplaySize.describeCurrent(this@MangaFloatingService)} " +
+                        "框选=${cropRect?.let { "[${it.left.toInt()},${it.top.toInt()}][${it.right.toInt()},${it.bottom.toInt()}]" } ?: "无(全屏)"}"
+                )
+
+                // ⚠️ 判定要在拿到**新鲜帧**时做：帧尺寸与框选窗口同几何，是唯一不受
+                // 「CropView 已移除 → 几何查询冻结」影响的变化证据（见 ensureCropStillValid）。
+                if (cropRect != null && cropGeometryChanged()) {
+                    // ⚠️ 本帧是**用旧框裁出来的**（截图请求发出时框还没失效），继续翻会按旧坐标出结果
+                    LogCollector.d(TAG, "Screenshot collector: 截图帧几何变化，清框选并作废本帧")
+                    clearCropForScreenChange()
+                    data.fullBitmap.recycle()
+                    isProcessing = false
+                    return@collect
+                }
+
+                try {
+                    // 无障碍重截图拦截：干净截图到达后直接用保存的检测 hash 处理
+                    if (pendingCleanScreenshot) {
+                        pendingCleanScreenshot = false
+                        val detectionPHash = pendingDetectionPHash
+                        val detectionExtHashes = pendingDetectionExtHashes
+                        pendingDetectionPHash = 0L
+                        pendingDetectionExtHashes = null
+                        pendingFullBitmap = data.fullBitmap
+                        showProgressOverlay(getString(R.string.manga_translating))
+                        processMangaScreenshot(ocrBitmap, detectionPHash, detectionExtHashes)
+                        return@collect
+                    }
+
+                    // 自动翻译模式：pHash 门控（手动翻译时跳过）
+                    if (autoTranslateEngine.isAutoTranslating && !autoTranslateEngine.isManualTranslating) {
+                        // 40s 超时省电检测：同一页面超过 40s 未变化，自动停止翻译
+                        if (autoTranslateEngine.lastTranslatedTime > 0 && System.currentTimeMillis() - autoTranslateEngine.lastTranslatedTime > 40_000) {
+                            LogCollector.d(TAG, "Screenshot collector: 40s 超时，页面未变化，停止自动翻译")
+                            ocrBitmap.recycle()
+                            pendingFullBitmap?.recycle()
+                            pendingFullBitmap = null
+                            if (data.croppedBitmap != null) data.fullBitmap.recycle()
+                            isProcessing = false
+                            stopAutoTranslate()
+                            val timeoutCtx = ThemeManager.dialogContext(this@MangaFloatingService)
+                            AlertDialog.Builder(timeoutCtx)
+                                .setTitle(timeoutCtx.getString(R.string.dlg_manga_auto_timeout_title))
+                                .setMessage(timeoutCtx.getString(R.string.dlg_manga_auto_timeout_msg))
+                                .setCancelable(false)
+                                .setPositiveButton(timeoutCtx.getString(R.string.confirm_ok), null)
+                                .create()
+                                .apply {
+                                    window?.setType(WindowManager.LayoutParams.TYPE_APPLICATION_OVERLAY)
+                                    show()
+                                    window?.setBackgroundDrawableResource(
+                                        ThemeManager.dialogBackgroundRes(this@MangaFloatingService)
+                                    )
+                                }
+                            return@collect
+                        }
+                        // 用全屏截图计算稳定的 pHash（不受框选偏移影响）
+                        val pHash = PerceptualHash.compute(data.fullBitmap, centerCrop = true)
+                        // 256-bit 扩展哈希（用于缓存精确匹配）
+                        val extHashes = PerceptualHash.computeExtended(data.fullBitmap, centerCrop = true)
+                        // 保存全屏 bitmap 引用用于缓存（不要在翻译前释放）
+                        pendingFullBitmap = data.fullBitmap
+                        val shouldTranslate = autoTranslateEngine.processAutoDetectPHash(pHash)
+                        if (!shouldTranslate) {
+                            ocrBitmap.recycle()
+                            pendingFullBitmap = null
+                            if (data.croppedBitmap != null) data.fullBitmap.recycle()
+                            isProcessing = false
+                            // 不关闭进度条，保持"自动检测中"显示
+                            return@collect
+                        }
+                        // pHash 通过门控 → 确认翻译，重截干净图（无悬浮球、无进度条）
+                        if (screenshotProvider is MediaProjectionProvider) {
+                            val mpProvider = screenshotProvider as MediaProjectionProvider
+                            val offset = cropView.absolutePointOffset
+
+                            dismissProgressOverlay()
+                            val ballWasShowing = ::floatingBallView.isInitialized &&
+                                isViewAdded(floatingBallView) &&
+                                floatingBallView.visibility == View.VISIBLE
+                            if (ballWasShowing) {
+                                floatingBallView.visibility = View.GONE
+                                LogCollector.d(TAG, "Auto STABLE: 隐藏悬浮球准备重截干净图")
+                            }
+                            // 等 VD 产新帧（无球的画面），50ms 通常足够 SurfaceFlinger 刷新
+                            delay(50)
+
+                            // 截图拿干净图
+                            val cleanFull = mpProvider.takeScreenshot(null, offset)
+                            if (ballWasShowing) floatingBallView.visibility = View.VISIBLE
+
+                            if (cleanFull != null) {
+                                showProgressOverlay(getString(R.string.manga_translating))
+                                ocrBitmap.recycle()
+                                if (data.croppedBitmap != null) data.fullBitmap.recycle()
+                                pendingFullBitmap = cleanFull
+                                val rect = cropRect
+                                // 裁剪失败 → 回退用干净全屏图（不要把 null 传进 processMangaScreenshot）
+                                val cleanOcr = if (rect != null) {
+                                    ScreenshotManager.cropBitmap(cleanFull, rect, offset) ?: cleanFull
+                                } else cleanFull
+                                val cleanExtHashes = PerceptualHash.computeExtended(cleanFull, centerCrop = true)
+                                processMangaScreenshot(cleanOcr, pHash, cleanExtHashes)
+                            } else {
+                                LogCollector.w(TAG, "Auto STABLE: 干净截图返回 null，降级到检测截图")
+                                if (ballWasShowing) floatingBallView.visibility = View.VISIBLE
+                                showProgressOverlay(getString(R.string.manga_translating))
+                                processMangaScreenshot(ocrBitmap, pHash, extHashes)
+                            }
+                        } else {
+                            // 无障碍异步重截：等冷却 → 隐藏球 → 触发截图 → 设标志等下一张 flow
+                            // 无障碍 takeScreenshot API 需至少 350ms 冷却，否则系统限流返回失败
+                            lifecycleScope.launch {
+                                delay(350) // 无障碍截图 API 冷却期（Android 12+ 后台截图频率限制）
+                                dismissProgressOverlay()  // 关掉 MOTION 阶段的"检测中..."，避免被截入
+                                val ballWasShowing = ::floatingBallView.isInitialized &&
+                                    isViewAdded(floatingBallView) &&
+                                    floatingBallView.visibility == View.VISIBLE
+                                if (ballWasShowing) {
+                                    floatingBallView.visibility = View.GONE
+                                    LogCollector.d(TAG, "Auto STABLE: 无障碍隐藏悬浮球准备重截")
+                                }
+                                delay(50)
+                                screenshotProvider!!.takeScreenshot(cropRect, cropView.absolutePointOffset)
+                                pendingDetectionPHash = pHash
+                                pendingDetectionExtHashes = extHashes
+                                pendingCleanScreenshot = true
+                                if (ballWasShowing) {
+                                    floatingBallView.visibility = View.VISIBLE
+                                    LogCollector.d(TAG, "Auto STABLE: 无障碍恢复悬浮球")
+                                }
+                            }
+                            // 回收当前带球截图，等干净截图到达
+                            ocrBitmap.recycle()
+                            pendingFullBitmap?.recycle()
+                            pendingFullBitmap = null
+                            if (data.croppedBitmap != null) data.fullBitmap.recycle()
+                        }
+                    } else {
+                        // 手动模式：用全屏截图计算稳定的缓存 pHash
+                        val cachePHash = PerceptualHash.compute(data.fullBitmap, centerCrop = true)
+                        // 256-bit 扩展哈希（用于缓存精确匹配）
+                        val extHashes = PerceptualHash.computeExtended(data.fullBitmap, centerCrop = true)
+                        // 保存全屏 bitmap 引用用于缓存（不要在翻译前释放）
+                        pendingFullBitmap = data.fullBitmap
+                        showProgressOverlay(getString(R.string.detecting))
+                        try {
+                            processMangaScreenshot(ocrBitmap, cachePHash, extHashes)
+                        } finally {
+                            autoTranslateEngine.isManualTranslating = false  // 无论成功失败，恢复自动检测
+                        }
+                    }
+                    LogCollector.d(TAG, "Screenshot collector: processMangaScreenshot completed normally")
+                } catch (e: TranslationCancelledException) {
+                    // 用户主动停止翻译：用专用异常可靠识别（不依赖 translationCancelled，
+                    // 避免被下一次翻译抢先重置导致竞态误报「翻译失败」）
+                    isProcessing = false
+                    dismissProgressOverlay()
+                    LogCollector.d(TAG, "Screenshot collector: 翻译已被用户停止")
+                } catch (e: java.io.FileNotFoundException) {
+                    LogCollector.e(TAG, "Screenshot collector: 模型文件缺失", e)
+                    isProcessing = false
+                    dismissProgressOverlay()
+                    statusOverlay.showError(getString(R.string.error_rec_model_missing, e.message ?: ""))
+                    ballStateManager?.setState(BallStateManager.State.Error)
+                    if (autoTranslateEngine.isAutoTranslating) {
+                        stopAutoTranslate()
+                    }
+                } catch (e: Exception) {
+                    isProcessing = false
+                    // 先 dismiss 进度条，再显示错误（错误会保持显示直到用户点击复制）
+                    dismissProgressOverlay()
+                    if (translationCancelled) {
+                        // 用户主动停止翻译：不按失败处理（已由 stopTranslationNow 显示"已停止翻译"）
+                        LogCollector.d(TAG, "Screenshot collector: 翻译已被用户停止（${e.message}）")
+                    } else {
+                        LogCollector.e(TAG, "Screenshot collector: CAUGHT EXCEPTION", e)
+                        statusOverlay.showError(getString(R.string.error_translate_failed, e.message ?: getString(R.string.error_unknown)))
+                        ballStateManager?.setState(BallStateManager.State.Error)
+                        if (autoTranslateEngine.isAutoTranslating) {
+                            stopAutoTranslate()
+                        }
+                    }
+                }
+            }
+            @Suppress("UNREACHABLE_CODE")
+            LogCollector.e(TAG, "Screenshot collector: collect() returned unexpectedly", null)
+        }
+
+        // 无障碍事件辅助：滚动/内容变化时加速检测（事件经 EventHandler 去抖后到达）
+        lifecycleScope.launch {
+            ScreenshotManager.eventTriggerFlow.collect { eventType ->
+                if (autoTranslateEngine.isAutoTranslating && autoTranslateEngine.detectState == DetectState.IDLE && !isProcessing) {
+                    LogCollector.d(TAG, "事件触发 [$eventType]: 立即检测")
+                    autoTranslateEngine.scheduleNextDetection(500L)
+                }
+            }
+        }
+    }
+
+    // ---------- Manga translation pipeline ----------
+
+    // ========== 翻译流水线 ==========
+
+    /**
+     * 保存翻译缓存（不渲染 overlay）。
+     * 用于分批渲染场景：用户关闭 overlay 后仍保存完整缓存。
+     */
+    private suspend fun saveCacheEntry(original: Bitmap, allBubbles: List<TranslatedBubble>) {
+        try {
+            val translatorName = TranslateUtils.buildTranslatorDisplayName(translatorText, config.detEngine, config.ocrEngine, prefs.getSharedPreferences())
+            val ocrTexts = allBubbles.mapIndexed { i, b -> "[${i + 1}] ${b.originalText}" }.joinToString("\n")
+            val transTexts = allBubbles.mapIndexed { i, b -> "[${i + 1}] ${b.translatedText}" }.joinToString("\n")
+            LogCollector.d(TAG, "saveCacheEntry: ${allBubbles.size} 个气泡")
+            // 使用实际裁剪坐标（如果有 cropRect）或全屏尺寸
+            val fullWidth = pendingFullBitmap?.width ?: original.width
+            val fullHeight = pendingFullBitmap?.height ?: original.height
+            val useCrop = cropRect != null
+            val entry = CacheEntry(
+                type = TranslationCacheManager.MODE_MANGA,
+                sourceText = ocrTexts.ifEmpty { null },
+                translatedText = transTexts?.ifEmpty { null },
+                resultBitmap = null,
+                sourceLang = config.sourceLang,
+                targetLang = config.targetLang,
+                translatorName = translatorName,
+                pHash = (currentExtHashes?.getOrElse(0) { currentPHash }) ?: currentPHash,
+                pHash2 = currentExtHashes?.getOrElse(1) { 0L } ?: 0L,
+                pHash3 = currentExtHashes?.getOrElse(2) { 0L } ?: 0L,
+                pHash4 = currentExtHashes?.getOrElse(3) { 0L } ?: 0L,
+                sessionId = sessionId,
+                lastSessionId = sessionId,
+                cropLeft = if (useCrop) cropRect!!.left.toInt() else 0,
+                cropTop = if (useCrop) cropRect!!.top.toInt() else 0,
+                cropRight = if (useCrop) cropRect!!.right.toInt() else fullWidth,
+                cropBottom = if (useCrop) cropRect!!.bottom.toInt() else fullHeight,
+                bubbleRects = if (allBubbles.isNotEmpty()) {
+                    TranslationCacheUtils.serializeBubbleRects(allBubbles)
+                } else null
+            )
+            if (isForceRefreshActive) {
+                // 只删除同页面的缓存（pHash 匹配），避免误删其他页面
+                val historyIdToDelete = if (currentPHash == lastCachedPHash) lastCachedHistoryId else 0L
+                cacheManager.refreshCache(historyIdToDelete, entry, originalBitmap = pendingFullBitmap)
+                lastCachedHistoryId = 0
+                lastCachedPHash = 0
+                isForceRefreshActive = false
+            } else {
+                cacheManager.saveToCache(entry, originalBitmap = pendingFullBitmap)
+            }
+        } catch (e: Exception) {
+            LogCollector.e(TAG, "saveCacheEntry 失败", e)
+        }
+    }
+
+    /**
+     * 分批渲染流程：检测+裁剪 → 分两批 OCR+翻译+渲染。
+     * 编排逻辑在 [IncrementalBatchPipeline]（与阅读器共用），此处只做接线与收尾。
+     *
+     * @return true 如果执行了分批流程，false 如果不满足条件（应回退到原有流程）
+     */
+    private suspend fun incrementalTranslateFlow(bitmap: Bitmap): Boolean {
+        return when (val outcome = batchPipeline(bitmap).run(bitmap)) {
+            is BatchOutcome.NotApplicable -> false
+
+            // 检测跑了但气泡太少不值得分批：管线把裁剪结果交回来了，**必须**由这里回收
+            // （见 BatchOutcome.DetectedNotBatched 的「谁复用谁回收」）。悬浮窗不复用，
+            // 直接回收后走原有单批流程 —— 行为与改动前一致。
+            is BatchOutcome.DetectedNotBatched -> {
+                outcome.bubbles.forEach { if (!it.croppedBitmap.isRecycled) it.croppedBitmap.recycle() }
+                false
+            }
+
+            // 未检测到文字/气泡：已弹过提示。跳过原流程，但【绝不调 finalizeIncremental】——
+            // 旧实现在这两个出口是直接 return true。finalizeIncremental 即使收到空列表也会执行
+            // `lastTranslatedHash = currentPHash`，会让自动翻译状态机把空页误判为"已翻译"而永久跳过。
+            is BatchOutcome.HandledEmpty -> {
+                // 管线已在各出口 toToast 过「未检测到文字」，但那一条同样会被
+                // processMangaScreenshot 的 finally 清屏吃掉 —— 这里重新登记，由 finally 补发
+                pendingEmptyNoticeRes = R.string.no_text_found
+                true
+            }
+
+            is BatchOutcome.Handled -> {
+                // 收尾必须留在 try 内：旧实现里 finalizeIncremental 位于三条路线各自的 try 中，
+                // 抛异常 → 被 catch 吞掉 → return false → 回退走普通流程。此处复刻该语义。
+                try {
+                    finalizeIncremental(bitmap, outcome.translated)
+                    true
+                } catch (e: TranslationCancelledException) {
+                    throw e
+                } catch (e: Exception) {
+                    LogCollector.e(TAG, "incrementalTranslateFlow: 分批收尾失败，回退普通流程", e)
+                    false
+                }
+            }
+        }
+    }
+
+    /** 构造分批管线（宿主钩子接回本 Service 的悬浮球 / 状态条 / 结果浮层 / 缓存）。 */
+    private fun batchPipeline(bitmap: Bitmap): IncrementalBatchPipeline =
+        IncrementalBatchPipeline(ServiceBatchHost(bitmap), lifecycleScope, currentBatchConfig())
+
+    /** 本次翻译的不变入参。 */
+    private fun currentBatchConfig() = BatchPipelineConfig(
+        detEngine = config.detEngine,
+        ocrEngine = config.ocrEngine,
+        sourceLang = config.sourceLang,
+        targetLang = config.targetLang,
+        textDirection = config.textDirection,
+        keepTextFree = config.keepTextFree,
+        prefs = prefs,
+        incrementalEnabled = prefs.getBoolean("Incremental_Render", true),
+        isAutoTranslating = autoTranslateEngine.isAutoTranslating,
+        rtTextDirection = config.rtTextDirection,
+        // 仅 OCR 模式：分批路径自带翻译，必须让管线知道（见 BatchPipelineConfig.ocrOnly）
+        ocrOnly = TranslationExecutionMode.isOcrOnly(this),
+    )
+
+    /**
+     * 分批管线的宿主钩子实现：把管线的"喊话"接回 Service 的既有行为。
+     * 每个实现与搬家前的内联代码一一对应，不改变任何可观测行为。
+     */
+    private inner class ServiceBatchHost(private val currentBitmap: Bitmap) : BatchPipelineHost {
+
+        override val context: Context get() = this@MangaFloatingService
+
+        override val translator get() = translatorText
+
+        override suspend fun ensureEnginesReady(det: DetEngine, ocr: OcrEngine) {
+            when (det) {
+                DetEngine.RT_DETR_V2 -> {
+                    engineManager.initRTDetrV2IfNeeded()
+                    engineManager.ensureMangaOcrInitialized()
+                }
+                DetEngine.PP_OCR_V5 -> engineManager.initPPOcrV5IfNeeded()
+                DetEngine.PP_OCR_V6 -> engineManager.initPPOcrV6IfNeeded()
+                DetEngine.MLKIT -> {}
+            }
+        }
+
+        override fun onProgress(textRes: Int) = showProgressOverlay(getString(textRes))
+
+        override fun onToast(text: String, long: Boolean) = showToast(text, long)
+
+        override fun onError(text: String) {
+            statusOverlay.showError(text)
+        }
+
+        override fun onBallState(state: BallStateManager.State) {
+            ballStateManager?.setState(state)
+        }
+
+        override fun onPartialRender(bubbles: List<TranslatedBubble>) {
+            launchPartialRender { renderStreamingOverlay(currentBitmap, bubbles) }
+        }
+
+        override suspend fun onBatchResult(bubbles: List<TranslatedBubble>) {
+            renderAndShowMergedOverlay(currentBitmap, bubbles, saveCache = false, showCopyButton = false)
+        }
+
+        override fun isCancelled() = translationCancelled
+
+        override fun contextHistory() = this@MangaFloatingService.contextHistory
+
+        override fun textCache() = regionCache
+    }
+
+    /**
+     */
+    private suspend fun finalizeIncremental(bitmap: Bitmap, allTranslated: List<TranslatedBubble>) {
+        if (translationCancelled) {
+            LogCollector.d(TAG, "finalizeIncremental: 翻译已取消，跳过保存")
+            return
+        }
+        if (allTranslated.isNotEmpty()) {
+            renderAndShowMergedOverlay(bitmap, allTranslated, saveCache = false)
+            LogCollector.d(TAG, "finalizeIncremental: 最终渲染完成，共 ${allTranslated.size} 个气泡")
+            // Translating 状态已在分批翻译入口处设置（第一批翻译开始时），
+            // 此处不再重复设置，避免图标在翻译完成后才短暂闪过。
+            // 统一保存完整缓存
+            LogCollector.d(TAG, "finalizeIncremental: 保存完整缓存，共 ${allTranslated.size} 个气泡")
+            saveCacheEntry(bitmap, allTranslated)
+            ballStateManager?.setState(BallStateManager.State.Completed)
+        }
+        statusOverlay.showImmediate(getString(R.string.translating_done))
+        ballStateManager?.setState(BallStateManager.State.Completed)
+        autoTranslateEngine.lastTranslatedHash = currentPHash
+        autoTranslateEngine.lastTranslatedTime = System.currentTimeMillis()
+        if (autoTranslateEngine.isAutoTranslating) autoTranslateEngine.scheduleNextDetection(MangaAutoTranslateEngine.DETECT_INTERVAL_MS)
+    }
+
+    private suspend fun processMangaScreenshot(bitmap: Bitmap, precomputedPHash: Long? = null, precomputedExtHashes: LongArray? = null) {
+        TranslationBusyRegistry.enter()
+        try {
+            LogCollector.d(TAG, "processMangaScreenshot: START")
+            // 整个翻译流程开始（OCR 阶段），立刻标 Processing。
+            // 单页路径会一路保持 Processing 直到 Step 3 调翻译；分批路径同理保持到 finalizeIncremental。
+            ballStateManager?.setState(BallStateManager.State.Processing)
+
+            // 清理过期的区域缓存
+            if (autoTranslateEngine.isAutoTranslating) {
+                val beforeSize = regionCache.size()
+                regionCache.evictExpiredRegions()
+                if (beforeSize != regionCache.size()) {
+                    LogCollector.d(TAG, "evictExpiredRegions: ${beforeSize} → ${regionCache.size()} (removed ${beforeSize - regionCache.size()})")
+                }
+            }
+            LogCollector.d(TAG, "processMangaScreenshot: cacheSize at start=${regionCache.size()}")
+
+            // 使用全屏截图计算的稳定 pHash（不受框选偏移影响）
+            // collector 已传入全屏 pHash，fallback 到 bitmap 计算（理论上不会走到）
+            currentPHash = precomputedPHash ?: PerceptualHash.compute(bitmap, centerCrop = true)
+            // 256-bit 扩展哈希（用于缓存精确匹配和存储）
+            currentExtHashes = precomputedExtHashes
+                ?: PerceptualHash.computeExtended(pendingFullBitmap ?: bitmap, centerCrop = true)
+
+            // 纯色/均匀页面精确检测：dHash 全零说明中心区域无任何纹理结构（纯白/纯黑/纯色）
+            // 全零 dHash 会假命中低纹理缓存页面（curBits=0/256 匹配 entryBits=7/256, sim=0.973）
+            // 检测到无内容 → 跳过缓存+OCR+翻译，回到 IDLE
+            if (currentExtHashes != null && currentExtHashes!!.all { it == 0L }) {
+                LogCollector.d(TAG, "processMangaScreenshot: 画面无内容（dHash全零），跳过翻译")
+                statusOverlay.showImmediate(getString(R.string.no_text_detected))
+                ballStateManager?.setState(BallStateManager.State.Completed)
+                showToast(getString(R.string.toast_no_text_detected), false)
+                autoTranslateEngine.lastTranslatedHash = currentPHash
+                autoTranslateEngine.lastTranslatedTime = System.currentTimeMillis()
+                if (autoTranslateEngine.isAutoTranslating) {
+                    autoTranslateEngine.scheduleNextDetection(MangaAutoTranslateEngine.DETECT_INTERVAL_MS)
+                }
+                return
+            }
+
+            // 调试模式：最高优先级，跳过缓存直接检测
+            val isDebugMode = when (config.detEngine) {
+                DetEngine.RT_DETR_V2 -> prefs.getBoolean("RTDetrV2_Debug_View", false)
+                DetEngine.MLKIT -> prefs.getBoolean("MLKit_Debug_View", false)
+                DetEngine.PP_OCR_V5 -> prefs.getBoolean("PPOcrV5_Debug_View", false)
+                DetEngine.PP_OCR_V6 -> prefs.getBoolean("PPOcrV6_Debug_View", false)
+            }
+
+            if (isDebugMode) {
+                LogCollector.d(TAG, "processMangaScreenshot: Debug mode enabled, skip cache")
+                when (config.detEngine) {
+                    DetEngine.RT_DETR_V2 -> {
+                        LogCollector.d(TAG, "RT-DETR-V2 Debug Mode: 开始检测")
+                        engineManager.initRTDetrV2IfNeeded()
+                        val debugResult = withContext(Dispatchers.IO) {
+                            DetectionBridge.detectWithRTDetrV2Debug(bitmap, config.keepTextFree)
+                        }
+                        LogCollector.d(TAG, "RT-DETR-V2 Debug Mode: total=${debugResult.allBubbles.size}, text_bubble=${debugResult.textBubbles.size}, text_free=${debugResult.textFree.size}, bubble=${debugResult.emptyBubbles.size}")
+                        showRTDetrV2DebugView(bitmap, debugResult)
+                    }
+                    DetEngine.MLKIT -> {
+                        LogCollector.d(TAG, "ML Kit Debug Mode: 开始识别")
+                        val mlKitResult = withContext(Dispatchers.IO) {
+                            detectWithMLKitDebug(bitmap, config.sourceLang)
+                        }
+                        LogCollector.d(TAG, "ML Kit Debug Mode: blocks=${mlKitResult.textBlocks.size}, totalLines=${mlKitResult.totalLines}, totalElements=${mlKitResult.totalElements}")
+                        showMLKitDebugView(bitmap, mlKitResult)
+                    }
+                    DetEngine.PP_OCR_V6 -> {
+                        LogCollector.d(TAG, "PP-OCRv6 Debug Mode: 开始检测+识别")
+                        engineManager.initPPOcrV6IfNeeded()
+                        val ocrResult = withContext(Dispatchers.IO) {
+                            PPOcrV6Engine.runOCR(this@MangaFloatingService, bitmap, useDet = true)
+                        }
+                        val debugDet = withContext(Dispatchers.IO) {
+                            PPOcrV6Engine.runDetForDebug(this@MangaFloatingService, bitmap)
+                        }
+                        val recDisc = ocrResult.recDebug
+                        val scoreDisc = recDisc?.discardedReasons?.count { it == "score" } ?: 0
+                        val contentDisc = recDisc?.discardedReasons?.count { it != "score" } ?: 0
+                        LogCollector.d(TAG, "PP-OCRv6 Debug: det=${ocrResult.boxes.size}, rec=${ocrResult.texts.size}, det丢弃=${debugDet.discardedBoxes.size}, 识别丢弃=$scoreDisc, 内容丢弃=$contentDisc")
+                        val allMerged = try {
+                            TextRegionMerger.enableDebugLogging(true)  // 合并判定详细日志（debug 模式）
+                            PPOcrPostProcessing.runTextLineMerge(this, ocrResult, bitmap.width, bitmap.height, isV6 = true, textDirection = config.textDirection)
+                        } finally {
+                            TextRegionMerger.enableDebugLogging(false)
+                        }
+                        val (mergedRegions, contentDiscarded) = PPOcrPostProcessing.filterMergedRegions(allMerged)
+                        LogCollector.d(TAG, "PP-OCRv6 Debug: merged=${allMerged.size}, 内容丢弃=${contentDiscarded.size}, 输出=${mergedRegions.size}")
+                        showPPOcrV6DebugView(bitmap, ocrResult, mergedRegions, debugDet)
+                    }
+                    DetEngine.PP_OCR_V5 -> {
+                        LogCollector.d(TAG, "PP-OCRv5 Debug Mode: 开始检测+识别")
+                        engineManager.initPPOcrV5IfNeeded()
+                        val (recLang, hint) = PPOcrV5Engine.resolveRecLang(this@MangaFloatingService, config.sourceLang)
+                        if (hint != null) {
+                            showToast(hint, true)
+                        }
+                        // 非默认模型时提示
+                        if (recLang != null && recLang != PPOcrV5Engine.RecLang.ZH && recLang != PPOcrV5Engine.RecLang.JA) {
+                            showToast(getString(R.string.toast_using_dedicated_model, recLang.code), false)
+                        }
+                        if (recLang != null) {
+                            val ocrResult = withContext(Dispatchers.IO) {
+                                PPOcrV5Engine.runOCR(this@MangaFloatingService, bitmap, recLang, useDet = true)
+                            }
+                            // 调试检测：获取被丢弃的选区
+                            val debugDet = withContext(Dispatchers.IO) {
+                                PPOcrV5Engine.runDetForDebug(this@MangaFloatingService, bitmap)
+                            }
+                            val recDisc = ocrResult.recDebug
+                            val scoreDisc = recDisc?.discardedReasons?.count { it == "score" } ?: 0
+                            val contentDisc = recDisc?.discardedReasons?.count { it != "score" } ?: 0
+                            LogCollector.d(TAG, "PP-OCRv5 Debug Mode: det=${ocrResult.boxes.size}, rec=${ocrResult.texts.size}, det丢弃=${debugDet.discardedBoxes.size}, 识别丢弃=$scoreDisc, 内容丢弃=$contentDisc")
+                            // 原始识别详情
+                            for (i in ocrResult.texts.indices) {
+                                val text = ocrResult.texts[i]
+                                val score = ocrResult.scores.getOrElse(i) { 0f }
+                                val box = ocrResult.boxes.getOrNull(i)
+                                if (box != null && box.size >= 8) {
+                                    val topDx = box[2] - box[0]
+                                    val topDy = box[3] - box[1]
+                                    val leftDx = box[6] - box[0]
+                                    val leftDy = box[7] - box[1]
+                                    val topLen = kotlin.math.sqrt((topDx * topDx + topDy * topDy).toDouble()).toFloat()
+                                    val leftLen = kotlin.math.sqrt((leftDx * leftDx + leftDy * leftDy).toDouble()).toFloat()
+                                    var angle = kotlin.math.atan2(topDy, topDx) * 180f / Math.PI.toFloat()
+                                    if (abs(angle) <= 3f) angle = 0f
+                                    val isVertical = leftLen > topLen * 1.5f
+                                    val fontSize = if (isVertical) topLen else leftLen
+                                    val dirLabel = if (isVertical) "V" else "H"
+                                    val angleStr = if (abs(angle) > 0.5f) "∠${String.format("%.1f°", angle)}" else "∠0°"
+                                    val quadStr = "TL(${box[0].toInt()},${box[1].toInt()}) TR(${box[2].toInt()},${box[3].toInt()}) BR(${box[4].toInt()},${box[5].toInt()}) BL(${box[6].toInt()},${box[7].toInt()})"
+                                    LogCollector.d(TAG, "PP-OCRv5 RAW[$i]: ${String.format("%.2f", score)} $dirLabel fs=${String.format("%.0f", fontSize)} $angleStr $quadStr \"$text\"")
+                                }
+                            }
+                            // 被丢弃选区详情
+                            for (i in debugDet.discardedBoxes.indices) {
+                                val box = debugDet.discardedBoxes[i]
+                                val score = debugDet.discardedScores.getOrElse(i) { 0f }
+                                val reason = debugDet.discardedReasons.getOrElse(i) { "" }
+                                LogCollector.d(TAG, "PP-OCRv5 DISCARDED[$i]: ${String.format("%.2f", score)} [${box[0].toInt()},${box[1].toInt()}→${box[4].toInt()},${box[5].toInt()}] $reason")
+                            }
+                            // 识别/内容丢弃详情
+                            if (recDisc != null) {
+                                for (i in recDisc.discardedBoxes.indices) {
+                                    val box = recDisc.discardedBoxes[i]
+                                    val score = recDisc.discardedScores.getOrElse(i) { 0f }
+                                    val text = recDisc.discardedTexts.getOrElse(i) { "" }
+                                    val reason = recDisc.discardedReasons.getOrElse(i) { "score" }
+                                    val boxStr = "[${box[0].toInt()},${box[1].toInt()}→${box[4].toInt()},${box[5].toInt()}]"
+                                    if (reason == "score") {
+                                        LogCollector.d(TAG, "PP-OCRv5 REC_DISCARD[$i]: ${String.format("%.2f", score)}<thresh $boxStr \"${text.take(20)}\"")
+                                    } else {
+                                        LogCollector.d(TAG, "PP-OCRv5 CONTENT_DISCARD[$i]: $reason $boxStr \"${text.take(20)}\"")
+                                    }
+                                }
+                            }
+                            // 运行 TextLineMerger 合并（debug 模式开详细判定日志）
+                            val allMerged = try {
+                                TextRegionMerger.enableDebugLogging(true)
+                                PPOcrPostProcessing.runTextLineMerge(this, ocrResult, bitmap.width, bitmap.height, textDirection = config.textDirection)
+                            } finally {
+                                TextRegionMerger.enableDebugLogging(false)
+                            }
+                            // 合并后内容过滤
+                            val (mergedRegions, contentDiscarded) = PPOcrPostProcessing.filterMergedRegions(allMerged)
+                            LogCollector.d(TAG, "PP-OCRv5 Debug Mode: merged=${allMerged.size}, 内容丢弃=${contentDiscarded.size}, 输出=${mergedRegions.size}")
+                            // 合并区域详情
+                            for ((idx, region) in mergedRegions.withIndex()) {
+                                val dirLabel = if (region.direction == TextDirection.VERTICAL_RL || region.direction == TextDirection.VERTICAL_LR) "竖排" else "横排"
+                                val r = region.rect
+                                val merged = region.texts.joinToString("｜")
+                                val angleStr = if (abs(region.angle) > 0.5f) " ∠${String.format("%.1f°", region.angle)}" else ""
+                                LogCollector.d(TAG, "PP-OCRv5 MERGED[$idx]: $dirLabel ×${region.texts.size}$angleStr fs=${String.format("%.0f", region.fontSize)} [${r.left},${r.top},${r.right},${r.bottom}] \"$merged\"")
+                            }
+                            // 内容丢弃详情
+                            for ((region, reason) in contentDiscarded) {
+                                val text = region.texts.joinToString("")
+                                val r = region.rect
+                                LogCollector.d(TAG, "PP-OCRv5 CONTENT_DISCARD: $reason [${r.left},${r.top},${r.right},${r.bottom}] \"${text.take(20)}\"")
+                            }
+                            showPPOcrV5DebugView(bitmap, ocrResult, mergedRegions, debugDet)
+                        } else {
+                            LogCollector.w(TAG, "PP-OCRv5 Debug Mode: 不支持的语言 ${config.sourceLang}")
+                            showToast(getString(R.string.toast_lang_unsupported_v5, config.sourceLang), true)
+                        }
+                    }
+                }
+                return
+            }
+
+            // 全局缓存检查（使用 256-bit 扩展哈希）
+            isForceRefreshActive = forceRefresh
+            if (!isForceRefreshActive) {
+                val extHashesForCache = currentExtHashes
+                    ?: PerceptualHash.computeExtended(pendingFullBitmap ?: bitmap, centerCrop = true)
+                val (curLeft, curTop) = cropRect?.let { Pair(it.left.toInt(), it.top.toInt()) } ?: Pair(-1, -1)
+                val cached = cacheManager.findCacheExt(
+                    extHashesForCache,
+                    TranslationCacheManager.MODE_MANGA,
+                    bitmap.width, bitmap.height,
+                    curLeft, curTop,
+                    sessionId
+                )
+                if (cached != null && cached.resultBitmap != null) {
+                    LogCollector.d(TAG, "processMangaScreenshot: 缓存命中, historyId=${cached.historyId}")
+                    lastCachedHistoryId = cached.historyId
+                    lastCachedPHash = currentPHash
+                    lastCacheBubbleRects = cached.bubbleRects
+                    // 解析缓存的原文/译文列表供复制模式使用
+                    cachedOriginalTextList = TranslationCacheUtils.parseIndexedTextList(cached.originalText)
+                    cachedTranslatedTextList = TranslationCacheUtils.parseIndexedTextList(cached.translatedText)
+                    // 从缓存数据重建 TranslatedBubble 列表（供原文模式 overlay 渲染）
+                    currentShowBubbles = TranslationCacheUtils.rebuildBubblesFromCache(
+                        cachedOriginalTextList, cachedTranslatedTextList, lastCacheBubbleRects, config.fontSize, config.bgColor)
+                    // 通过共享层渲染 overlay（替代加载预渲染 JPEG）
+                    // 仅新数据（有 bubbleRects）走实时渲染；旧数据回退到 imagePath
+                    //
+                    // ⚠️ **仅 OCR 模式下缓存命中也要显示「原文态」**（用户口径 2026-10：
+                    //    「只 OCR 模式应该是对所有涉及 OCR 的功能翻译都生效」）：
+                    //    这个模式的语义就是"只识别、不翻译"，命中一条以前翻好的记录却把**译文**
+                    //    糊回屏幕上，用户会以为它又偷偷翻了。记录里本来就存着原文 + 气泡坐标，
+                    //    直接按 ORIGINAL 渲一遍即可（与 OCR-only 分支的上屏形态完全一致）。
+                    //    旧记录（没有 bubbleRects）渲染不出来时只能回退到老的预渲染图。
+                    val ocrOnly = TranslationExecutionMode.isOcrOnly(this@MangaFloatingService)
+                    val rendered = if (cached.historyEntity != null && cached.pageCache != null
+                        && !cached.bubbleRects.isNullOrBlank()) {
+                        cacheManager.renderOverlay(
+                            history = cached.historyEntity,
+                            pageCache = cached.pageCache,
+                            mode = if (ocrOnly) TranslationCacheManager.OverlayMode.ORIGINAL
+                            else TranslationCacheManager.OverlayMode.TRANSLATED,
+                            forFullImage = false,
+                            // ⚠️ 必须用 getOverlayConfig：这里曾手写位置参数只传 5 个字段，
+                            // 于是「译文替换表 / 重叠合并 / 对齐 / 字距行距 / 缓存标记」全部落默认值 ——
+                            // 表现为同一页**缓存命中时看不到用户规则**，与刚翻完时不一致。
+                            config = cacheManager.getOverlayConfig(prefs.getSharedPreferences())
+                        )
+                    } else null
+                    statusOverlay.showImmediate(getString(R.string.cache_hit))
+                    ballStateManager?.setState(BallStateManager.State.Completed)
+                    autoTranslateEngine.lastTranslatedHash = currentPHash
+                    autoTranslateEngine.lastTranslatedTime = System.currentTimeMillis()
+                    withContext(Dispatchers.Main) {
+                        currentOriginalBitmap?.recycle()
+                        currentOriginalBitmap = bitmap.copy(Bitmap.Config.ARGB_8888, false)
+                        // 若实时渲染成功，释放 buildCacheResult 加载的原图（不再需要）
+                        if (rendered != null) cached.resultBitmap?.recycle()
+                        showResultOverlay(rendered ?: cached.resultBitmap, fromCache = true)
+                    }
+                    return
+                }
+            } else {
+                LogCollector.d(TAG, "processMangaScreenshot: 强制刷新，跳过缓存")
+                forceRefresh = false
+            }
+
+            // OcrLock: 保护 ONNX 模型的多线程访问（PP-OCRv5/manga-ocr 等单例引擎）
+            val ocrToken = com.moe.starflow.manga.OcrLock.acquire()
+        if (ocrToken == 0L) {
+                autoTranslateEngine.scheduleNextDetection(MangaAutoTranslateEngine.DETECT_INTERVAL_MS)
+                isProcessing = false
+                return
+            }
+            var ocrTextBlocks: List<TextBlockInfo>
+            try {
+                // 分批渲染：在检测之前尝试分批流程。
+                // BUGFIX (2026-07-06): 之前这里设 Translating，但分批翻译入口还在 OCR 阶段（可能包含多批 OCR），
+                // 切到 Translating 让图标闪。现在保持 Processing，由 finalizeIncremental 在所有气泡 OCR 完成后切 Translating。
+                ballStateManager?.setState(BallStateManager.State.Processing)
+                if (incrementalTranslateFlow(bitmap)) {
+                    LogCollector.d(TAG, "processMangaScreenshot: 分批渲染完成，跳过原有流程")
+                    return
+                }
+                LogCollector.d(TAG, "processMangaScreenshot: 分批渲染未触发，走原有流程")
+                // 确保选中的模型已初始化
+                when (config.detEngine) {
+                    DetEngine.MLKIT -> {}
+                    DetEngine.RT_DETR_V2 -> engineManager.initRTDetrV2IfNeeded()
+                    DetEngine.PP_OCR_V5 -> engineManager.initPPOcrV5IfNeeded()
+                    DetEngine.PP_OCR_V6 -> engineManager.initPPOcrV6IfNeeded()
+                }
+                when (config.ocrEngine) {
+                    OcrEngine.MLKit -> {}
+                    OcrEngine.MangaOcr -> engineManager.ensureMangaOcrInitialized()
+                    OcrEngine.PPOcrV5 -> engineManager.initPPOcrV5IfNeeded()
+                    OcrEngine.PPOcrV6 -> engineManager.initPPOcrV6IfNeeded()
+                }
+
+                // Step 1: 文字检测 + 识别
+                showProgressOverlay(getString(R.string.text_recognizing))
+                val (ppRecLang, ppHint) = if (config.ocrEngine == OcrEngine.PPOcrV5 || config.detEngine == DetEngine.PP_OCR_V5) {
+                    PPOcrV5Engine.resolveRecLang(this@MangaFloatingService, config.sourceLang)
+                } else {
+                    // 非 PP-OCRv5 引擎：没有「专用 rec 模型」，不计算也不提示。
+                    // ⚠️ 之前用 Pair(getRecLang(sourceLang), null) 导致 ML Kit/V6 也在源语言为 en/ko/ru 时
+                    // 误弹出「使用专用识别模型: rec_en」（该提示仅 PP-OCRv5 特有）。
+                    Pair(null, null)
+                }
+                if (ppHint != null) {
+                    showToast(ppHint, true)
+                }
+                // 非默认模型时提示
+                if (ppRecLang != null && ppRecLang != PPOcrV5Engine.RecLang.ZH && ppRecLang != PPOcrV5Engine.RecLang.JA) {
+                    showToast(getString(R.string.toast_using_dedicated_model, ppRecLang.code), false)
+                }
+                LogCollector.d(TAG, "Step 1 配置: detEngine=${config.detEngine}, ocrEngine=${config.ocrEngine}, sourceLang=${config.sourceLang}" +
+                    if (config.ocrEngine == OcrEngine.PPOcrV5 || config.detEngine == DetEngine.PP_OCR_V5) ", PP-recModel=${ppRecLang?.code ?: "不支持"}" else "")
+                ocrTextBlocks = withContext(Dispatchers.IO) {
+                    when (config.detEngine) {
+                        DetEngine.MLKIT -> {
+                            LogCollector.d(TAG, "使用 ML Kit(检测+识别), lang=${config.sourceLang}")
+                            OCRBridge.recognizeWithLocation(config.sourceLang, bitmap)
+                        }
+                        DetEngine.RT_DETR_V2 -> {
+                            LogCollector.d(TAG, "使用 RT-DETR-V2(检测) + MangaOcr(识别), lang=${config.sourceLang}, rtDirection=${config.rtTextDirection}")
+                            DetectionBridge.detectWithRTDetrV2(bitmap, config.sourceLang, this@MangaFloatingService, config.keepTextFree, config.rtTextDirection)
+                        }
+                        DetEngine.PP_OCR_V5 -> {
+                            LogCollector.d(TAG, "使用 PP-OCRv5(独立det+cls+rec), lang=${config.sourceLang}, rec=${ppRecLang?.code}")
+                            DetectionBridge.detectWithPPOcrV5(bitmap, config.sourceLang, this@MangaFloatingService)
+                        }
+                        DetEngine.PP_OCR_V6 -> {
+                            LogCollector.d(TAG, "使用 PP-OCRv6(独立det+cls+rec), lang=${config.sourceLang}")
+                            DetectionBridge.detectWithPPOcrV6(bitmap, config.sourceLang, this@MangaFloatingService)
+                        }
+                    }
+                }
+                LogCollector.d(TAG, "processMangaScreenshot: Step 1 - OCR done, found ${ocrTextBlocks.size} text blocks")
+            } finally {
+                com.moe.starflow.manga.OcrLock.release(ocrToken)
+            }
+
+            // No text handling — outside OcrLock (early return if empty)
+            if (ocrTextBlocks.isEmpty()) {
+                LogCollector.d(TAG, "processMangaScreenshot: No text found, returning early")
+                // ⚠️ 只**记录**待提示，不在这里发 —— finally 会调 dismissProgressOverlay() →
+                // statusOverlay.dismiss() **清空全部 chip**，在这里发会被几毫秒后的清屏吃掉，
+                // 用户只能看到「检测中」然后什么都没了（本项目的已知坑）。见 finally。
+                if (autoTranslateEngine.isAutoTranslating) {
+                    consecutiveEmptyCount++
+                    when {
+                        // 连续过多次空 → 判定无有效内容/受保护区域，关掉自动翻译（否则一直空转）
+                        consecutiveEmptyCount >= AUTO_EMPTY_ABORT_COUNT -> {
+                            LogCollector.d(TAG, "processMangaScreenshot: 连续 $consecutiveEmptyCount 次空，关闭自动翻译")
+                            consecutiveEmptyCount = 0
+                            autoTranslateEngine.stop()
+                            pendingEmptyNoticeRes = R.string.auto_translate_stop_no_text
+                        }
+                        consecutiveEmptyCount >= AUTO_EMPTY_NOTICE_AT -> {
+                            LogCollector.d(TAG, "processMangaScreenshot: $consecutiveEmptyCount consecutive empty OCR — possible protected area")
+                            pendingEmptyNoticeRes = R.string.no_text_found_protected
+                        }
+                    }
+                } else {
+                    // 手动翻译：每次都要有反馈（用户主动触发，哪怕是空也必须有回音）
+                    pendingEmptyNoticeRes = R.string.no_text_found
+                }
+                return
+            }
+            // 有文字时重置连续空计数
+            consecutiveEmptyCount = 0
+
+            // Step 2: 气泡合并（自动/手动共用）
+            // RT-DETR-V2 检测器直接输出气泡级结果，跳过后合并
+            // PP-OCRv5 已在 detectWithPPOcrV5 内部用 TextLineMerger 合并，跳过后合并
+            // MLKit 需要 BubbleDetector 把行级结果合并成气泡
+            val needsPostMerge = config.detEngine == DetEngine.MLKIT
+            val allBubbles = if (needsPostMerge) {
+                LogCollector.d(TAG, "processMangaScreenshot: Step 2 - BubbleDetector 后合并")
+                BubbleDetector.detectBubbles(ocrTextBlocks, config)
+            } else {
+                LogCollector.d(TAG, "processMangaScreenshot: Step 2 - 已前合并，跳过后合并")
+                ocrTextBlocks.filter { it.boundingBox != null }.map { block ->
+                    val rect = block.boundingBox!!
+                    val isVertical = block.inferredVertical()  // 真实边长推断（抗旋转），缺失才 AABB
+                    if (kotlin.math.abs(block.angle) > 0.5f) {
+                        LogCollector.d(TAG, "BubbleRegion: angle=${block.angle}, cx=${block.centerX}, cy=${block.centerY}, text='${block.text.take(15)}'")
+                    }
+                    BubbleRegion(
+                        rect = rect,
+                        texts = listOf(block.text),
+                        fontSize = if (isVertical) rect.width().toFloat() else rect.height().toFloat(),
+                        // ⚠️ RT-DETR-V2 用 rtTextDirection（该路径不判横竖，由设置决定）；PP 用竖排方向设置
+                        direction = if (isVertical) config.renderTextDirection else TextDirection.HORIZONTAL,
+                        angle = block.angle,
+                        centerX = block.centerX,
+                        centerY = block.centerY
+                    )
+                }
+            }
+            LogCollector.d(TAG, "processMangaScreenshot: Step 2 - Detected ${allBubbles.size} bubbles")
+
+            if (TranslationExecutionMode.isOcrOnly(this)) {
+                // 仅 OCR：把原文作为 overlay 的显示文本，但保存记录时译文列保持为空。
+                val ocrBubbles = allBubbles.map { b ->
+                    val original = b.texts.map { TranslateUtils.cleanOcrText(it) }
+                        .filter { it.isNotBlank() }.joinToString("")
+                    TranslatedBubble(
+                        rect = b.rect,
+                        originalText = original,
+                        translatedText = original,
+                        backgroundColor = android.graphics.Color.TRANSPARENT,
+                        fontSize = b.fontSize,
+                        direction = b.direction,
+                        angle = b.angle,
+                        centerX = b.centerX,
+                        centerY = b.centerY,
+                    )
+                }
+                renderAndShowMergedOverlay(bitmap, ocrBubbles)
+                statusOverlay.showImmediate(getString(R.string.execution_ocr_only_done))
+                ballStateManager?.setState(BallStateManager.State.Completed)
+                autoTranslateEngine.lastTranslatedHash = currentPHash
+                autoTranslateEngine.lastTranslatedTime = System.currentTimeMillis()
+                return
+            }
+
+            // Step 3: 翻译（走文本缓存匹配，自动/手动均适用）
+            LogCollector.d(TAG, "processMangaScreenshot: Step 3 - Translate ${allBubbles.size} bubbles")
+            // BUGFIX (2026-07-06): 调翻译函数之前立刻切 Translating 图标（之前遗漏，自动模式从 Idle 直接到翻译完成）。
+            ballStateManager?.setState(BallStateManager.State.Translating)
+            // 流式局部结果仅在「分批渲染」开关开启时上屏。
+            // 该开关同时管辖两种增量显示：PP 系列/RT+manga 的分两批、Hy-MT2 的逐句流式。
+            // 关闭时 Hy-MT2 不再逐句冒出，而是一次性返回全部译文（与分批关闭时的行为一致）。
+            val incrementalEnabled = prefs.getBoolean("Incremental_Render", true)
+            val localTranslation = translatorText?.isLocalHeavyEngine() == true
+            if (localTranslation) LocalTranslationCoordinator.mutex.lock()
+            val newTranslatedBubbles = try {
+                batchPipeline(bitmap).translateWithCache(allBubbles) { partialBubbles ->
+                    if (incrementalEnabled && partialBubbles.isNotEmpty()) {
+                        launchPartialRender { renderAndShowMergedOverlay(bitmap, partialBubbles, saveCache = false, showCopyButton = false) }
+                    }
+                }
+            } finally {
+                if (localTranslation) LocalTranslationCoordinator.mutex.unlock()
+            }
+            LogCollector.d(TAG, "processMangaScreenshot: Step 3 - done, got ${newTranslatedBubbles.size} results")
+
+            // Step 4: 合并已缓存翻译 + 新翻译，渲染 overlay
+            LogCollector.d(TAG, "processMangaScreenshot: Step 4 - Rendering merged overlay")
+            renderAndShowMergedOverlay(bitmap, newTranslatedBubbles)
+            LogCollector.d(TAG, "processMangaScreenshot: Step 4 - DONE")
+            statusOverlay.showImmediate(getString(R.string.translating_done))
+            ballStateManager?.setState(BallStateManager.State.Completed)
+
+            // 更新区域缓存和 pHash
+            autoTranslateEngine.lastTranslatedHash = currentPHash
+            autoTranslateEngine.lastTranslatedTime = System.currentTimeMillis()
+            if (autoTranslateEngine.isAutoTranslating) {
+                // 翻译完成后用短间隔快速重新检测，响应翻页
+                autoTranslateEngine.scheduleNextDetection(MangaAutoTranslateEngine.DETECT_INTERVAL_MS)
+            }
+
+        } finally {
+            // 等所有流式渲染协程完成，避免它们读取已 recycle 的截图 bitmap（在 Default 上 join，避免阻塞 Main 造成死锁）
+            withContext(Dispatchers.Default) {
+                synchronized(streamingRenderJobs) { streamingRenderJobs.toList() }.forEach { it.join() }
+            }
+            streamingRenderJobs.clear()
+            bitmap.recycle()
+            // 如果有独立的全屏 bitmap（不同于 OCR bitmap），一并释放
+            if (pendingFullBitmap != null && pendingFullBitmap !== bitmap) {
+                pendingFullBitmap!!.recycle()
+            }
+            pendingFullBitmap = null
+            TranslationBusyRegistry.exit()
+            // 自动翻译模式：确保 autoTranslateEngine.lastTranslatedHash 被更新，避免异常后状态机卡住
+            if (autoTranslateEngine.isAutoTranslating && currentPHash != 0L) {
+                autoTranslateEngine.lastTranslatedHash = currentPHash
+                autoTranslateEngine.lastTranslatedTime = System.currentTimeMillis()
+            }
+            LogCollector.d(TAG, "processMangaScreenshot: FINALLY - dismissing progress, isProcessing=false")
+            isProcessing = false
+            dismissProgressOverlay()
+            // ⚠️ 必须在清屏**之后**：dismiss() 清空全部 chip，先发会被吃掉
+            pendingEmptyNoticeRes?.let { statusOverlay.show(getString(it)) }
+            pendingEmptyNoticeRes = null
+        }
+    }
+
+
+
+    /**
+     * 淘汰过旧的缓存区域。
+     */
+
+    /**
+     * 合并已缓存翻译 + 新翻译，渲染并显示 overlay。
+     * 跳开与新翻译重叠的缓存区域，避免重复覆盖。
+     */
+    /**
+     * 流式渲染：渲染「当前已完成的」气泡并更新 overlay。
+     * 窗口已在 → showResultOverlay 原地换图（不闪烁）；窗口未在 → 首次显示。
+     */
+    private suspend fun renderStreamingOverlay(original: Bitmap, newBubbles: List<TranslatedBubble>) {
+        if (newBubbles.isEmpty()) return
+        val resultBitmap = withContext(Dispatchers.Default) {
+            OverlayRenderer.renderOverlay(
+                original = original,
+                regions = newBubbles,
+                fontSize = config.fontSize,
+                autoFit = config.autoFontSize,
+                textColor = config.textColor,
+                bgColor = config.bgColor,
+                verticalDirection = config.renderTextDirection,   // RT-DETR 用 RT 渲染方向；PP 用竖排方向
+                fontTypeface = OverlayRenderer.loadResultTypeface(this@MangaFloatingService, prefs),
+                showCacheMarker = prefs.getBoolean(com.moe.starflow.data.TranslationCacheManager.KEY_CACHE_MARKER, false),
+                align = config.horizontalAlign,
+                trackingRatio = config.trackingRatio,
+                leadingRatio = config.leadingRatio,
+                // 渲染阶段重叠合并开关（现读，改设置即刻生效）
+                mergeOverlap = prefs.getBoolean(com.moe.starflow.data.TranslationCacheManager.KEY_OVERLAP_MERGE, false),
+                // 译文替换表：渲染时套用（现读 → 下次渲染/截屏即生效，与上面几个渲染项同口径）
+                replacementRules = TranslationTextRules.load(prefs.getSharedPreferences()),
+                density = resources.displayMetrics.density
+            )
+        }
+        withContext(Dispatchers.Main) {
+            showResultOverlay(resultBitmap, showCopyButton = false)
+        }
+    }
+
+    /** 流式局部渲染：跟踪 Job，processMangaScreenshot 收尾 join，避免读取已 recycle 的截图 bitmap */
+    private fun launchPartialRender(block: suspend () -> Unit) {
+        val job = lifecycleScope.launch { block() }
+        streamingRenderJobs.add(job)
+        job.invokeOnCompletion { streamingRenderJobs.remove(job) }
+    }
+
+    private suspend fun renderAndShowMergedOverlay(
+        original: Bitmap,
+        newBubbles: List<TranslatedBubble>,
+        saveCache: Boolean = true,
+        isRetranslate: Boolean = false,
+        historyIdToDelete: Long = 0,
+        originalBitmap: Bitmap? = null,
+        cropLeft: Int = 0,
+        cropTop: Int = 0,
+        cropRight: Int = 0,
+        cropBottom: Int = 0,
+        showCopyButton: Boolean = true  // 分批中间结果不显示复制按钮
+    ) {
+        if (translationCancelled) {
+            LogCollector.d(TAG, "renderAndShowMergedOverlay: 翻译已取消，跳过渲染")
+            return
+        }
+        if (newBubbles.isEmpty()) {
+            LogCollector.d(TAG, "renderAndShowMergedOverlay: no content to render")
+            return
+        }
+
+        // 更新进度
+        if (autoTranslateEngine.isAutoTranslating) {
+            showProgressOverlay(getString(R.string.manga_translating))
+        }
+
+        // 渲染
+        val resultBitmap = withContext(Dispatchers.Default) {
+            OverlayRenderer.renderOverlay(
+                original = original,
+                regions = newBubbles,
+                fontSize = config.fontSize,
+                autoFit = config.autoFontSize,
+                textColor = config.textColor,
+                bgColor = config.bgColor,
+                verticalDirection = config.renderTextDirection,   // RT-DETR 用 RT 渲染方向；PP 用竖排方向
+                fontTypeface = OverlayRenderer.loadResultTypeface(this@MangaFloatingService, prefs),
+                showCacheMarker = prefs.getBoolean(com.moe.starflow.data.TranslationCacheManager.KEY_CACHE_MARKER, false),
+                align = config.horizontalAlign,
+                trackingRatio = config.trackingRatio,
+                leadingRatio = config.leadingRatio,
+                // 渲染阶段重叠合并开关（现读，改设置即刻生效）
+                mergeOverlap = prefs.getBoolean(com.moe.starflow.data.TranslationCacheManager.KEY_OVERLAP_MERGE, false),
+                // 译文替换表：渲染时套用（现读）
+                replacementRules = TranslationTextRules.load(prefs.getSharedPreferences()),
+                density = resources.displayMetrics.density
+            )
+        }
+
+        // 显示
+        withContext(Dispatchers.Main) {
+            // 有任何气泡渲染上屏（首批/流式）即标记部分结果已显示 → 之后再单击悬浮球/浮层走确认弹窗
+            partialRenderShown = true
+            showResultOverlay(resultBitmap, showCopyButton = showCopyButton)
+            // 必须在 showResultOverlay 之后赋值，因为 dismissResultOverlay 会清空 currentShowBubbles
+            currentShowBubbles = newBubbles
+            currentOriginalBitmap?.recycle()
+            currentOriginalBitmap = original.copy(Bitmap.Config.ARGB_8888, false)
+            currentOverlayBitmapW = resultBitmap.width
+            currentOverlayBitmapH = resultBitmap.height
+        }
+
+        // 保存到缓存和历史（分批翻译时由 finalizeIncremental 统一保存，避免保存中间结果）
+        if (saveCache) {
+            try {
+                val ocrOnly = TranslationExecutionMode.isOcrOnly(this@MangaFloatingService)
+                // ⚠️ 仅 OCR 的记录**一页都没翻译** → 名字里只报 OCR 引擎，
+                //    不能写成「OpenAITranslation(gpt-4o) | PP-OCRv5」（用户会以为这页翻过）
+                val translatorName = if (ocrOnly) {
+                    TranslateUtils.ocrEngineDisplayName(config.detEngine, config.ocrEngine)
+                } else {
+                    TranslateUtils.buildTranslatorDisplayName(translatorText, config.detEngine, config.ocrEngine, prefs.getSharedPreferences())
+                }
+                val ocrTexts = newBubbles.mapIndexed { i, b -> "[${i + 1}] ${b.originalText}" }.joinToString("\n")
+                val transTexts = if (ocrOnly) null else newBubbles.mapIndexed { i, b -> "[${i + 1}] ${b.translatedText}" }.joinToString("\n")
+                LogCollector.d(TAG, "保存缓存: ${newBubbles.size} 个气泡")
+                // 使用实际裁剪坐标（如果有 cropRect 或重翻）或全屏尺寸
+                val fullWidth = pendingFullBitmap?.width ?: original.width
+                val fullHeight = pendingFullBitmap?.height ?: original.height
+                val saveOrigBmp = if (isRetranslate) originalBitmap else pendingFullBitmap
+                val entryCropLeft: Int
+                val entryCropTop: Int
+                val entryCropRight: Int
+                val entryCropBottom: Int
+                if (isRetranslate) {
+                    entryCropLeft = cropLeft
+                    entryCropTop = cropTop
+                    entryCropRight = cropRight
+                    entryCropBottom = cropBottom
+                } else if (cropRect != null) {
+                    entryCropLeft = cropRect!!.left.toInt()
+                    entryCropTop = cropRect!!.top.toInt()
+                    entryCropRight = cropRect!!.right.toInt()
+                    entryCropBottom = cropRect!!.bottom.toInt()
+                } else {
+                    entryCropLeft = 0
+                    entryCropTop = 0
+                    entryCropRight = fullWidth
+                    entryCropBottom = fullHeight
+                }
+                val entry = CacheEntry(
+                    type = TranslationCacheManager.MODE_MANGA,
+                    sourceText = ocrTexts.ifEmpty { null },
+                    translatedText = transTexts?.ifEmpty { null },
+                    resultBitmap = resultBitmap.copy(resultBitmap.config ?: Bitmap.Config.ARGB_8888, false),
+                    sourceLang = config.sourceLang,
+                    targetLang = config.targetLang,
+                    translatorName = translatorName,
+                    pHash = (currentExtHashes?.getOrElse(0) { currentPHash }) ?: currentPHash,
+                    pHash2 = currentExtHashes?.getOrElse(1) { 0L } ?: 0L,
+                    pHash3 = currentExtHashes?.getOrElse(2) { 0L } ?: 0L,
+                    pHash4 = currentExtHashes?.getOrElse(3) { 0L } ?: 0L,
+                    sessionId = sessionId,
+                    lastSessionId = sessionId,
+                    isRetranslated = isRetranslate,
+                    cropLeft = entryCropLeft,
+                    cropTop = entryCropTop,
+                    cropRight = entryCropRight,
+                    cropBottom = entryCropBottom,
+                    bubbleRects = if (newBubbles.isNotEmpty()) {
+                        TranslationCacheUtils.serializeBubbleRects(newBubbles)
+                    } else null,
+                    processingState = if (ocrOnly)
+                        com.moe.starflow.data.HistoryEntity.PROCESS_OCR
+                    else com.moe.starflow.data.HistoryEntity.PROCESS_TRANSLATED
+                )
+                if (isRetranslate && historyIdToDelete > 0) {
+                    cacheManager.refreshCache(historyIdToDelete, entry, originalBitmap = saveOrigBmp)
+                    LogCollector.d(TAG, "重翻：替换旧缓存, historyId=$historyIdToDelete")
+                } else if (isForceRefreshActive) {
+                    val refreshId = if (currentPHash == lastCachedPHash) lastCachedHistoryId else 0L
+                    cacheManager.refreshCache(refreshId, entry, originalBitmap = saveOrigBmp)
+                    LogCollector.d(TAG, "强制刷新：替换旧缓存和历史, historyId=$refreshId")
+                    lastCachedHistoryId = 0
+                    lastCachedPHash = 0
+                    isForceRefreshActive = false
+                } else {
+                    cacheManager.saveToCache(entry, originalBitmap = saveOrigBmp)
+                }
+            } catch (e: Exception) {
+                LogCollector.e(TAG, "保存缓存失败", e)
+            }
+        }
+    }
+
+    // ---------- Result overlay ----------
+
+    @SuppressLint("ClickableViewAccessibility")
+    /** 结果浮层当前用的窗口几何（框选模式 = crop 矩形；全屏 = 屏幕尺寸）。null = 窗口未在。 */
+    private var overlayGeometry: android.graphics.Rect? = null
+
+    /** 本次调用需要的窗口几何。框选模式 = crop 矩形；全屏模式 = 屏幕矩形。 */
+    private fun desiredOverlayGeometry(): android.graphics.Rect {
+        val crop = cropRect
+        return if (crop != null) {
+            android.graphics.Rect(
+                crop.left.toInt(), crop.top.toInt(),
+                crop.right.toInt(), crop.bottom.toInt()
+            )
+        } else {
+            val s = getScreenSize()
+            android.graphics.Rect(0, 0, s.width, s.height)
+        }
+    }
+
+    private fun showResultOverlay(bitmap: Bitmap, fromCache: Boolean = false, showCopyButton: Boolean = true) {
+        if (fromCache) {
+            if (isResultShowing) dismissResultOverlay()
+            showCacheOverlay(bitmap)
+            return
+        }
+
+        // ⚠️ 原地更新只有在**窗口几何没变**时才能用。
+        // 此前无条件走它 → 旋转（或框选↔全屏切换）后窗口还 attach 着，于是只换图、
+        // **从不重新定位窗口**：窗口仍是旧 crop 的尺寸/位置，新图却是全屏尺寸，
+        // 被 FIT_XY 压进那个小窗口 → 译文位置完全错（用户报的「回退全屏后位置错误」）。
+        val desired = desiredOverlayGeometry()
+        if (isResultShowing && resultOverlayView.isAttachedToWindow && desired == overlayGeometry) {
+            // 几何一致：原地换图，避免 dismiss+重新 add 造成的闪烁
+            val old = (resultOverlayImage.drawable as? android.graphics.drawable.BitmapDrawable)?.bitmap
+            resultOverlayImage.setImageBitmap(bitmap)
+            currentOverlayBitmapW = bitmap.width
+            currentOverlayBitmapH = bitmap.height
+            if (old != null && old !== bitmap) old.recycle()
+            return
+        }
+
+        if (isResultShowing) {
+            dismissResultOverlay()
+        }
+
+        currentOverlayBitmapW = bitmap.width
+        currentOverlayBitmapH = bitmap.height
+        resultOverlayImage.setImageBitmap(bitmap)
+        // touch listener 放在 ImageView 上（FrameLayout 最底层子 View），
+        // 按钮作为更上层子 View 先收到触摸，不会被打断
+        resultOverlayImage.setOnTouchListener { _, event ->
+            if (isCopyMode) {
+                false  // 复制模式穿透
+            } else {
+                if (event.action == MotionEvent.ACTION_UP) {
+                    if (isProcessing && !translationCancelled) {
+                        // 翻译进行中点击 overlay → 询问是否停止
+                        showStopTranslationDialog()
+                    } else {
+                        dismissResultOverlay()
+                    }
+                }
+                true
+            }
+        }
+        // 确保 FrameLayout 本身不拦截触摸（使用默认行为）
+
+        // 框选模式下，结果只显示在框选区域内
+        if (cropRect != null) {
+            val crop = cropRect!!
+            val params = WindowManager.LayoutParams().apply {
+                type = WindowManager.LayoutParams.TYPE_APPLICATION_OVERLAY
+                format = PixelFormat.RGBA_8888
+                flags = WindowManager.LayoutParams.FLAG_NOT_FOCUSABLE or
+                        WindowManager.LayoutParams.FLAG_LAYOUT_IN_SCREEN
+                width = crop.width().toInt()
+                height = crop.height().toInt()
+                gravity = Gravity.START or Gravity.TOP
+                x = crop.left.toInt() + cropView.absolutePointOffset.x
+                y = crop.top.toInt() + cropView.absolutePointOffset.y
+            }
+            resultOverlayImage.scaleType = ImageView.ScaleType.FIT_XY
+            windowManager.addView(resultOverlayView, params)
+            overlayGeometry = desired
+        } else {
+            // 全屏模式：获取屏幕真实像素尺寸，overlay 精确覆盖全屏
+            val screenSize = getScreenSize()
+            val screenW = screenSize.width
+            val screenH = screenSize.height
+            LogCollector.d(
+                TAG,
+                "showResultOverlay: 图=${com.moe.starflow.utils.DisplaySize.describe(bitmap.width, bitmap.height)} " +
+                    "屏幕=${com.moe.starflow.utils.DisplaySize.describe(screenW, screenH)} " +
+                    "模式=${if (cropRect != null) "框选" else "全屏"}"
+            )
+            val params = WindowManager.LayoutParams().apply {
+                type = WindowManager.LayoutParams.TYPE_APPLICATION_OVERLAY
+                format = PixelFormat.RGBA_8888
+                flags = WindowManager.LayoutParams.FLAG_NOT_FOCUSABLE or
+                        WindowManager.LayoutParams.FLAG_LAYOUT_IN_SCREEN or
+                        WindowManager.LayoutParams.FLAG_LAYOUT_NO_LIMITS
+                width = screenW
+                height = screenH
+                gravity = Gravity.START or Gravity.TOP
+                x = 0
+                y = 0
+            }
+            resultOverlayImage.scaleType = ImageView.ScaleType.FIT_XY
+            windowManager.addView(resultOverlayView, params)
+            overlayGeometry = desired
+        }
+        isResultShowing = true
+
+        bringFloatingBallToFront()
+        if (showCopyButton) {
+            showCopyButtons()
+        }
+    }
+
+    private fun dismissResultOverlay() {
+        overlayGeometry = null
+        if (cacheOverlayContainer != null) {
+            dismissCacheOverlay()
+            return
+        }
+        if (isCopyMode) {
+            isCopyMode = false
+            copyOriginalMode = false  // 退出复制模式时重置为译文，避免下次进入状态错乱
+            removeCopyClickLayer()
+        }
+        removeCopyButtons()
+        debugPanel.dismiss()
+        if (isResultShowing) {
+            try {
+                // 先 removeView 再清 drawable，避免 FrameLayout 半透明黑色背景在清 bitmap 后、removeView 前那一帧暴露给用户（曾短暂闪烁黑色图层）
+                if (resultOverlayView.isAttachedToWindow) {
+                    windowManager.removeView(resultOverlayView)
+                }
+                // 先清除引用再回收，避免 Choreographer 待处理帧使用已回收的 bitmap
+                val oldBitmap = (resultOverlayImage.drawable as? android.graphics.drawable.BitmapDrawable)?.bitmap
+                resultOverlayImage.setImageBitmap(null)
+                oldBitmap?.recycle()
+                resultOverlayView.setOnTouchListener(null)
+                resultOverlayImage.setOnTouchListener(null)
+            } catch (e: Exception) {
+                LogCollector.e(TAG, "Error dismissing overlay", e)
+            }
+            isResultShowing = false
+            currentShowBubbles = emptyList()
+            currentOriginalBitmap?.recycle()
+            currentOriginalBitmap = null
+
+            // 重置自动翻译状态，但不清楚文本缓存（文本缓存跨页面有效）
+            if (autoTranslateEngine.isAutoTranslating) {
+                autoTranslateEngine.resetToIdle()
+            }
+        }
+    }
+
+    /**
+     * 显示缓存结果 overlay — 带"缓存"标签和刷新按钮
+     */
+    @SuppressLint("ClickableViewAccessibility")
+    private fun showCacheOverlay(bitmap: Bitmap) {
+        dismissProgressOverlay()
+
+        currentOverlayBitmapW = bitmap.width
+        currentOverlayBitmapH = bitmap.height
+
+        val screenSize = getScreenSize()
+        val screenW = screenSize.width
+        val screenH = screenSize.height
+
+        val container = android.widget.FrameLayout(this).apply {
+            setBackgroundColor(Color.argb(180, 0, 0, 0))
+        }
+
+        // 结果图片
+        val imageView = ImageView(this).apply {
+            setImageBitmap(bitmap)
+            scaleType = ImageView.ScaleType.FIT_XY
+        }
+        cacheOverlayImage = imageView
+        container.addView(imageView, android.widget.FrameLayout.LayoutParams(
+            android.widget.FrameLayout.LayoutParams.MATCH_PARENT,
+            android.widget.FrameLayout.LayoutParams.MATCH_PARENT
+        ))
+
+        // "⚡ 缓存" 标签（左上角）
+        val cacheTag = android.widget.TextView(this).apply {
+            text = getString(R.string.cache_tag)
+            setTextColor(Color.WHITE)
+            textSize = 14f
+            setBackgroundColor(Color.argb(180, 255, 152, 0))
+            setPadding(24, 12, 24, 12)
+            com.moe.starflow.utils.FontSync.apply(this)
+        }
+        container.addView(cacheTag, android.widget.FrameLayout.LayoutParams(
+            android.widget.FrameLayout.LayoutParams.WRAP_CONTENT,
+            android.widget.FrameLayout.LayoutParams.WRAP_CONTENT
+        ).apply {
+            gravity = Gravity.TOP or Gravity.START
+            setMargins(24, 24, 0, 0)
+        })
+
+        // 刷新按钮（右上角）
+        val refreshBtn = ImageView(this).apply {
+            setImageResource(android.R.drawable.ic_menu_rotate)
+            setBackgroundColor(Color.argb(180, 0, 0, 0))
+            setPadding(20, 20, 20, 20)
+            setOnClickListener {
+                dismissCacheOverlay()
+                forceRefresh = true
+                autoTranslateEngine.lastTranslatedHash = 0L
+                autoTranslateEngine.lastTranslatedTime = 0L
+                regionCache.clear()  // 清空内存缓存，避免 ⚡ 标志
+                triggerTranslation()
+            }
+        }
+        container.addView(refreshBtn, android.widget.FrameLayout.LayoutParams(
+            120, 120
+        ).apply {
+            gravity = Gravity.TOP or Gravity.END
+            setMargins(0, 24, 24, 0)
+        })
+
+        // 点击其他区域关闭（复制模式下不拦截，让气泡窗口和按钮处理）
+        container.setOnTouchListener { _, event ->
+            val refreshRight = screenW - 24
+            val refreshLeft = refreshRight - 120
+            val refreshTop = 24
+            val refreshBottom = refreshTop + 120
+            val touchX = event.x.toInt()
+            val touchY = event.y.toInt()
+            if (touchX in refreshLeft..refreshRight && touchY in refreshTop..refreshBottom) {
+                false  // 让刷新按钮处理
+            } else if (isCopyMode) {
+                false  // 复制模式下不拦截触摸
+            } else {
+                if (event.action == MotionEvent.ACTION_UP) {
+                    dismissCacheOverlay()
+                }
+                true
+            }
+        }
+
+        val params = if (cropRect != null) {
+            val crop = cropRect!!
+            WindowManager.LayoutParams().apply {
+                type = WindowManager.LayoutParams.TYPE_APPLICATION_OVERLAY
+                format = PixelFormat.RGBA_8888
+                flags = WindowManager.LayoutParams.FLAG_NOT_FOCUSABLE or
+                        WindowManager.LayoutParams.FLAG_LAYOUT_IN_SCREEN
+                width = crop.width().toInt()
+                height = crop.height().toInt()
+                gravity = Gravity.START or Gravity.TOP
+                x = crop.left.toInt() + cropView.absolutePointOffset.x
+                y = crop.top.toInt() + cropView.absolutePointOffset.y
+            }
+        } else {
+            WindowManager.LayoutParams().apply {
+                type = WindowManager.LayoutParams.TYPE_APPLICATION_OVERLAY
+                format = PixelFormat.RGBA_8888
+                flags = WindowManager.LayoutParams.FLAG_NOT_FOCUSABLE or
+                        WindowManager.LayoutParams.FLAG_LAYOUT_IN_SCREEN or
+                        WindowManager.LayoutParams.FLAG_LAYOUT_NO_LIMITS
+                width = screenW
+                height = screenH
+                gravity = Gravity.START or Gravity.TOP
+                x = 0
+                y = 0
+            }
+        }
+
+        windowManager.addView(container, params)
+        cacheOverlayContainer = container
+        isResultShowing = true
+
+        bringFloatingBallToFront()
+        showCopyButtons()
+    }
+
+    /**
+     * 关闭缓存 overlay
+     */
+    private fun dismissCacheOverlay() {
+        cacheOverlayContainer?.let { container ->
+            try {
+                // 回收 bitmap
+                val imageView = container.getChildAt(0) as? ImageView
+                val bitmap = imageView?.drawable?.let { drawable ->
+                    if (drawable is android.graphics.drawable.BitmapDrawable) drawable.bitmap else null
+                }
+                windowManager.removeView(container)
+                imageView?.setImageDrawable(null)
+                // 延迟回收，等 View 绘制完成
+                container.post { bitmap?.recycle() }
+            } catch (e: Exception) {
+                LogCollector.e(TAG, "dismissCacheOverlay: 错误", e)
+            }
+            cacheOverlayContainer = null
+            cacheOverlayImage = null
+            isResultShowing = false
+            renderToggleJob?.cancel()  // 取消正在进行的渲染，避免 recycled bitmap 被使用
+            currentShowBubbles = emptyList()
+            currentOriginalBitmap?.recycle()
+            currentOriginalBitmap = null
+            lastCacheBubbleRects = null
+            cachedOriginalTextList = emptyList()
+            cachedTranslatedTextList = emptyList()
+
+            // 清理复制模式
+            if (isCopyMode) {
+                isCopyMode = false
+                copyOriginalMode = false  // 退出时重置
+                removeCopyClickLayer()
+            }
+            removeCopyButtons()
+
+            // 重置自动翻译：清除区域缓存，立刻恢复检测
+            if (autoTranslateEngine.isAutoTranslating) {
+                regionCache.clear()
+                autoTranslateEngine.resetToIdle()
+            }
+        }
+    }
+
+    // ---------- 复制模式 ----------
+
+    private fun parseBubbleRectsJson(json: String?): List<android.graphics.Rect> {
+        if (json.isNullOrEmpty()) return emptyList()
+        return try {
+            val result = mutableListOf<android.graphics.Rect>()
+            val jsonArray = JSONArray(json)
+            for (i in 0 until jsonArray.length()) {
+                val obj = jsonArray.getJSONObject(i)
+                result.add(android.graphics.Rect(
+                    obj.getInt("l"), obj.getInt("t"),
+                    obj.getInt("r"), obj.getInt("b")
+                ))
+            }
+            result
+        } catch (e: Exception) {
+            LogCollector.e(TAG, "parseBubbleRectsJson failed", e)
+            emptyList()
+        }
+    }
+
+    // parseBubbleEntriesJson / parseIndexedTextList / rebuildBubblesFromCache / BubbleJsonEntry
+    // 已搬迁至 TranslationCacheManager，调用时加 TranslationCacheManager. 前缀
+
+    // ---------- 按钮工具方法 ----------
+
+    /** 分段切换控件的两个 TextView，用于更新激活状态 */
+    private var toggleSegOriginal: android.widget.TextView? = null
+    private var toggleSegTranslation: android.widget.TextView? = null
+
+    /**
+     * 创建操作按钮（全部复制、退出等执行动作的按钮）
+     */
+    private fun createCopyActionBtn(text: String, textSize: Float = 12f): android.widget.TextView {
+        val bg = android.graphics.drawable.GradientDrawable().apply {
+            setColor(Color.argb(160, 30, 30, 30))
+            cornerRadius = dpToPx(6).toFloat()
+            setStroke(dpToPx(1), Color.argb(80, 255, 255, 255))
+        }
+        return android.widget.TextView(this).apply {
+            this.text = text
+            this.textSize = textSize
+            setTextColor(Color.argb(220, 255, 255, 255))
+            gravity = Gravity.CENTER
+            setPadding(dpToPx(10), dpToPx(6), dpToPx(10), dpToPx(6))
+            background = bg
+            isClickable = true
+            isFocusable = true
+            com.moe.starflow.utils.FontSync.apply(this)
+            setOnTouchListener { v, event ->
+                when (event.action) {
+                    android.view.MotionEvent.ACTION_DOWN -> {
+                        v.animate().scaleX(0.92f).scaleY(0.92f).setDuration(80).start()
+                    }
+                    android.view.MotionEvent.ACTION_UP, android.view.MotionEvent.ACTION_CANCEL -> {
+                        v.animate().scaleX(1.0f).scaleY(1.0f).setDuration(120).start()
+                    }
+                }
+                false
+            }
+        }
+    }
+
+    /**
+     * 创建分段切换控件 [ 原文 | 译文 ]
+     * 激活段白底带圆角，与外层容器边缘对齐
+     */
+    private fun createSegmentedToggle(): android.widget.LinearLayout {
+        val r = dpToPx(6).toFloat()
+        val padH = dpToPx(12)
+        val padV = dpToPx(6)
+
+        // 左段激活背景：左侧圆角
+        val activeBgLeft = android.graphics.drawable.GradientDrawable().apply {
+            setColor(Color.argb(160, 255, 255, 255))
+            cornerRadii = floatArrayOf(r, r, 0f, 0f, 0f, 0f, r, r)
+        }
+        // 右段激活背景：右侧圆角
+        val activeBgRight = android.graphics.drawable.GradientDrawable().apply {
+            setColor(Color.argb(160, 255, 255, 255))
+            cornerRadii = floatArrayOf(0f, 0f, r, r, r, r, 0f, 0f)
+        }
+
+        toggleSegOriginal = android.widget.TextView(this).apply {
+            text = getString(R.string.copy_original)
+            textSize = 11f
+            setTextColor(if (copyOriginalMode) Color.argb(220, 30, 30, 30) else Color.argb(200, 255, 255, 255))
+            gravity = Gravity.CENTER
+            com.moe.starflow.utils.FontSync.apply(this)
+            setPadding(padH, padV, padH, padV)
+            background = if (copyOriginalMode) activeBgLeft else null
+            setOnClickListener {
+                if (!copyOriginalMode) {
+                    copyOriginalMode = true
+                    updateToggleSegments()
+                }
+            }
+        }
+
+        toggleSegTranslation = android.widget.TextView(this).apply {
+            text = getString(R.string.copy_translation)
+            textSize = 11f
+            setTextColor(if (!copyOriginalMode) Color.argb(220, 30, 30, 30) else Color.argb(200, 255, 255, 255))
+            gravity = Gravity.CENTER
+            com.moe.starflow.utils.FontSync.apply(this)
+            setPadding(padH, padV, padH, padV)
+            background = if (!copyOriginalMode) activeBgRight else null
+            setOnClickListener {
+                if (copyOriginalMode) {
+                    copyOriginalMode = false
+                    updateToggleSegments()
+                }
+            }
+        }
+
+        val outerBg = android.graphics.drawable.GradientDrawable().apply {
+            setColor(Color.argb(160, 30, 30, 30))
+            cornerRadius = r
+            setStroke(dpToPx(1), Color.argb(80, 255, 255, 255))
+        }
+
+        return android.widget.LinearLayout(this).apply {
+            orientation = android.widget.LinearLayout.HORIZONTAL
+            background = outerBg
+            addView(toggleSegOriginal)
+            addView(toggleSegTranslation)
+        }
+    }
+
+    /** 更新分段切换的激活状态 + 切换 overlay 显示原文/译文 */
+    private fun updateToggleSegments() {
+        val r = dpToPx(6).toFloat()
+        val activeBgLeft = android.graphics.drawable.GradientDrawable().apply {
+            setColor(Color.argb(160, 255, 255, 255))
+            cornerRadii = floatArrayOf(r, r, 0f, 0f, 0f, 0f, r, r)
+        }
+        val activeBgRight = android.graphics.drawable.GradientDrawable().apply {
+            setColor(Color.argb(160, 255, 255, 255))
+            cornerRadii = floatArrayOf(0f, 0f, r, r, r, r, 0f, 0f)
+        }
+        toggleSegOriginal?.apply {
+            background = if (copyOriginalMode) activeBgLeft else null
+            setTextColor(if (copyOriginalMode) Color.argb(220, 30, 30, 30) else Color.argb(200, 255, 255, 255))
+        }
+        toggleSegTranslation?.apply {
+            background = if (!copyOriginalMode) activeBgRight else null
+            setTextColor(if (!copyOriginalMode) Color.argb(220, 30, 30, 30) else Color.argb(200, 255, 255, 255))
+        }
+        // 切换 overlay 图片：原文/译文都实时渲染（不再依赖预渲染的 currentTranslatedOverlay）
+        renderToggleJob?.cancel()
+        renderToggleJob = lifecycleScope.launch {
+            val original = currentOriginalBitmap ?: return@launch
+            val bubbles = currentShowBubbles
+            if (bubbles.isEmpty()) return@launch
+            val overlay = withContext(Dispatchers.Default) {
+                // 防止竞态：用户可能在 suspension point 期间关闭 overlay 导致 bitmap 被回收
+                if (original.isRecycled) return@withContext null
+                OverlayRenderer.renderOverlay(
+                    original = original,
+                    regions = bubbles,
+                    fontSize = config.fontSize,
+                    autoFit = config.autoFontSize,
+                    textColor = config.textColor,
+                    bgColor = config.bgColor,
+                    useOriginalText = copyOriginalMode,
+                    verticalDirection = config.renderTextDirection,   // RT-DETR 用 RT 渲染方向；PP 用竖排方向
+                    fontTypeface = OverlayRenderer.loadResultTypeface(this@MangaFloatingService, prefs),
+                    showCacheMarker = prefs.getBoolean(com.moe.starflow.data.TranslationCacheManager.KEY_CACHE_MARKER, false),
+                    align = config.horizontalAlign,
+                    trackingRatio = config.trackingRatio,
+                leadingRatio = config.leadingRatio,
+                    mergeOverlap = prefs.getBoolean(com.moe.starflow.data.TranslationCacheManager.KEY_OVERLAP_MERGE, false),
+                    // 译文替换表：渲染时套用（现读）
+                    replacementRules = TranslationTextRules.load(prefs.getSharedPreferences()),
+                    density = resources.displayMetrics.density
+                )
+            }
+            withContext(Dispatchers.Main) {
+                if (!isResultShowing || overlay == null) return@withContext
+                val target = cacheOverlayImage ?: resultOverlayImage
+                // 先回收旧 bitmap，避免全屏 overlay 每次切换都泄漏一张 ~13MB（OOM 风险）
+                val oldBitmap = (target.drawable as? android.graphics.drawable.BitmapDrawable)?.bitmap
+                target.setImageBitmap(overlay)
+                if (oldBitmap !== overlay) oldBitmap?.recycle()
+            }
+        }
+    }
+
+    private fun showCopyButtons() {
+        if (copyButtonsContainer != null) return
+        buildCopyButtonsLayout()
+    }
+
+    /**
+     * 重建按钮面板。独立 WindowManager 窗口，始终在屏幕右下角，
+     * enterCopyMode 保证在气泡窗口之后添加，所以 z 层在气泡之上。
+     */
+    private fun buildCopyButtonsLayout() {
+        val oldContainer = copyButtonsContainer
+        copyButtonsContainer = null
+        toggleSegOriginal = null
+        toggleSegTranslation = null
+
+        val container = android.widget.LinearLayout(this).apply {
+            orientation = android.widget.LinearLayout.VERTICAL
+        }
+
+        if (isCopyMode) {
+            val gap = dpToPx(4)
+            container.addView(createSegmentedToggle(), android.widget.LinearLayout.LayoutParams(
+                android.widget.LinearLayout.LayoutParams.WRAP_CONTENT,
+                android.widget.LinearLayout.LayoutParams.WRAP_CONTENT
+            ).apply {
+                gravity = Gravity.END
+                bottomMargin = gap
+            })
+
+            val row = android.widget.LinearLayout(this).apply {
+                orientation = android.widget.LinearLayout.HORIZONTAL
+            }
+            row.addView(createCopyActionBtn(getString(R.string.copy_all), 11f).apply {
+                setOnClickListener { copyAllBubbles() }
+            })
+            row.addView(createCopyActionBtn(getString(R.string.copy_exit), 12f).apply {
+                setOnClickListener { toggleCopyMode() }
+            })
+            container.addView(row, android.widget.LinearLayout.LayoutParams(
+                android.widget.LinearLayout.LayoutParams.WRAP_CONTENT,
+                android.widget.LinearLayout.LayoutParams.WRAP_CONTENT
+            ).apply {
+                gravity = Gravity.END
+            })
+        } else {
+            val row = android.widget.LinearLayout(this).apply {
+                orientation = android.widget.LinearLayout.HORIZONTAL
+            }
+            row.addView(createCopyActionBtn(getString(R.string.copy_text), 12f).apply {
+                setOnClickListener { toggleCopyMode() }
+            })
+            container.addView(row, android.widget.LinearLayout.LayoutParams(
+                android.widget.LinearLayout.LayoutParams.WRAP_CONTENT,
+                android.widget.LinearLayout.LayoutParams.WRAP_CONTENT
+            ).apply {
+                gravity = Gravity.END
+            })
+        }
+
+        copyButtonsContainer = container
+        // 独立窗口，屏幕右下角固定位置，不受 crop 影响
+        val params = WindowManager.LayoutParams().apply {
+            type = WindowManager.LayoutParams.TYPE_APPLICATION_OVERLAY
+            format = PixelFormat.TRANSLUCENT
+            flags = WindowManager.LayoutParams.FLAG_NOT_FOCUSABLE or
+                    WindowManager.LayoutParams.FLAG_LAYOUT_IN_SCREEN
+            width = WindowManager.LayoutParams.WRAP_CONTENT
+            height = WindowManager.LayoutParams.WRAP_CONTENT
+            gravity = Gravity.BOTTOM or Gravity.END
+            x = dpToPx(8)
+            y = dpToPx(8)
+        }
+        windowManager.addView(container, params)
+
+        oldContainer?.let {
+            try { if (it.isAttachedToWindow) windowManager.removeView(it) } catch (_: Exception) {}
+        }
+    }
+
+    private fun removeCopyButtons() {
+        toggleSegOriginal = null
+        toggleSegTranslation = null
+        if (copyButtonsContainer != null) {
+            try {
+                if (copyButtonsContainer!!.isAttachedToWindow) windowManager.removeView(copyButtonsContainer)
+            } catch (_: Exception) {}
+            copyButtonsContainer = null
+        }
+    }
+
+    private fun toggleCopyMode() {
+        isCopyMode = !isCopyMode
+        if (isCopyMode) {
+            enterCopyMode()
+        } else {
+            exitCopyMode()
+        }
+    }
+
+    private fun enterCopyMode() {
+        createCopyClickLayer()
+        buildCopyButtonsLayout()
+    }
+
+    private fun exitCopyMode() {
+        copyOriginalMode = false  // 退出时重置为译文模式
+        removeCopyClickLayer()
+        buildCopyButtonsLayout()
+    }
+
+    /**
+     * 创建复制模式的可点击气泡覆盖层。
+     *
+     * 使用与 showResultOverlay / showCacheOverlay 完全相同的坐标映射规则：
+     * - 全屏模式：bitmap == screen → 1:1 映射
+     * - 框选模式：overlay 窗口在 (cropOffset + cropRect.left, cropOffset + cropRect.top)，
+     *   气泡 rect 在裁剪后 bitmap 坐标系中 → 需加上窗口偏移量映射到屏幕坐标
+     */
+    private fun createCopyClickLayer() {
+        removeCopyClickLayer()
+
+        val container = android.widget.FrameLayout(this)
+        copyBubbleViews.clear()
+
+        // 获取气泡 rect 列表：优先用 currentShowBubbles（新翻译），否则用缓存数据
+        val bubbles: List<android.graphics.Rect> = if (currentShowBubbles.isNotEmpty()) {
+            currentShowBubbles.map { it.rect }
+        } else {
+            parseBubbleRectsJson(lastCacheBubbleRects)
+        }
+
+        if (bubbles.isEmpty()) {
+            LogCollector.d(TAG, "createCopyClickLayer: 无气泡数据，仅支持复制全部")
+            return
+        }
+
+        // 计算坐标映射参数：与 showResultOverlay / showCacheOverlay 一致
+        val screenSize = getScreenSize()
+        val screenW = screenSize.width
+        val screenH = screenSize.height
+        val bitmapW = if (currentOverlayBitmapW > 0) currentOverlayBitmapW else screenW
+        val bitmapH = if (currentOverlayBitmapH > 0) currentOverlayBitmapH else screenH
+
+        // overlay 窗口的屏幕坐标偏移和尺寸
+        val overlayScreenX: Int
+        val overlayScreenY: Int
+        val overlayWidth: Int
+        val overlayHeight: Int
+
+        if (cropRect != null) {
+            val crop = cropRect!!
+            val offset = cropView.absolutePointOffset
+            overlayScreenX = offset.x + crop.left.toInt()
+            overlayScreenY = offset.y + crop.top.toInt()
+            overlayWidth = crop.width().toInt()
+            overlayHeight = crop.height().toInt()
+        } else {
+            overlayScreenX = 0
+            overlayScreenY = 0
+            overlayWidth = screenW
+            overlayHeight = screenH
+        }
+
+        // bitmap → overlay 缩放比例
+        val scaleX = if (bitmapW > 0) overlayWidth.toFloat() / bitmapW else 1f
+        val scaleY = if (bitmapH > 0) overlayHeight.toFloat() / bitmapH else 1f
+
+        LogCollector.d(TAG, "createCopyClickLayer: ${bubbles.size} bubbles, " +
+            "bitmap=${bitmapW}x${bitmapH}, overlay=${overlayWidth}x${overlayHeight}@($overlayScreenX,$overlayScreenY), " +
+            "cropRect=${cropRect != null}, scale=(${scaleX},${scaleY})")
+
+        // 每个气泡一个独立小窗口，精确覆盖气泡区域，不阻挡按钮和悬浮球
+        for ((idx, rect) in bubbles.withIndex()) {
+            // bitmap 坐标 → 屏幕坐标
+            val screenLeft = (rect.left * scaleX + overlayScreenX).toInt()
+            val screenTop = (rect.top * scaleY + overlayScreenY).toInt()
+            val bubbleW = (rect.width() * scaleX).toInt()
+            val bubbleH = (rect.height() * scaleY).toInt()
+
+            val overlay = View(this).apply {
+                setBackgroundColor(Color.argb(40, 100, 200, 255))
+                setOnClickListener {
+                    copyBubbleText(idx)
+                    // 高亮反馈 200ms
+                    setBackgroundColor(Color.argb(120, 100, 200, 255))
+                    postDelayed({
+                        setBackgroundColor(Color.argb(40, 100, 200, 255))
+                    }, 200)
+                }
+            }
+            copyBubbleViews.add(overlay)
+
+            val params = WindowManager.LayoutParams().apply {
+                type = WindowManager.LayoutParams.TYPE_APPLICATION_OVERLAY
+                format = PixelFormat.TRANSLUCENT
+                flags = WindowManager.LayoutParams.FLAG_NOT_FOCUSABLE or
+                        WindowManager.LayoutParams.FLAG_NOT_TOUCH_MODAL or
+                        WindowManager.LayoutParams.FLAG_LAYOUT_IN_SCREEN
+                width = bubbleW
+                height = bubbleH
+                gravity = Gravity.START or Gravity.TOP
+                x = screenLeft
+                y = screenTop
+            }
+            windowManager.addView(overlay, params)
+        }
+    }
+
+    private fun removeCopyClickLayer() {
+        for (v in copyBubbleViews) {
+            try {
+                if (v.isAttachedToWindow) {
+                    windowManager.removeView(v)
+                }
+            } catch (_: Exception) {}
+        }
+        copyBubbleViews.clear()
+        // 兼容旧版单容器模式
+        if (copyClickLayer != null) {
+            try {
+                if (copyClickLayer!!.isAttachedToWindow) {
+                    windowManager.removeView(copyClickLayer)
+                }
+            } catch (_: Exception) {}
+            copyClickLayer = null
+        }
+    }
+
+    private fun copyBubbleText(idx: Int) {
+        val text = if (currentShowBubbles.isNotEmpty()) {
+            val bubble = currentShowBubbles.getOrNull(idx) ?: return
+            if (copyOriginalMode) bubble.originalText else bubble.translatedText
+        } else {
+            // 缓存命中：从解析的文本列表中获取
+            val list = if (copyOriginalMode) cachedOriginalTextList else cachedTranslatedTextList
+            list.getOrNull(idx) ?: return
+        }
+        copyToClipboard(text)
+    }
+
+    private fun copyAllBubbles() {
+        if (currentShowBubbles.isNotEmpty()) {
+            val regions = currentShowBubbles
+            val text = regions.mapIndexed { idx, r ->
+                val content = if (copyOriginalMode) r.originalText else r.translatedText
+                "[${idx + 1}] $content"
+            }.joinToString("\n")
+            copyToClipboard(text)
+        } else {
+            // 缓存命中：使用解析的文本列表，保留原有 [N] 格式
+            val list = if (copyOriginalMode) cachedOriginalTextList else cachedTranslatedTextList
+            if (list.isEmpty()) return
+            val text = list.mapIndexed { idx, content ->
+                "[${idx + 1}] $content"
+            }.joinToString("\n")
+            copyToClipboard(text)
+        }
+    }
+
+    private fun copyToClipboard(text: String) {
+        val clipboard = getSystemService(Context.CLIPBOARD_SERVICE) as android.content.ClipboardManager
+        clipboard.setPrimaryClip(android.content.ClipData.newPlainText("copied_text", text))
+        // 用 statusOverlay 显示反馈（Service 上下文下系统 Toast 可能被 overlay 遮挡）
+        statusOverlay.showImmediate(getString(R.string.text_copied))
+        LogCollector.d(TAG, "copyToClipboard: ${text.take(50)}...")
+    }
+
+    /**
+     * RT-DETR-V2 调试模式：渲染检测结果到图片上并显示
+     */
+
+    private fun showRTDetrV2DebugView(bitmap: Bitmap, debugResult: RTDetrV2DebugResult) {
+        val debugBitmap = MangaDebugOverlays.renderRTDetrV2DebugOverlay(bitmap, debugResult)
+        debugPanel.showDebugOverlay(
+            debugBitmap, cropRect, getScreenSize(), initialCollapsed = false, errorTag = "RT-DETR-V2 Debug"
+        ) { container ->
+            val infoPanel = MangaDebugOverlays.createInfoPanelView(this, MangaDebugOverlays.buildRTDetrInfoLines(debugResult, config.keepTextFree))
+            container.addView(infoPanel, android.widget.FrameLayout.LayoutParams(
+                android.widget.FrameLayout.LayoutParams.MATCH_PARENT,
+                android.widget.FrameLayout.LayoutParams.WRAP_CONTENT
+            ).apply { gravity = android.view.Gravity.BOTTOM })
+            val toggle = MangaDebugOverlays.createToggleButton(this, onToggle = { debugPanel.toggleCollapse() })
+            container.addView(toggle, android.widget.FrameLayout.LayoutParams(dpToPx(48), dpToPx(48)).apply {
+                gravity = android.view.Gravity.BOTTOM or android.view.Gravity.END
+                marginEnd = dpToPx(16)
+                bottomMargin = dpToPx(16)
+            })
+            debugPanel.setToggleButton(toggle)
+            infoPanel
+        }
+    }
+
+    private fun showProgressOverlay(text: String = getString(R.string.manga_translating)) {
+        LogCollector.d(TAG, "showProgressOverlay called: $text")
+        statusOverlay.showImmediate(text, autoDismiss = false)
+    }
+
+    /**
+     * 翻译进行中点击 overlay 时弹窗：询问是否停止。停止 → 终止翻译且不保存结果。
+     */
+    private fun showStopTranslationDialog() {
+        // ⚠️ 必须用 ThemeManager.dialogContext：Service 自己拿的是系统默认浅色主题，
+        // 标题/正文恒为深色字，压在 dialog_background 翻出来的深色背景上会看不清
+        val dlgCtx = ThemeManager.dialogContext(this)
+        val dialog = android.app.AlertDialog.Builder(dlgCtx)
+            .setTitle(dlgCtx.getString(R.string.dlg_translation_unfinished_title))
+            .setMessage(dlgCtx.getString(R.string.dlg_translation_unfinished_msg))
+            .setPositiveButton(dlgCtx.getString(R.string.stop)) { _, _ -> stopTranslationNow() }
+            .setNegativeButton(dlgCtx.getString(R.string.continue_action), null)
+            .create()
+        // ⚠️ Service 无 Activity token：必须先把对话框窗口类型设为 OVERLAY，否则 show() 抛 BadTokenException
+        dialog.window?.setType(WindowManager.LayoutParams.TYPE_APPLICATION_OVERLAY)
+        dialog.show()
+        dialog.window?.setBackgroundDrawableResource(ThemeManager.dialogBackgroundRes(dlgCtx))
+    }
+
+    private fun stopTranslationNow() = cancelInFlightTranslation()
+
+    /**
+     * 取消在途翻译并丢弃部分结果（不保存到数据库）。
+     * showMessage=false 用于强制关闭自动翻译时（由「自动翻译已停止」提示代替）。
+     */
+    private fun cancelInFlightTranslation(showMessage: Boolean = true) {
+        translationCancelled = true
+        partialRenderShown = false  // 已停止：再点悬浮球不再弹确认，直接幂等终止
+        translatorText?.cancelTranslation()
+        dismissProgressOverlay()
+        dismissResultOverlay()
+        ballStateManager?.setState(BallStateManager.State.Idle)
+        if (showMessage) statusOverlay.showImmediate(getString(R.string.translation_stopped), autoDismiss = true)
+    }
+
+    private fun dismissProgressOverlay() {
+        statusOverlay.dismiss()
+    }
+
+    // ---------- Helpers ----------
+
+    private fun isViewAdded(view: View): Boolean {
+        return try {
+            windowManager.updateViewLayout(view, view.layoutParams)
+            true
+        } catch (e: IllegalArgumentException) {
+            false
+        }
+    }
+
+    /** 将悬浮球重新添加到窗口栈顶，确保不被其他 overlay 遮挡 */
+    private fun bringFloatingBallToFront() {
+        if (isViewAdded(floatingBallView)) {
+            windowManager.removeView(floatingBallView)
+            windowManager.addView(floatingBallView, floatingBallParams)
+        }
+    }
+
+    private fun removeAllViews() {
+        try {
+            if (isViewAdded(floatingBallView)) {
+                windowManager.removeView(floatingBallView)
+            }
+        } catch (e: Exception) {
+            LogCollector.e(TAG, "Error removing floating ball", e)
+        }
+        // 清理复制模式状态
+        isCopyMode = false
+        removeCopyClickLayer()
+        removeCopyButtons()
+        dismissCacheOverlay()
+        debugPanel.dismiss()
+        dismissResultOverlay()
+        dismissProgressOverlay()
+        dismissToastOverlay()
+        handler.removeCallbacks(longPressRunnable)
+        autoTranslateEngine.clearScheduled()
+        // Remove crop view if active
+        if (isCropActive) {
+            try {
+                windowManager.removeView(cropView)
+            } catch (e: Exception) { /* ignore */ }
+            isCropActive = false
+        }
+    }
+
+    /**
+     * 显示提示消息
+     * @param message 消息内容
+     * @param immediate true=覆盖显示（状态进度、模型切换），false=队列显示（初始化、启停提示）
+     */
+    private fun showToast(message: String, immediate: Boolean = false) {
+        if (immediate) {
+            statusOverlay.showImmediate(message)
+        } else {
+            statusOverlay.show(message)
+        }
+    }
+
+    private fun dismissToastOverlay() {
+        statusOverlay.dismiss()
+    }
+
+    // ---------- Notification ----------
+
+    private fun createNotificationChannel() {
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
+            val channel = NotificationChannel(
+                NOTIFICATION_CHANNEL_ID,
+                "Manga Floating Service",
+                NotificationManager.IMPORTANCE_LOW
+            ).apply {
+                description = "Manga translation floating window"
+            }
+            val nm = getSystemService(Context.NOTIFICATION_SERVICE) as NotificationManager
+            nm.createNotificationChannel(channel)
+        }
+    }
+
+    private fun buildNotification(): Notification {
+        val intent = Intent(this, MainActivity::class.java).apply {
+            flags = Intent.FLAG_ACTIVITY_SINGLE_TOP or Intent.FLAG_ACTIVITY_CLEAR_TOP
+        }
+        val pendingIntent = PendingIntent.getActivity(
+            this, 0, intent,
+            PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE
+        )
+
+        return NotificationCompat.Builder(this, NOTIFICATION_CHANNEL_ID)
+            .setContentTitle("Manga Translation")
+            .setContentText("Floating ball active - tap to translate manga")
+            .setSmallIcon(R.drawable.floating_ball_icon)
+            .setContentIntent(pendingIntent)
+            .setOngoing(true)
+            .build()
+    }
+
+    // ========== ML Kit 调试模式 ==========
+
+    private suspend fun detectWithMLKitDebug(bitmap: Bitmap, language: String): MLKitDebugResult {
+        return DetectionBridge.detectWithMLKitDebug(bitmap, language)
+    }
+
+    /**
+     * ML Kit 调试模式：渲染所有识别数据到图片上
+     */
+    private fun showMLKitDebugView(bitmap: Bitmap, result: MLKitDebugResult) {
+        val debugBitmap = MangaDebugOverlays.renderMLKitDebugOverlay(bitmap, result)
+        debugPanel.showDebugOverlay(
+            debugBitmap, cropRect, getScreenSize(), initialCollapsed = false, errorTag = "ML Kit Debug"
+        ) { container ->
+            val infoPanel = MangaDebugOverlays.createInfoPanelView(
+                this, MangaDebugOverlays.buildMLKitInfoLines(result),
+                scrollable = true, maxHeight = getScreenSize().height / 2
+            )
+            container.addView(infoPanel, android.widget.FrameLayout.LayoutParams(
+                android.widget.FrameLayout.LayoutParams.MATCH_PARENT,
+                android.widget.FrameLayout.LayoutParams.WRAP_CONTENT
+            ).apply { gravity = android.view.Gravity.BOTTOM })
+            val toggle = MangaDebugOverlays.createToggleButton(this, onToggle = { debugPanel.toggleCollapse() })
+            container.addView(toggle, android.widget.FrameLayout.LayoutParams(dpToPx(48), dpToPx(48)).apply {
+                gravity = android.view.Gravity.BOTTOM or android.view.Gravity.END
+                marginEnd = dpToPx(16)
+                bottomMargin = dpToPx(16)
+            })
+            debugPanel.setToggleButton(toggle)
+            infoPanel
+        }
+    }
+
+    /**
+     * 从 OcrResult 构建 TextRegionMerger 输入并执行合并
+     */
+    /**
+     * PP-OCRv5 调试模式：渲染检测+识别+合并结果并显示
+     */
+    private fun showPPOcrV5DebugView(bitmap: Bitmap, ocrResult: OcrResult, mergedRegions: List<TextRegionGroup>, debugDet: PPOcrV5Engine.DebugDetResult? = null) {
+        val debugBitmap = MangaDebugOverlays.renderPPOcrV5DebugWithMerge(bitmap, ocrResult, mergedRegions, debugDet, prefs.getFloat("ppocr_text_score_thresh", 0.5f))
+        debugPanel.showDebugOverlay(
+            debugBitmap, cropRect, getScreenSize(), initialCollapsed = true, errorTag = "PP-OCRv5 Debug"
+        ) { container ->
+            val disc = debugDet
+            val recDebug = ocrResult.recDebug
+            val discCount = disc?.discardedBoxes?.size ?: 0
+            val scoreDisc = recDebug?.discardedReasons?.count { it == "score" } ?: 0
+            val contentDisc = recDebug?.discardedReasons?.count { it != "score" } ?: 0
+            val infoLines = MangaDebugOverlays.buildPPOcrInfoLines(
+                headerLines = listOf(
+                    "PP-OCRv5 调试模式 | 检测: ${ocrResult.boxes.size}  检测丢弃: $discCount  识别丢弃: $scoreDisc  内容丢弃: $contentDisc  输出: ${ocrResult.texts.size}  合并: ${mergedRegions.size}区域"
+                ),
+                ocrResult = ocrResult,
+                mergedRegions = mergedRegions,
+                detDiscardBoxes = disc?.discardedBoxes ?: emptyList(),
+                detDiscardScores = disc?.discardedScores ?: emptyList(),
+                detDiscardReasons = disc?.discardedReasons ?: emptyList(),
+                prefs = prefs,
+                detBoxKey = "ppocr_det_box_thresh", detBoxDefault = 0.3f,
+                unclipKey = "ppocr_det_unclip_ratio",
+                textKey = "ppocr_text_score_thresh", textDefault = 0.5f
+            )
+            val infoPanel = MangaDebugOverlays.createInfoPanelView(this, infoLines, scrollable = true, maxHeight = getScreenSize().height / 2)
+            val slidersView = MangaDebugSliders.createPPOcrParamSlidersView(prefs, this)
+            val foldableContent = android.widget.LinearLayout(this).apply {
+                orientation = android.widget.LinearLayout.VERTICAL
+            }
+            foldableContent.addView(slidersView, android.widget.LinearLayout.LayoutParams(
+                android.widget.LinearLayout.LayoutParams.MATCH_PARENT,
+                android.widget.LinearLayout.LayoutParams.WRAP_CONTENT
+            ))
+            foldableContent.addView(infoPanel, android.widget.LinearLayout.LayoutParams(
+                android.widget.LinearLayout.LayoutParams.MATCH_PARENT,
+                android.widget.LinearLayout.LayoutParams.WRAP_CONTENT
+            ))
+            foldableContent.visibility = android.view.View.GONE  // 默认折叠
+            container.addView(foldableContent, android.widget.FrameLayout.LayoutParams(
+                android.widget.FrameLayout.LayoutParams.MATCH_PARENT,
+                android.widget.FrameLayout.LayoutParams.WRAP_CONTENT
+            ).apply { gravity = android.view.Gravity.BOTTOM })
+            val toggle = MangaDebugOverlays.createToggleButton(this, onToggle = { debugPanel.toggleCollapse() })
+            toggle.text = "▲"  // 初始折叠
+            container.addView(toggle, android.widget.FrameLayout.LayoutParams(dpToPx(48), dpToPx(48)).apply {
+                gravity = android.view.Gravity.BOTTOM or android.view.Gravity.END
+                marginEnd = dpToPx(16)
+                bottomMargin = dpToPx(16)
+            })
+            debugPanel.setToggleButton(toggle)
+            foldableContent
+        }
+    }
+
+    private fun showPPOcrV6DebugView(bitmap: Bitmap, ocrResult: OcrResult, mergedRegions: List<TextRegionGroup>, debugDet: PPOcrV6Engine.DebugDetResult? = null) {
+        val debugBitmap = MangaDebugOverlays.renderPPOcrV6DebugWithMerge(bitmap, ocrResult, mergedRegions, debugDet, prefs.getFloat("ppocrv6_text_score", 0.5f))
+        debugPanel.showDebugOverlay(
+            debugBitmap, cropRect, getScreenSize(), initialCollapsed = true, errorTag = "PP-OCRv6 Debug"
+        ) { container ->
+            val disc = debugDet
+            val recDebug = ocrResult.recDebug
+            val discCount = disc?.discardedBoxes?.size ?: 0
+            val scoreDisc = recDebug?.discardedReasons?.count { it == "score" } ?: 0
+            val contentDisc = recDebug?.discardedReasons?.count { it != "score" } ?: 0
+            val infoLines = MangaDebugOverlays.buildPPOcrInfoLines(
+                headerLines = listOf(
+                    "PP-OCRv6 调试模式 | det尺寸: ${PPOcrV6Engine.lastDetSize}",
+                    "检测: ${ocrResult.boxes.size}  丢弃: $discCount  识别丢: $scoreDisc  内容丢: $contentDisc  输出: ${ocrResult.texts.size}  合并: ${mergedRegions.size}"
+                ),
+                ocrResult = ocrResult,
+                mergedRegions = mergedRegions,
+                detDiscardBoxes = disc?.discardedBoxes ?: emptyList(),
+                detDiscardScores = disc?.discardedScores ?: emptyList(),
+                detDiscardReasons = disc?.discardedReasons ?: emptyList(),
+                prefs = prefs,
+                detBoxKey = "ppocrv6_det_box_thresh", detBoxDefault = 0.5f,
+                unclipKey = "ppocrv6_det_unclip_ratio",
+                textKey = "ppocrv6_text_score", textDefault = 0.5f
+            )
+            val infoPanel = MangaDebugOverlays.createInfoPanelView(this, infoLines, scrollable = true, maxHeight = getScreenSize().height / 2)
+            val slidersView = MangaDebugSliders.createPPOcrV6ParamSlidersView(prefs, this)
+            slidersView.visibility = android.view.View.GONE  // 参数面板默认隐藏
+            container.addView(slidersView, android.widget.FrameLayout.LayoutParams(
+                android.widget.FrameLayout.LayoutParams.MATCH_PARENT,
+                android.widget.FrameLayout.LayoutParams.WRAP_CONTENT
+            ).apply {
+                gravity = android.view.Gravity.BOTTOM
+                bottomMargin = dpToPx(80)  // 给 info 面板留空间
+            })
+            container.addView(infoPanel, android.widget.FrameLayout.LayoutParams(
+                android.widget.FrameLayout.LayoutParams.MATCH_PARENT,
+                android.widget.FrameLayout.LayoutParams.WRAP_CONTENT
+            ).apply { gravity = android.view.Gravity.BOTTOM })
+            // 两个折叠按钮：📊信息 / ⚙参数（右下角，左右排列，无背景）
+            val btnSize = dpToPx(36)
+            val margin = dpToPx(12)
+            val toggleButton = android.widget.TextView(this).apply {
+                text = "📊"
+                textSize = 15f
+                gravity = android.view.Gravity.CENTER
+                setTextColor(android.graphics.Color.argb(220, 255, 255, 255))
+                isClickable = true; isFocusable = true
+                setOnClickListener {
+                    infoPanel.visibility = if (infoPanel.visibility == android.view.View.GONE) android.view.View.VISIBLE else android.view.View.GONE
+                    text = "📊"
+                }
+            }
+            container.addView(toggleButton, android.widget.FrameLayout.LayoutParams(btnSize, btnSize).apply {
+                gravity = android.view.Gravity.BOTTOM or android.view.Gravity.END
+                marginEnd = margin
+                bottomMargin = margin
+            })
+            val paramsToggle = android.widget.TextView(this).apply {
+                text = "⚙"
+                textSize = 15f
+                gravity = android.view.Gravity.CENTER
+                setTextColor(android.graphics.Color.argb(220, 255, 255, 255))
+                isClickable = true; isFocusable = true
+                setOnClickListener {
+                    slidersView.visibility = if (slidersView.visibility == android.view.View.GONE) android.view.View.VISIBLE else android.view.View.GONE
+                }
+            }
+            container.addView(paramsToggle, android.widget.FrameLayout.LayoutParams(btnSize, btnSize).apply {
+                gravity = android.view.Gravity.BOTTOM or android.view.Gravity.END
+                marginEnd = margin + btnSize + 2
+                bottomMargin = margin
+            })
+            toggleButton.text = "▼"  // 初始显示（原实现 addView 后设置）
+            debugPanel.setToggleButton(toggleButton)
+            infoPanel
+        }
+    }
+
+    /** 限制最大高度的 ScrollView，用于调试面板半屏约束 */
+    private suspend fun runOcrOnBitmap(bitmap: android.graphics.Bitmap): List<TextBlockInfo> {
+        return withContext(Dispatchers.IO) {
+            when (config.detEngine) {
+                DetEngine.MLKIT -> {
+                    OCRBridge.recognizeWithLocation(config.sourceLang, bitmap)
+                }
+                DetEngine.RT_DETR_V2 -> {
+                    DetectionBridge.detectWithRTDetrV2(bitmap, config.sourceLang, this@MangaFloatingService, config.keepTextFree, config.rtTextDirection)
+                }
+                DetEngine.PP_OCR_V6 -> {
+                    DetectionBridge.detectWithPPOcrV6(bitmap, config.sourceLang, this@MangaFloatingService)
+                }
+                DetEngine.PP_OCR_V5 -> {
+                    DetectionBridge.detectWithPPOcrV5(bitmap, config.sourceLang, this@MangaFloatingService)
+                }
+            }
+        }
+    }
+}

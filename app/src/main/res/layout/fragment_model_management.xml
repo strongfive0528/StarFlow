@@ -1,0 +1,1267 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+  模型管理页布局 —— 按「引擎组合」分 4 组。
+
+  每个可下载模型行由三个模板之一 include 进来（item_model_row_*）：
+    · item_model_row_browser    单文件：状态 + 浏览器 + 下载/删除 + 取消
+    · item_model_row_files      双文件（onnx + 字典）：状态 + 2 浏览器 + 下载/删除 + 取消
+    · item_model_row_manga_ocr  manga-ocr 专用：标题行 + 3 浏览器 + 下载/删除 + 取消
+
+  ⚠️ 每个 include **必须**有唯一的 android:id（行根 View，ModelManagementFragment
+  以它为作用域查找内部控件）。新增模型见 ModelManagementFragment.modelRows。
+-->
+<LinearLayout xmlns:android="http://schemas.android.com/apk/res/android"
+    xmlns:app="http://schemas.android.com/apk/res-auto"
+    android:layout_width="match_parent"
+    android:layout_height="match_parent"
+    android:orientation="vertical">
+
+    <!-- ════════════════════════════════════════════════════════
+         顶部 Tab：OCR 模型 / 超分模型（2026-10 超分适配新增）
+         ⚠️ 两个 Tab 的正文各自一个 ScrollView；超分那一页的行由
+         ModelManagementFragment 动态 inflate（复用 item_model_row_browser），
+         不在本 XML 里逐行 include —— 超分模型数量会随模型族增长。
+         ════════════════════════════════════════════════════════ -->
+    <com.google.android.material.tabs.TabLayout
+        android:id="@+id/model_tabs"
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        android:background="?attr/colorSurface"
+        app:tabMode="fixed"
+        app:tabGravity="fill" />
+
+    <ScrollView
+        android:id="@+id/ocr_scroll"
+        android:layout_width="match_parent"
+        android:layout_height="0dp"
+        android:layout_weight="1"
+        android:padding="12dp">
+
+    <LinearLayout
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        android:orientation="vertical">
+
+        <!-- ════════════════════════════════════════════════════════
+             1. ML Kit（内置）
+             ════════════════════════════════════════════════════════ -->
+        <TextView
+            android:id="@+id/mlkit_group_title"
+            android:layout_width="wrap_content"
+            android:layout_height="wrap_content"
+            android:text="@string/model_group_mlkit"
+            android:textSize="14sp"
+            android:textStyle="bold"
+            android:padding="4dp"
+            android:layout_marginTop="8dp"
+            android:background="@drawable/ocr_group_selector"
+            android:clickable="true"/>
+        <TextView
+            android:id="@+id/mlkit_group_selected"
+            android:layout_width="wrap_content"
+            android:layout_height="wrap_content"
+            android:text="@string/ocr_group_selected"
+            android:textColor="@color/success"
+            android:textSize="12sp"
+            android:visibility="gone"/>
+
+        <LinearLayout
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:orientation="vertical"
+            android:background="@drawable/setting_shape"
+            android:padding="12dp"
+            android:layout_marginTop="8dp">
+
+            <TextView
+                android:layout_width="wrap_content"
+                android:layout_height="wrap_content"
+                android:text="@string/model_group_mlkit_desc"
+                android:textSize="11sp"
+                android:textColor="#888"
+                android:layout_marginBottom="4dp"/>
+
+            <LinearLayout
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:orientation="horizontal"
+                android:gravity="end|center_vertical">
+                <TextView
+                    android:layout_width="wrap_content"
+                    android:layout_height="wrap_content"
+                    android:text="@string/model_built_in_label"
+                    android:textSize="14sp"
+                    android:textColor="@color/success"/>
+            </LinearLayout>
+        </LinearLayout>
+
+        <!-- ════════════════════════════════════════════════════════
+             2. PP-OCRv6（small 内置 + medium 可下载）
+             ════════════════════════════════════════════════════════ -->
+        <TextView
+            android:id="@+id/ppocrv6_group_title"
+            android:layout_width="wrap_content"
+            android:layout_height="wrap_content"
+            android:text="@string/model_group_ppocrv6"
+            android:textSize="14sp"
+            android:textStyle="bold"
+            android:padding="4dp"
+            android:layout_marginTop="16dp"
+            android:background="@drawable/ocr_group_selector"
+            android:clickable="true"/>
+        <TextView
+            android:id="@+id/ppocrv6_group_selected"
+            android:layout_width="wrap_content"
+            android:layout_height="wrap_content"
+            android:text="@string/ocr_group_selected"
+            android:textColor="@color/success"
+            android:textSize="12sp"
+            android:visibility="gone"/>
+
+        <LinearLayout
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:orientation="vertical"
+            android:background="@drawable/setting_shape"
+            android:padding="12dp"
+            android:layout_marginTop="8dp">
+
+            <TextView
+                android:layout_width="wrap_content"
+                android:layout_height="wrap_content"
+                android:text="@string/model_group_ppocrv6_desc"
+                android:textSize="11sp"
+                android:textColor="#888"
+                android:layout_marginBottom="8dp"/>
+
+            <!-- small tier（内置） -->
+            <LinearLayout
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:orientation="horizontal"
+                android:padding="4dp"
+                android:gravity="center_vertical">
+
+                <LinearLayout
+                    android:layout_width="0dp"
+                    android:layout_height="wrap_content"
+                    android:layout_weight="1"
+                    android:orientation="vertical">
+
+                    <TextView
+                        android:layout_width="wrap_content"
+                        android:layout_height="wrap_content"
+                        android:text="small"
+                        android:textSize="14sp"/>
+
+                    <TextView
+                        android:layout_width="wrap_content"
+                        android:layout_height="wrap_content"
+                        android:text="@string/model_v6_small_inline_desc"
+                        android:textSize="11sp"
+                        android:textColor="#888"
+                        android:layout_marginTop="2dp"/>
+                </LinearLayout>
+
+                <TextView
+                    android:layout_width="wrap_content"
+                    android:layout_height="wrap_content"
+                    android:text="@string/model_built_in_label"
+                    android:textSize="14sp"
+                    android:textColor="@color/success"
+                    android:layout_marginEnd="8dp"/>
+
+                <RadioButton
+                    android:id="@+id/ppocrv6_tier_small"
+                    android:layout_width="wrap_content"
+                    android:layout_height="wrap_content"
+                    android:textSize="12sp"/>
+            </LinearLayout>
+
+            <!-- 分隔线 -->
+            <View
+                android:layout_width="match_parent"
+                android:layout_height="1dp"
+                android:background="@color/divider"
+                android:layout_marginStart="4dp"
+                android:layout_marginEnd="4dp"
+                android:layout_marginTop="4dp"
+                android:layout_marginBottom="4dp"/>
+
+            <!-- medium tier（可选下载） -->
+            <LinearLayout
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:orientation="horizontal"
+                android:padding="4dp"
+                android:gravity="center_vertical">
+
+                <LinearLayout
+                    android:layout_width="0dp"
+                    android:layout_height="wrap_content"
+                    android:layout_weight="1"
+                    android:orientation="vertical">
+
+                    <TextView
+                        android:layout_width="wrap_content"
+                        android:layout_height="wrap_content"
+                        android:text="medium"
+                        android:textSize="14sp"/>
+
+                    <TextView
+                        android:layout_width="wrap_content"
+                        android:layout_height="wrap_content"
+                        android:text="@string/model_v6_medium_inline_desc"
+                        android:textSize="11sp"
+                        android:textColor="#888"
+                        android:layout_marginTop="2dp"/>
+                </LinearLayout>
+
+                <RadioButton
+                    android:id="@+id/ppocrv6_tier_medium"
+                    android:layout_width="wrap_content"
+                    android:layout_height="wrap_content"
+                    android:textSize="12sp"
+                    android:visibility="gone"/>
+            </LinearLayout>
+
+            <!-- medium 检测器 -->
+            <TextView
+                android:layout_width="wrap_content"
+                android:layout_height="wrap_content"
+                android:text="@string/model_detector"
+                android:textSize="14sp"
+                android:textStyle="bold"/>
+
+            <include
+                layout="@layout/item_model_row_browser"
+                android:id="@+id/ppocrv6_medium_det_row"/>
+
+            <!-- medium 识别器 -->
+            <TextView
+                android:layout_width="wrap_content"
+                android:layout_height="wrap_content"
+                android:text="@string/model_recognizer"
+                android:textSize="14sp"
+                android:textStyle="bold"/>
+
+            <include
+                layout="@layout/item_model_row_browser"
+                android:id="@+id/ppocrv6_medium_rec_row"/>
+        </LinearLayout>
+
+        <!-- ════════════════════════════════════════════════════════
+             3. PP-OCRv5（全部需下载：检测器在前，识别器多语言在后）
+             ════════════════════════════════════════════════════════ -->
+        <TextView
+            android:id="@+id/ppocrv5_group_title"
+            android:layout_width="wrap_content"
+            android:layout_height="wrap_content"
+            android:text="@string/model_group_ppocrv5"
+            android:textSize="14sp"
+            android:textStyle="bold"
+            android:padding="4dp"
+            android:layout_marginTop="16dp"
+            android:background="@drawable/ocr_group_selector"
+            android:clickable="true"/>
+        <TextView
+            android:id="@+id/ppocrv5_group_selected"
+            android:layout_width="wrap_content"
+            android:layout_height="wrap_content"
+            android:text="@string/ocr_group_selected"
+            android:textColor="@color/success"
+            android:textSize="12sp"
+            android:visibility="gone"/>
+
+        <LinearLayout
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:orientation="vertical"
+            android:background="@drawable/setting_shape"
+            android:padding="12dp"
+            android:layout_marginTop="8dp">
+
+            <TextView
+                android:layout_width="wrap_content"
+                android:layout_height="wrap_content"
+                android:text="@string/model_group_ppocrv5_desc"
+                android:textSize="11sp"
+                android:textColor="#888"
+                android:layout_marginBottom="8dp"/>
+
+            <!-- 检测器 -->
+            <TextView
+                android:layout_width="wrap_content"
+                android:layout_height="wrap_content"
+                android:text="@string/model_detector"
+                android:textSize="14sp"
+                android:textStyle="bold"/>
+
+            <include
+                layout="@layout/item_model_row_browser"
+                android:id="@+id/v5_det_row"/>
+
+            <!-- 分隔线 -->
+            <View
+                android:layout_width="match_parent"
+                android:layout_height="1dp"
+                android:background="@color/divider"
+                android:layout_marginStart="4dp"
+                android:layout_marginEnd="4dp"
+                android:layout_marginTop="10dp"
+                android:layout_marginBottom="10dp"/>
+
+            <!-- 识别器（多语言） -->
+            <TextView
+                android:layout_width="wrap_content"
+                android:layout_height="wrap_content"
+                android:text="@string/model_recognizer_multi"
+                android:textSize="14sp"
+                android:textStyle="bold"/>
+
+            <!-- 中日英 rec -->
+            <TextView
+                android:layout_width="wrap_content"
+                android:layout_height="wrap_content"
+                android:text="@string/model_lang_zhjaen"
+                android:textSize="14sp"
+                android:textStyle="bold"/>
+
+            <include
+                layout="@layout/item_model_row_files"
+                android:id="@+id/v5_rec_zh_row"/>
+
+            <!-- 分隔线 -->
+            <View
+                android:layout_width="match_parent"
+                android:layout_height="1dp"
+                android:background="@color/divider"
+                android:layout_marginStart="4dp"
+                android:layout_marginEnd="4dp"
+                android:layout_marginTop="8dp"
+                android:layout_marginBottom="8dp"/>
+
+            <!-- 英文 rec -->
+            <TextView
+                android:layout_width="wrap_content"
+                android:layout_height="wrap_content"
+                android:text="@string/model_lang_en"
+                android:textSize="14sp"
+                android:textStyle="bold"/>
+
+            <include
+                layout="@layout/item_model_row_files"
+                android:id="@+id/v5_rec_en_row"/>
+
+            <!-- 分隔线 -->
+            <View
+                android:layout_width="match_parent"
+                android:layout_height="1dp"
+                android:background="@color/divider"
+                android:layout_marginStart="4dp"
+                android:layout_marginEnd="4dp"
+                android:layout_marginTop="8dp"
+                android:layout_marginBottom="8dp"/>
+
+            <!-- 韩文 rec -->
+            <TextView
+                android:layout_width="wrap_content"
+                android:layout_height="wrap_content"
+                android:text="@string/model_lang_ko"
+                android:textSize="14sp"
+                android:textStyle="bold"/>
+
+            <include
+                layout="@layout/item_model_row_files"
+                android:id="@+id/v5_rec_ko_row"/>
+
+            <!-- 分隔线 -->
+            <View
+                android:layout_width="match_parent"
+                android:layout_height="1dp"
+                android:background="@color/divider"
+                android:layout_marginStart="4dp"
+                android:layout_marginEnd="4dp"
+                android:layout_marginTop="8dp"
+                android:layout_marginBottom="8dp"/>
+
+            <!-- 俄文 rec -->
+            <TextView
+                android:layout_width="wrap_content"
+                android:layout_height="wrap_content"
+                android:text="@string/model_lang_ru"
+                android:textSize="14sp"
+                android:textStyle="bold"/>
+
+            <include
+                layout="@layout/item_model_row_files"
+                android:id="@+id/v5_rec_ru_row"/>
+        </LinearLayout>
+
+        <!-- ════════════════════════════════════════════════════════
+             4. RT-DETR-V2 + manga-ocr（均需下载）
+             ════════════════════════════════════════════════════════ -->
+        <TextView
+            android:id="@+id/rt_manga_group_title"
+            android:layout_width="wrap_content"
+            android:layout_height="wrap_content"
+            android:text="@string/model_group_rt_manga"
+            android:textSize="14sp"
+            android:textStyle="bold"
+            android:padding="4dp"
+            android:layout_marginTop="16dp"
+            android:background="@drawable/ocr_group_selector"
+            android:clickable="true"/>
+        <TextView
+            android:id="@+id/rt_manga_group_selected"
+            android:layout_width="wrap_content"
+            android:layout_height="wrap_content"
+            android:text="@string/ocr_group_selected"
+            android:textColor="@color/success"
+            android:textSize="12sp"
+            android:visibility="gone"/>
+
+        <LinearLayout
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:orientation="vertical"
+            android:background="@drawable/setting_shape"
+            android:padding="12dp"
+            android:layout_marginTop="8dp">
+
+            <TextView
+                android:layout_width="wrap_content"
+                android:layout_height="wrap_content"
+                android:text="@string/model_group_rt_manga_desc"
+                android:textSize="11sp"
+                android:textColor="#888"
+                android:layout_marginBottom="8dp"/>
+
+            <!-- RT-DETR-V2 -->
+            <TextView
+                android:layout_width="wrap_content"
+                android:layout_height="wrap_content"
+                android:text="RT-DETR-V2"
+                android:textSize="14sp"
+                android:textStyle="bold"/>
+
+            <include
+                layout="@layout/item_model_row_browser"
+                android:id="@+id/rtdetr_row"/>
+
+            <!-- 分隔线 -->
+            <View
+                android:layout_width="match_parent"
+                android:layout_height="1dp"
+                android:background="@color/divider"
+                android:layout_marginStart="4dp"
+                android:layout_marginEnd="4dp"
+                android:layout_marginTop="8dp"
+                android:layout_marginBottom="8dp"/>
+
+            <!-- manga-ocr -->
+            <include
+                layout="@layout/item_model_row_manga_ocr"
+                android:id="@+id/manga_ocr_row"/>
+        </LinearLayout>
+
+        <!-- ════════════════════════════════════════════════════════
+             底部提示
+             ════════════════════════════════════════════════════════ -->
+        <TextView
+            android:layout_width="wrap_content"
+            android:layout_height="wrap_content"
+            android:text="@string/model_hint_need_both"
+            android:textSize="11sp"
+            android:textColor="#888"
+            android:layout_marginTop="8dp"
+            android:layout_marginBottom="4dp"/>
+
+        <!-- 模型存储路径 -->
+        <TextView
+            android:layout_width="wrap_content"
+            android:layout_height="wrap_content"
+            android:text="@string/model_storage_path_label"
+            android:textSize="12sp"
+            android:textColor="#888"
+            android:layout_marginTop="8dp"/>
+
+        <TextView
+            android:id="@+id/model_storage_path"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:textSize="11sp"
+            android:textColor="#666"
+            android:layout_marginTop="4dp"
+            android:textIsSelectable="true"/>
+
+        <!-- FAQ 引用 -->
+        <TextView
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:textSize="11sp"
+            android:textColor="#888"
+            android:layout_marginTop="8dp"
+            android:text="@string/model_storage_faq_hint"/>
+
+        <!-- 下载提示 -->
+        <TextView
+            android:layout_width="wrap_content"
+            android:layout_height="wrap_content"
+            android:text="@string/model_download_vpn_tip"
+            android:textSize="12sp"
+            android:textColor="#888"
+            android:layout_marginTop="16dp"
+            android:layout_marginBottom="8dp"/>
+
+    </LinearLayout>
+    </ScrollView>
+
+    <!-- ════════════════════════════════════════════════════════
+         超分模型 Tab（2026-10）
+
+         ⚠️ **结构与 OCR Tab 完全一致**（改了照着 OCR 那几组抄，别自创版式）：
+            组标题(14sp bold + @drawable/ocr_group_selector + clickable)
+            → 组「当前使用」(12sp @color/success)
+            → 卡片(@drawable/setting_shape, padding 12dp)
+                 ├ 组描述(11sp #888)
+                 └ 每个模型：标题(14sp bold) → <include item_model_row_browser> → 分隔线(@color/divider)
+
+         「组」= 模型族（AnimeJaNai / waifu2x cunet / waifu2x swin_unet）。
+         点组标题 = 选中该族的**推荐档**（各族第一行，与 OCR「点组标题选引擎」同义）。
+         行内 ID 跨行重复 → 一律以行根 View 为作用域查找（同 OCR 页约定）。
+         ════════════════════════════════════════════════════════ -->
+    <ScrollView
+        android:id="@+id/sr_scroll"
+        android:layout_width="match_parent"
+        android:layout_height="0dp"
+        android:layout_weight="1"
+        android:padding="12dp"
+        android:visibility="gone">
+
+        <LinearLayout
+            android:id="@+id/sr_content"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:orientation="vertical">
+              <TextView
+                  android:id="@+id/sr_w2x_group_title"
+                  android:layout_width="wrap_content"
+                  android:layout_height="wrap_content"
+                  android:text="@string/sr_w2x_group"
+                  android:textSize="14sp"
+                  android:textStyle="bold"
+                  android:padding="4dp"
+                  android:layout_marginTop="8dp"
+                  android:background="@drawable/ocr_group_selector"
+                  android:clickable="true"/>
+              <TextView
+                  android:id="@+id/sr_w2x_group_selected"
+                  android:layout_width="wrap_content"
+                  android:layout_height="wrap_content"
+                  android:text="@string/ocr_group_selected"
+                  android:textColor="@color/success"
+                  android:textSize="12sp"
+                  android:visibility="gone"/>
+
+              <LinearLayout
+                  android:layout_width="match_parent"
+                  android:layout_height="wrap_content"
+                  android:orientation="vertical"
+                  android:background="@drawable/setting_shape"
+                  android:padding="12dp"
+                  android:layout_marginTop="8dp">
+
+                  <TextView
+                      android:layout_width="wrap_content"
+                      android:layout_height="wrap_content"
+                      android:text="@string/sr_w2x_group_desc"
+                      android:textSize="11sp"
+                      android:textColor="#888"
+                      android:layout_marginBottom="8dp"/>
+                  <LinearLayout
+                      android:id="@+id/sr_w2x_anime_m1_row"
+                      android:layout_width="match_parent"
+                      android:layout_height="wrap_content"
+                      android:orientation="vertical"
+                      android:clickable="true">
+
+                      <LinearLayout
+                          android:layout_width="match_parent"
+                          android:layout_height="wrap_content"
+                          android:orientation="horizontal"
+                          android:gravity="center_vertical">
+
+                          <TextView
+                              android:id="@+id/sr_w2x_anime_m1_title"
+                                  android:layout_width="0dp"
+                                  android:layout_height="wrap_content"
+                                  android:layout_weight="1"
+                                  android:text="@string/sr_model_w2x_up7_anime_m1"
+                                  android:textSize="14sp"
+                                  android:textStyle="bold"/>
+
+                          <RadioButton
+                              android:id="@+id/sr_w2x_anime_m1_radio"
+                              android:layout_width="wrap_content"
+                              android:layout_height="wrap_content"
+                              android:clickable="false"
+                              android:focusable="false"/>
+                      </LinearLayout>
+
+                      <include
+                          layout="@layout/item_model_row_browser"/>
+                  </LinearLayout>
+
+                  <View
+                      android:layout_width="match_parent"
+                      android:layout_height="1dp"
+                      android:background="#1A000000"/>
+
+                  <LinearLayout
+                      android:id="@+id/sr_w2x_anime_n2_row"
+                      android:layout_width="match_parent"
+                      android:layout_height="wrap_content"
+                      android:orientation="vertical"
+                      android:clickable="true">
+
+                      <LinearLayout
+                          android:layout_width="match_parent"
+                          android:layout_height="wrap_content"
+                          android:orientation="horizontal"
+                          android:gravity="center_vertical">
+
+                          <TextView
+                              android:id="@+id/sr_w2x_anime_n2_title"
+                                  android:layout_width="0dp"
+                                  android:layout_height="wrap_content"
+                                  android:layout_weight="1"
+                                  android:text="@string/sr_model_w2x_up7_anime_n2"
+                                  android:textSize="14sp"
+                                  android:textStyle="bold"/>
+
+                          <RadioButton
+                              android:id="@+id/sr_w2x_anime_n2_radio"
+                              android:layout_width="wrap_content"
+                              android:layout_height="wrap_content"
+                              android:clickable="false"
+                              android:focusable="false"/>
+                      </LinearLayout>
+
+                      <include
+                          layout="@layout/item_model_row_browser"/>
+                  </LinearLayout>
+
+                  <View
+                      android:layout_width="match_parent"
+                      android:layout_height="1dp"
+                      android:background="#1A000000"/>
+
+                  <!-- 照片族：与动漫族同一族（upconv_7），只是权重不同 —— 真人照片/彩页/网点重
+                       的图源用动漫权重会明显更糊。用户口径 2026-10：upconv 组一共 4 档。 -->
+                  <LinearLayout
+                      android:id="@+id/sr_w2x_photo_m1_row"
+                      android:layout_width="match_parent"
+                      android:layout_height="wrap_content"
+                      android:orientation="vertical"
+                      android:clickable="true">
+
+                      <LinearLayout
+                          android:layout_width="match_parent"
+                          android:layout_height="wrap_content"
+                          android:orientation="horizontal"
+                          android:gravity="center_vertical">
+
+                          <TextView
+                              android:id="@+id/sr_w2x_photo_m1_title"
+                                  android:layout_width="0dp"
+                                  android:layout_height="wrap_content"
+                                  android:layout_weight="1"
+                                  android:text="@string/sr_model_w2x_up7_photo_m1"
+                                  android:textSize="14sp"
+                                  android:textStyle="bold"/>
+
+                          <RadioButton
+                              android:id="@+id/sr_w2x_photo_m1_radio"
+                              android:layout_width="wrap_content"
+                              android:layout_height="wrap_content"
+                              android:clickable="false"
+                              android:focusable="false"/>
+                      </LinearLayout>
+
+                      <include
+                          layout="@layout/item_model_row_browser"/>
+                  </LinearLayout>
+
+                  <View
+                      android:layout_width="match_parent"
+                      android:layout_height="1dp"
+                      android:background="#1A000000"/>
+
+                  <LinearLayout
+                      android:id="@+id/sr_w2x_photo_n2_row"
+                      android:layout_width="match_parent"
+                      android:layout_height="wrap_content"
+                      android:orientation="vertical"
+                      android:clickable="true">
+
+                      <LinearLayout
+                          android:layout_width="match_parent"
+                          android:layout_height="wrap_content"
+                          android:orientation="horizontal"
+                          android:gravity="center_vertical">
+
+                          <TextView
+                              android:id="@+id/sr_w2x_photo_n2_title"
+                                  android:layout_width="0dp"
+                                  android:layout_height="wrap_content"
+                                  android:layout_weight="1"
+                                  android:text="@string/sr_model_w2x_up7_photo_n2"
+                                  android:textSize="14sp"
+                                  android:textStyle="bold"/>
+
+                          <RadioButton
+                              android:id="@+id/sr_w2x_photo_n2_radio"
+                              android:layout_width="wrap_content"
+                              android:layout_height="wrap_content"
+                              android:clickable="false"
+                              android:focusable="false"/>
+                      </LinearLayout>
+
+                      <include
+                          layout="@layout/item_model_row_browser"/>
+                  </LinearLayout>
+
+              </LinearLayout>
+
+              <TextView
+                  android:id="@+id/sr_cunet_group_title"
+                  android:layout_width="wrap_content"
+                  android:layout_height="wrap_content"
+                  android:text="@string/sr_cunet_group"
+                  android:textSize="14sp"
+                  android:textStyle="bold"
+                  android:padding="4dp"
+                  android:layout_marginTop="8dp"
+                  android:background="@drawable/ocr_group_selector"
+                  android:clickable="true"/>
+              <TextView
+                  android:id="@+id/sr_cunet_group_selected"
+                  android:layout_width="wrap_content"
+                  android:layout_height="wrap_content"
+                  android:text="@string/ocr_group_selected"
+                  android:textColor="@color/success"
+                  android:textSize="12sp"
+                  android:visibility="gone"/>
+
+              <LinearLayout
+                  android:layout_width="match_parent"
+                  android:layout_height="wrap_content"
+                  android:orientation="vertical"
+                  android:background="@drawable/setting_shape"
+                  android:padding="12dp"
+                  android:layout_marginTop="8dp">
+
+                  <TextView
+                      android:layout_width="wrap_content"
+                      android:layout_height="wrap_content"
+                      android:text="@string/sr_cunet_group_desc"
+                      android:textSize="11sp"
+                      android:textColor="#888"
+                      android:layout_marginBottom="8dp"/>
+                  <LinearLayout
+                      android:id="@+id/sr_cunet_m1_row"
+                      android:layout_width="match_parent"
+                      android:layout_height="wrap_content"
+                      android:orientation="vertical"
+                      android:clickable="true">
+
+                      <LinearLayout
+                          android:layout_width="match_parent"
+                          android:layout_height="wrap_content"
+                          android:orientation="horizontal"
+                          android:gravity="center_vertical">
+
+                          <TextView
+                              android:id="@+id/sr_cunet_m1_title"
+                                  android:layout_width="0dp"
+                                  android:layout_height="wrap_content"
+                                  android:layout_weight="1"
+                                  android:text="@string/sr_model_w2x_cunet_m1"
+                                  android:textSize="14sp"
+                                  android:textStyle="bold"/>
+
+                          <RadioButton
+                              android:id="@+id/sr_cunet_m1_radio"
+                              android:layout_width="wrap_content"
+                              android:layout_height="wrap_content"
+                              android:clickable="false"
+                              android:focusable="false"/>
+                      </LinearLayout>
+
+                      <include
+                          layout="@layout/item_model_row_browser"/>
+                  </LinearLayout>
+
+                  <View
+                      android:layout_width="match_parent"
+                      android:layout_height="1dp"
+                      android:background="#1A000000"/>
+
+                  <LinearLayout
+                      android:id="@+id/sr_cunet_n1_row"
+                      android:layout_width="match_parent"
+                      android:layout_height="wrap_content"
+                      android:orientation="vertical"
+                      android:clickable="true">
+
+                      <LinearLayout
+                          android:layout_width="match_parent"
+                          android:layout_height="wrap_content"
+                          android:orientation="horizontal"
+                          android:gravity="center_vertical">
+
+                          <TextView
+                              android:id="@+id/sr_cunet_n1_title"
+                                  android:layout_width="0dp"
+                                  android:layout_height="wrap_content"
+                                  android:layout_weight="1"
+                                  android:text="@string/sr_model_w2x_cunet_n1"
+                                  android:textSize="14sp"
+                                  android:textStyle="bold"/>
+
+                          <RadioButton
+                              android:id="@+id/sr_cunet_n1_radio"
+                              android:layout_width="wrap_content"
+                              android:layout_height="wrap_content"
+                              android:clickable="false"
+                              android:focusable="false"/>
+                      </LinearLayout>
+
+                      <include
+                          layout="@layout/item_model_row_browser"/>
+                  </LinearLayout>
+
+                  <View
+                      android:layout_width="match_parent"
+                      android:layout_height="1dp"
+                      android:background="#1A000000"/>
+
+                  <LinearLayout
+                      android:id="@+id/sr_cunet_n2_row"
+                      android:layout_width="match_parent"
+                      android:layout_height="wrap_content"
+                      android:orientation="vertical"
+                      android:clickable="true">
+
+                      <LinearLayout
+                          android:layout_width="match_parent"
+                          android:layout_height="wrap_content"
+                          android:orientation="horizontal"
+                          android:gravity="center_vertical">
+
+                          <TextView
+                              android:id="@+id/sr_cunet_n2_title"
+                                  android:layout_width="0dp"
+                                  android:layout_height="wrap_content"
+                                  android:layout_weight="1"
+                                  android:text="@string/sr_model_w2x_cunet_n2"
+                                  android:textSize="14sp"
+                                  android:textStyle="bold"/>
+
+                          <RadioButton
+                              android:id="@+id/sr_cunet_n2_radio"
+                              android:layout_width="wrap_content"
+                              android:layout_height="wrap_content"
+                              android:clickable="false"
+                              android:focusable="false"/>
+                      </LinearLayout>
+
+                      <include
+                          layout="@layout/item_model_row_browser"/>
+                  </LinearLayout>
+
+                  <View
+                      android:layout_width="match_parent"
+                      android:layout_height="1dp"
+                      android:background="#1A000000"/>
+
+              </LinearLayout>
+
+              <TextView
+                  android:id="@+id/sr_srmd_group_title"
+                  android:layout_width="wrap_content"
+                  android:layout_height="wrap_content"
+                  android:text="@string/sr_srmd_group"
+                  android:textSize="14sp"
+                  android:textStyle="bold"
+                  android:padding="4dp"
+                  android:layout_marginTop="8dp"
+                  android:background="@drawable/ocr_group_selector"
+                  android:clickable="true"/>
+              <TextView
+                  android:id="@+id/sr_srmd_group_selected"
+                  android:layout_width="wrap_content"
+                  android:layout_height="wrap_content"
+                  android:text="@string/ocr_group_selected"
+                  android:textColor="@color/success"
+                  android:textSize="12sp"
+                  android:visibility="gone"/>
+
+              <LinearLayout
+                  android:layout_width="match_parent"
+                  android:layout_height="wrap_content"
+                  android:orientation="vertical"
+                  android:background="@drawable/setting_shape"
+                  android:padding="12dp"
+                  android:layout_marginTop="8dp">
+
+                  <TextView
+                      android:layout_width="wrap_content"
+                      android:layout_height="wrap_content"
+                      android:text="@string/sr_srmd_group_desc"
+                      android:textSize="11sp"
+                      android:textColor="#888"
+                      android:layout_marginBottom="8dp"/>
+                  <LinearLayout
+                      android:id="@+id/sr_srmd_x2_row"
+                      android:layout_width="match_parent"
+                      android:layout_height="wrap_content"
+                      android:orientation="vertical"
+                      android:clickable="true">
+
+                      <LinearLayout
+                          android:layout_width="match_parent"
+                          android:layout_height="wrap_content"
+                          android:orientation="horizontal"
+                          android:gravity="center_vertical">
+
+                          <TextView
+                              android:id="@+id/sr_srmd_x2_title"
+                                  android:layout_width="0dp"
+                                  android:layout_height="wrap_content"
+                                  android:layout_weight="1"
+                                  android:text="@string/sr_model_srmd_x2"
+                                  android:textSize="14sp"
+                                  android:textStyle="bold"/>
+
+                          <RadioButton
+                              android:id="@+id/sr_srmd_x2_radio"
+                              android:layout_width="wrap_content"
+                              android:layout_height="wrap_content"
+                              android:clickable="false"
+                              android:focusable="false"/>
+                      </LinearLayout>
+
+                      <include
+                          layout="@layout/item_model_row_browser"/>
+                  </LinearLayout>
+
+                  <View
+                      android:layout_width="match_parent"
+                      android:layout_height="1dp"
+                      android:background="#1A000000"/>
+
+                  <LinearLayout
+                      android:id="@+id/sr_srmd_nf_x2_row"
+                      android:layout_width="match_parent"
+                      android:layout_height="wrap_content"
+                      android:orientation="vertical"
+                      android:clickable="true">
+
+                      <LinearLayout
+                          android:layout_width="match_parent"
+                          android:layout_height="wrap_content"
+                          android:orientation="horizontal"
+                          android:gravity="center_vertical">
+
+                          <TextView
+                              android:id="@+id/sr_srmd_nf_x2_title"
+                                  android:layout_width="0dp"
+                                  android:layout_height="wrap_content"
+                                  android:layout_weight="1"
+                                  android:text="@string/sr_model_srmd_nf_x2"
+                                  android:textSize="14sp"
+                                  android:textStyle="bold"/>
+
+                          <RadioButton
+                              android:id="@+id/sr_srmd_nf_x2_radio"
+                              android:layout_width="wrap_content"
+                              android:layout_height="wrap_content"
+                              android:clickable="false"
+                              android:focusable="false"/>
+                      </LinearLayout>
+
+                      <include
+                          layout="@layout/item_model_row_browser"/>
+                  </LinearLayout>
+
+                  <View
+                      android:layout_width="match_parent"
+                      android:layout_height="1dp"
+                      android:background="#1A000000"/>
+
+              </LinearLayout>
+
+              <TextView
+                  android:id="@+id/sr_cugan_group_title"
+                  android:layout_width="wrap_content"
+                  android:layout_height="wrap_content"
+                  android:text="@string/sr_cugan_group"
+                  android:textSize="14sp"
+                  android:textStyle="bold"
+                  android:padding="4dp"
+                  android:layout_marginTop="8dp"
+                  android:background="@drawable/ocr_group_selector"
+                  android:clickable="true"/>
+              <TextView
+                  android:id="@+id/sr_cugan_group_selected"
+                  android:layout_width="wrap_content"
+                  android:layout_height="wrap_content"
+                  android:text="@string/ocr_group_selected"
+                  android:textColor="@color/success"
+                  android:textSize="12sp"
+                  android:visibility="gone"/>
+
+              <LinearLayout
+                  android:layout_width="match_parent"
+                  android:layout_height="wrap_content"
+                  android:orientation="vertical"
+                  android:background="@drawable/setting_shape"
+                  android:padding="12dp"
+                  android:layout_marginTop="8dp">
+
+                  <TextView
+                      android:layout_width="wrap_content"
+                      android:layout_height="wrap_content"
+                      android:text="@string/sr_cugan_group_desc"
+                      android:textSize="11sp"
+                      android:textColor="#888"
+                      android:layout_marginBottom="8dp"/>
+                  <LinearLayout
+                      android:id="@+id/sr_cugan_dn_row"
+                      android:layout_width="match_parent"
+                      android:layout_height="wrap_content"
+                      android:orientation="vertical"
+                      android:clickable="true">
+
+                      <LinearLayout
+                          android:layout_width="match_parent"
+                          android:layout_height="wrap_content"
+                          android:orientation="horizontal"
+                          android:gravity="center_vertical">
+
+                          <TextView
+                              android:id="@+id/sr_cugan_dn_title"
+                                  android:layout_width="0dp"
+                                  android:layout_height="wrap_content"
+                                  android:layout_weight="1"
+                                  android:text="@string/sr_model_cugan_dn"
+                                  android:textSize="14sp"
+                                  android:textStyle="bold"/>
+
+                          <RadioButton
+                              android:id="@+id/sr_cugan_dn_radio"
+                              android:layout_width="wrap_content"
+                              android:layout_height="wrap_content"
+                              android:clickable="false"
+                              android:focusable="false"/>
+                      </LinearLayout>
+
+                      <include
+                          layout="@layout/item_model_row_browser"/>
+                  </LinearLayout>
+
+                  <View
+                      android:layout_width="match_parent"
+                      android:layout_height="1dp"
+                      android:background="#1A000000"/>
+
+                  <LinearLayout
+                      android:id="@+id/sr_cugan_cons_row"
+                      android:layout_width="match_parent"
+                      android:layout_height="wrap_content"
+                      android:orientation="vertical"
+                      android:clickable="true">
+
+                      <LinearLayout
+                          android:layout_width="match_parent"
+                          android:layout_height="wrap_content"
+                          android:orientation="horizontal"
+                          android:gravity="center_vertical">
+
+                          <TextView
+                              android:id="@+id/sr_cugan_cons_title"
+                                  android:layout_width="0dp"
+                                  android:layout_height="wrap_content"
+                                  android:layout_weight="1"
+                                  android:text="@string/sr_model_cugan_cons"
+                                  android:textSize="14sp"
+                                  android:textStyle="bold"/>
+
+                          <RadioButton
+                              android:id="@+id/sr_cugan_cons_radio"
+                              android:layout_width="wrap_content"
+                              android:layout_height="wrap_content"
+                              android:clickable="false"
+                              android:focusable="false"/>
+                      </LinearLayout>
+
+                      <include
+                          layout="@layout/item_model_row_browser"/>
+                  </LinearLayout>
+
+                  <View
+                      android:layout_width="match_parent"
+                      android:layout_height="1dp"
+                      android:background="#1A000000"/>
+
+                  <LinearLayout
+                      android:id="@+id/sr_cugan_d3_row"
+                      android:layout_width="match_parent"
+                      android:layout_height="wrap_content"
+                      android:orientation="vertical"
+                      android:clickable="true">
+
+                      <LinearLayout
+                          android:layout_width="match_parent"
+                          android:layout_height="wrap_content"
+                          android:orientation="horizontal"
+                          android:gravity="center_vertical">
+
+                          <TextView
+                              android:id="@+id/sr_cugan_d3_title"
+                                  android:layout_width="0dp"
+                                  android:layout_height="wrap_content"
+                                  android:layout_weight="1"
+                                  android:text="@string/sr_model_cugan_d3"
+                                  android:textSize="14sp"
+                                  android:textStyle="bold"/>
+
+                          <RadioButton
+                              android:id="@+id/sr_cugan_d3_radio"
+                              android:layout_width="wrap_content"
+                              android:layout_height="wrap_content"
+                              android:clickable="false"
+                              android:focusable="false"/>
+                      </LinearLayout>
+
+                      <include
+                          layout="@layout/item_model_row_browser"/>
+                  </LinearLayout>
+
+                  <View
+                      android:layout_width="match_parent"
+                      android:layout_height="1dp"
+                      android:background="#1A000000"/>
+
+              </LinearLayout>
+
+              <TextView
+                  android:id="@+id/sr_rsrgan_group_title"
+                  android:layout_width="wrap_content"
+                  android:layout_height="wrap_content"
+                  android:text="@string/sr_rsrgan_group"
+                  android:textSize="14sp"
+                  android:textStyle="bold"
+                  android:padding="4dp"
+                  android:layout_marginTop="8dp"
+                  android:background="@drawable/ocr_group_selector"
+                  android:clickable="true"/>
+              <TextView
+                  android:id="@+id/sr_rsrgan_group_selected"
+                  android:layout_width="wrap_content"
+                  android:layout_height="wrap_content"
+                  android:text="@string/ocr_group_selected"
+                  android:textColor="@color/success"
+                  android:textSize="12sp"
+                  android:visibility="gone"/>
+
+              <LinearLayout
+                  android:layout_width="match_parent"
+                  android:layout_height="wrap_content"
+                  android:orientation="vertical"
+                  android:background="@drawable/setting_shape"
+                  android:padding="12dp"
+                  android:layout_marginTop="8dp">
+
+                  <TextView
+                      android:layout_width="wrap_content"
+                      android:layout_height="wrap_content"
+                      android:text="@string/sr_rsrgan_group_desc"
+                      android:textSize="11sp"
+                      android:textColor="#888"
+                      android:layout_marginBottom="8dp"/>
+                  <LinearLayout
+                      android:id="@+id/sr_rsrgan_a6b_row"
+                      android:layout_width="match_parent"
+                      android:layout_height="wrap_content"
+                      android:orientation="vertical"
+                      android:clickable="true">
+
+                      <LinearLayout
+                          android:layout_width="match_parent"
+                          android:layout_height="wrap_content"
+                          android:orientation="horizontal"
+                          android:gravity="center_vertical">
+
+                          <TextView
+                              android:id="@+id/sr_rsrgan_a6b_title"
+                                  android:layout_width="0dp"
+                                  android:layout_height="wrap_content"
+                                  android:layout_weight="1"
+                                  android:text="@string/sr_model_rsrgan_a6b"
+                                  android:textSize="14sp"
+                                  android:textStyle="bold"/>
+
+                          <RadioButton
+                              android:id="@+id/sr_rsrgan_a6b_radio"
+                              android:layout_width="wrap_content"
+                              android:layout_height="wrap_content"
+                              android:clickable="false"
+                              android:focusable="false"/>
+                      </LinearLayout>
+
+                      <include
+                          layout="@layout/item_model_row_browser"/>
+                  </LinearLayout>
+
+                  <View
+                      android:layout_width="match_parent"
+                      android:layout_height="1dp"
+                      android:background="#1A000000"/>
+
+              </LinearLayout>
+
+            <!-- ════════════════════════════════════════════════════
+                 超分页底部提示（用户口径 2026-10：「超分下载页面最下面要写清楚模型存放
+                 准确位置和注意事项」）
+
+                 ⚠️ 文案在 strings 的 `sr_low_res_tip` / `sr_storage_note`（中英各一份，
+                 路径与 `SrModelManager.SR_DIR` = files/sr/、`SrStore.DIR_NAME` =
+                 files/sr_cache/ 对得上，改目录必须同步改这两条）。
+                 ════════════════════════════════════════════════════ -->
+            <TextView
+                android:id="@+id/sr_low_res_note"
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:text="@string/sr_low_res_tip"
+                android:textSize="11sp"
+                android:textColor="#888"
+                android:layout_marginTop="12dp"/>
+
+            <TextView
+                android:id="@+id/sr_storage_note"
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:text="@string/sr_storage_note"
+                android:textSize="11sp"
+                android:textColor="#666"
+                android:layout_marginTop="8dp"
+                android:layout_marginBottom="8dp"
+                android:textIsSelectable="true"/>
+
+        </LinearLayout>
+    </ScrollView>
+
+</LinearLayout>

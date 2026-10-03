@@ -1,0 +1,895 @@
+/*
+ * Copyright (C) 2024 murangogo
+ *
+ * This library is free software; you can redistribute it and/or modify it under
+ * the terms of the GNU Lesser General Public License as published by the Free
+ * Software Foundation; either version 3 of the License, or (at your option)
+ * any later version.
+ *
+ * This library is distributed in the hope that it will be useful, but WITHOUT
+ * ANY WARRANTY; without even the implied warranty of MERCHANTABILITY or FITNESS
+ * FOR A PARTICULAR PURPOSE. See the GNU Lesser General Public License for more details.
+ *
+ * You should have received a copy of the GNU Lesser General Public License along
+ * with this library; if not, write to the Free Software Foundation, Inc.,
+ * 59 Temple Place, Suite 330, Boston, MA 02111-1307 USA
+ */
+
+package com.moe.starflow.me.settings
+import com.moe.starflow.translate.widget.*
+import com.moe.starflow.translate.autotranslate.*
+import com.moe.starflow.translate.screenshot.*
+
+import android.app.ActivityManager
+import android.app.AlertDialog
+import android.content.Intent
+import android.net.Uri
+import android.os.Bundle
+import android.provider.OpenableColumns
+import android.view.LayoutInflater
+import android.widget.EditText
+import android.widget.LinearLayout
+import android.widget.TextView
+import androidx.activity.result.contract.ActivityResultContracts
+import androidx.localbroadcastmanager.content.LocalBroadcastManager
+import androidx.preference.ListPreference
+import androidx.preference.Preference
+import androidx.preference.PreferenceFragmentCompat
+import androidx.preference.SwitchPreference
+import com.jaredrummler.android.colorpicker.ColorPreferenceCompat
+import com.moe.starflow.R
+import com.moe.starflow.data.TranslationCacheManager
+import com.moe.starflow.manga.config.TranslationTextRules
+import com.moe.starflow.sr.SrModelManager
+import com.moe.starflow.translate.screenshot.AccessibilityServiceManager
+import com.moe.starflow.translate.CustomLocale
+import com.moe.starflow.translate.widget.Dialogs
+import com.moe.starflow.translate.FloatingBallService
+import com.moe.starflow.manga.MangaFloatingService
+import com.moe.starflow.utils.Constants
+import com.moe.starflow.utils.ContextBudget
+import com.moe.starflow.utils.CustomPreference
+import com.moe.starflow.utils.FloatingBallStyle
+import com.moe.starflow.utils.MangaFontSize
+import com.moe.starflow.utils.MangaFontSizeDialog
+import com.moe.starflow.utils.CustomFontSize
+import com.moe.starflow.utils.LanguageManager
+import com.moe.starflow.utils.ServiceUtils
+import com.moe.starflow.utils.ThemeManager
+import com.moe.starflow.utils.UiUtils
+import java.io.File
+import java.io.FileOutputStream
+import java.io.IOException
+
+
+class PersonalizationConfig : PreferenceFragmentCompat() {
+
+    companion object {
+        // 截图方式：0 = MediaProjection, 1 = AccessibilityService
+        private const val SCREENSHOT_METHOD_KEY = "Screenshot_Method"
+        private const val SCREENSHOT_METHOD_MEDIAPROJECTION = 0
+        private const val SCREENSHOT_METHOD_ACCESSIBILITY = 1
+
+        object BroadcastAction {
+            const val ACTION_FLOATING_BALL_ICON_CHANGED = "action_floating_ball_icon_changed"
+            const val EXTRA_ICON_KEY = "extra_icon_key"
+        }
+    }
+
+    private lateinit var prefs: CustomPreference
+    private val pickFileLauncher = registerForActivityResult(ActivityResultContracts.GetContent()) { uri ->
+        uri?.let { handleFileSelection(it) }
+    }
+    private lateinit var ballIconGame: PreferenceWithPreview
+    private lateinit var ballIconComic: PreferenceWithPreview
+    private var pendingIconKey: String? = null
+    private lateinit var ballPress: Preference
+    private lateinit var resultFont: Preference
+    private lateinit var resultFontSize: Preference
+    private lateinit var showSource: ListPreference
+    private lateinit var pixelStabilityCheck: SwitchPreference
+    private lateinit var pixelThreshold: ListPreference
+    private lateinit var pixelCheckInterval: ListPreference
+    private lateinit var mangaTextColor: ColorPreferenceCompat
+    private lateinit var mangaBgColor: ColorPreferenceCompat
+    private lateinit var gestureSingleClick: ListPreference
+    private lateinit var gestureDoubleClick: ListPreference
+    private lateinit var gestureLongPress: ListPreference
+
+    private lateinit var languagePreference: ListPreference
+
+    override fun onCreatePreferences(savedInstanceState: Bundle?, rootKey: String?) {
+        prefs = CustomPreference.getInstance(requireContext())
+        setPreferencesFromResource(R.xml.personalization, rootKey)
+
+        ballIconGame = findPreference<PreferenceWithPreview>("Icon_Game")!!
+        ballIconComic = findPreference<PreferenceWithPreview>("Icon_Comic")!!
+        ballPress = findPreference<Preference>("floating_ball_press")!!
+        resultFont = findPreference<Preference>("result_font")!!
+        resultFontSize = findPreference<Preference>("result_font_size")!!
+        showSource = findPreference<ListPreference>("show_source_text")!!
+        pixelStabilityCheck = findPreference<SwitchPreference>("pixel_stability_check")!!
+        pixelThreshold = findPreference<ListPreference>("pixel_threshold")!!
+        pixelCheckInterval = findPreference<ListPreference>("pixel_check_interval")!!
+        languagePreference = findPreference<ListPreference>("app_language")!!
+
+        // 悬浮球图片
+        ballIconGame.setOnPreferenceClickListener {
+            showBallOptionsDialog("Icon_Game")
+            true
+        }
+        ballIconComic.setOnPreferenceClickListener {
+            showBallOptionsDialog("Icon_Comic")
+            true
+        }
+
+        ballPress.setOnPreferenceClickListener {
+            showPressDialog()
+            true
+        }
+
+        // 悬浮球大小 / 透明度（游戏与漫画共用同一份设置；两个 Service 监听 prefs 实时生效）
+        findPreference<Preference>("floating_ball_style")?.let { p ->
+            updateBallStyleSummary(p)
+            p.setOnPreferenceClickListener {
+                showBallStyleDialog(p)
+                true
+            }
+        }
+
+        // 字体相关（FloatingBallService 监听 prefs 变化实时更新 view，无需先停服务）
+        resultFont.setOnPreferenceClickListener {
+            showFontOptionsDialog()
+            true
+        }
+
+        // 字体大小（同上）
+        resultFontSize.setOnPreferenceClickListener {
+            showFontSizeDialog()
+            true
+        }
+
+        // 漫画翻译结果字体大小（与悬浮窗菜单、阅读器面板同一份设置）
+        findPreference<Preference>("manga_font_size")?.let { p ->
+            p.setOnPreferenceClickListener {
+                showMangaFontSizeDialog()
+                true
+            }
+            updateMangaFontSizeSummary()
+        }
+
+        // 漫画译文间距（字间距 + 行间距合并在一个面板里；整数百分比，读取方 /100 得 ×字号的倍率）
+        findPreference<Preference>("manga_spacing")?.let { p ->
+            updateSpacingSummary(p)
+            p.setOnPreferenceClickListener {
+                showSpacingDialog(p)
+                true
+            }
+        }
+
+        // 译文替换表（二级面板，见 TranslationReplacementFragment）：摘要显示规则条数
+        findPreference<Preference>("manga_translation_replacements")?.let { updateReplacementSummary(it) }
+
+        // 超分模型管理入口（2026-10）：直接落到模型管理页的「超分」Tab，
+        // 不让用户进去后再自己点一次 Tab（个性化里点「超分模型管理」的意图已经很明确）
+        findPreference<Preference>("sr_model_manage")?.let { p ->
+            p.setOnPreferenceClickListener {
+                startActivity(Intent(requireContext(), SettingPageActivity::class.java).apply {
+                    putExtra(SettingPageActivity.EXTRA_FRAGMENT_TYPE,
+                        SettingPageActivity.TYPE_FRAGMENT_MODEL_MANAGEMENT)
+                    putExtra(SettingPageActivity.EXTRA_MODEL_SHOW_SR, true)
+                })
+                true
+            }
+            updateSrModelSummary(p)
+        }
+
+        // UI 同步字体：切换后需重启应用生效，弹窗提示
+        findPreference<SwitchPreference>("ui_apply_custom_font")?.setOnPreferenceChangeListener { _, _ ->
+            val dialog = android.app.AlertDialog.Builder(requireContext())
+                .setMessage(getString(R.string.ui_apply_custom_font_restart_hint))
+                .setPositiveButton(R.string.user_known, null)
+                .create()
+            dialog.window?.setBackgroundDrawableResource(R.drawable.dialog_background)
+            dialog.show()
+            true  // 允许更改（系统写 prefs）
+        }
+
+        // 字体颜色
+        findPreference<ColorPreferenceCompat>("result_view_font_color")?.apply {
+            setOnPreferenceChangeListener { _, newValue ->
+                prefs.setInt("Custom_Result_Font_Color", newValue as Int)
+                true
+            }
+            summary = getString(R.string.font_color_summary)
+        }
+
+        // 背景颜色
+        findPreference<ColorPreferenceCompat>("result_view_background_color")?.apply {
+            setOnPreferenceChangeListener { _, newValue ->
+                prefs.setInt("Custom_Result_Background_Color", newValue as Int)
+                true
+            }
+            summary = getString(R.string.result_background_color_summary)
+        }
+
+        // 显示原文
+        showSource.setOnPreferenceChangeListener { _, newValue ->
+            prefs.setInt("Custom_Show_Source_Mode", newValue.toString().toInt())
+            true
+        }
+        showSource.summaryProvider = Preference.SummaryProvider<ListPreference> { _ ->
+            getString(R.string.show_source_text_summary, showSource.entry)
+        }
+
+        // 文字阴影
+        findPreference<SwitchPreference>("text_shadow_enabled")?.apply {
+            setOnPreferenceChangeListener { _, newValue ->
+                prefs.setBoolean("text_shadow_enabled", newValue as Boolean)
+                true
+            }
+        }
+
+        // 翻页稳定性检测
+        pixelStabilityCheck.setOnPreferenceChangeListener { _, newValue ->
+            prefs.setBoolean("pixel_stability_check", newValue as Boolean)
+            true
+        }
+
+        // 像素变化阈值
+        pixelThreshold.setOnPreferenceChangeListener { _, newValue ->
+            prefs.setInt("Game_Pixel_Similar_Threshold", newValue.toString().toInt())
+            true
+        }
+        pixelThreshold.summaryProvider = Preference.SummaryProvider<ListPreference> { _ ->
+            getString(R.string.pixel_threshold_summary, pixelThreshold.entry)
+        }
+
+        // 检测间隔
+        pixelCheckInterval.setOnPreferenceChangeListener { _, newValue ->
+            prefs.setInt("Game_Pixel_Check_Interval", newValue.toString().toInt())
+            true
+        }
+        pixelCheckInterval.summaryProvider = Preference.SummaryProvider<ListPreference> { _ ->
+            getString(R.string.pixel_check_interval_summary, pixelCheckInterval.entry)
+        }
+
+        // AI 上下文设置
+        findPreference<SwitchPreference>("game_context_enabled")?.apply {
+            setOnPreferenceChangeListener { _, newValue ->
+                prefs.setBoolean("game_context_enabled", newValue as Boolean)
+                true
+            }
+        }
+        // 上下文长度（token 预算，档位 4K~128K，默认 32K）——原来是「轮数」，已整体替换
+        findPreference<ListPreference>(ContextBudget.KEY_TOKEN_BUDGET)?.apply {
+            setOnPreferenceChangeListener { _, newValue ->
+                prefs.setString(ContextBudget.KEY_TOKEN_BUDGET, newValue.toString())
+                true
+            }
+            summaryProvider = Preference.SummaryProvider<ListPreference> { pref ->
+                getString(R.string.game_context_budget_summary, pref.entry)
+            }
+        }
+
+        // 翻译通知 - 提示位置和时长
+        findPreference<ListPreference>("Status_Position")?.apply {
+            summaryProvider = Preference.SummaryProvider<ListPreference> { pref ->
+                pref.entry ?: ""
+            }
+        }
+        findPreference<ListPreference>("Status_Duration")?.apply {
+            summaryProvider = Preference.SummaryProvider<ListPreference> { pref ->
+                pref.entry ?: ""
+            }
+        }
+
+        // 漫画翻译结果颜色
+        mangaTextColor = findPreference("manga_text_color")!!
+        mangaBgColor = findPreference("manga_bg_color")!!
+
+        // 悬浮球手势配置
+        gestureSingleClick = findPreference("Ball_Gesture_Single_Click")!!
+        gestureDoubleClick = findPreference("Ball_Gesture_Double_Click")!!
+        gestureLongPress = findPreference("Ball_Gesture_Long_Press")!!
+        setupGesturePreference(gestureSingleClick, "Ball_Gesture_Single_Click")
+        setupGesturePreference(gestureDoubleClick, "Ball_Gesture_Double_Click")
+        setupGesturePreference(gestureLongPress, "Ball_Gesture_Long_Press")
+
+        mangaTextColor.setOnPreferenceChangeListener { _, newValue ->
+            prefs.setInt("Manga_Text_Color", newValue as Int)
+            true
+        }
+
+        mangaBgColor.setOnPreferenceChangeListener { _, newValue ->
+            prefs.setInt("Manga_BG_Color", newValue as Int)
+            true
+        }
+
+        ballIconGame.refreshPreview()
+        ballIconComic.refreshPreview()
+        updatePressSummary()
+        updateFontSummary()
+        updateFontSizeSummary()
+        setupLanguagePreference()
+    }
+
+    /**
+     * 设置语言选择功能
+     */
+    private fun setupLanguagePreference() {
+        // 设置当前选中的语言
+        val currentLanguage = LanguageManager.getAppLanguage(requireContext())
+        languagePreference.value = currentLanguage
+
+        // 更新摘要显示
+        languagePreference.summaryProvider = Preference.SummaryProvider<ListPreference> {
+            getString(R.string.language_setting_summary, CustomLocale.getInstance(it.value).getDisplayName())
+        }
+
+        // 监听语言变化
+        languagePreference.setOnPreferenceChangeListener { _, newValue ->
+            val newLanguage = newValue as String
+
+            // 如果语言没有变化，直接返回
+            if (newLanguage == LanguageManager.getAppLanguage(requireContext())) {
+                return@setOnPreferenceChangeListener true
+            }
+
+            // 显示确认对话框
+            showLanguageChangeDialog(newLanguage)
+            false // 暂时不改变值，等待用户确认
+        }
+    }
+
+    /**
+     * 显示语言切换确认对话框
+     */
+    private fun showLanguageChangeDialog(newLanguage: String) {
+        val languageName = CustomLocale.getInstance(newLanguage).getDisplayName()
+
+        val dialog = AlertDialog.Builder(requireContext())
+            .setTitle(R.string.language_change_title)
+            .setMessage(getString(R.string.language_change_message, languageName))
+            .setCancelable(false)
+            .setPositiveButton(R.string.confirm) { _, _ ->
+                // 保存语言设置
+                LanguageManager.setAppLanguage(requireContext(), newLanguage, true)
+
+                // 更新 Preference 的值
+                languagePreference.value = newLanguage
+
+                // 提示用户
+                UiUtils.showToast(requireContext(), getString(R.string.language_changed), isShort = true)
+
+                // 退出应用，用户重新打开时会应用新语言
+                activity?.let { LanguageManager.exitApplication(it) }
+            }
+            .setNegativeButton(R.string.user_cancel, null)
+            .create()
+
+        dialog.show()
+        dialog.window?.setBackgroundDrawableResource(R.drawable.dialog_background)
+    }
+
+    private fun refreshIconPreviews() {
+        ballIconGame.refreshPreview()
+        ballIconComic.refreshPreview()
+    }
+
+    private fun updatePressSummary() {
+        ballPress.summary = getString(R.string.floating_ball_press_summary, prefs.getLong("Custom_Long_Press_Delay", 300L).toString())
+    }
+
+    private fun updateFontSummary() {
+        val base = if (prefs.getString("Custom_Result_Font", "") == "") {
+            getString(R.string.font_summary, getString(R.string.font_default))
+        } else {
+            getString(R.string.font_summary, prefs.getString("Custom_Result_Font", ""))
+        }
+        resultFont.summary = base
+    }
+
+    private fun updateFontSizeSummary() {
+        resultFontSize.summary = getString(
+            R.string.font_size_summary,
+            prefs.getFloat("Custom_Result_Font_Size", 16f).toString(),
+            Dialogs.FONT_SIZE_MIN.toInt().toString(),
+            Dialogs.FONT_SIZE_MAX.toInt().toString()
+        )
+    }
+
+    // ===== 字间距 / 行间距（一个面板管两项） =====
+
+    /** 间距上限（百分比）：100% = 一个字号。 */
+    private val MAX_SPACING_PERCENT = 100
+
+    /** 间距值：整数百分比 0..100（100% = 一个字号）。 */
+    private fun spacingPercent(key: String) =
+        prefs.getInt(key, 0).coerceIn(0, MAX_SPACING_PERCENT)
+
+    private fun updateSpacingSummary(pref: Preference) {
+        pref.summary = getString(
+            R.string.manga_spacing_summary_both,
+            spacingPercent(TranslationCacheManager.KEY_MANGA_TRACKING),
+            spacingPercent(TranslationCacheManager.KEY_MANGA_LEADING)
+        )
+    }
+
+    /** 一行「标签 + 百分比 + 滑块」；拖动时标签上的数值实时刷新。 */
+    private fun spacingRow(
+        ctx: android.content.Context,
+        labelRes: Int,
+        key: String
+    ): Pair<LinearLayout, android.widget.SeekBar> {
+        val density = ctx.resources.displayMetrics.density
+        val wrap = LinearLayout(ctx).apply {
+            orientation = LinearLayout.VERTICAL
+            setPadding(0, (12 * density).toInt(), 0, 0)
+        }
+        fun text(p: Int) = ctx.getString(labelRes) + "  " +
+            ctx.getString(R.string.manga_spacing_summary_value, p)
+        val label = TextView(ctx).apply {
+            text = text(spacingPercent(key))
+            textSize = 15f
+        }
+        val seek = android.widget.SeekBar(ctx).apply {
+            max = MAX_SPACING_PERCENT
+            progress = spacingPercent(key)
+            setOnSeekBarChangeListener(object : android.widget.SeekBar.OnSeekBarChangeListener {
+                override fun onProgressChanged(sb: android.widget.SeekBar?, p: Int, fromUser: Boolean) {
+                    label.text = text(p)
+                }
+                override fun onStartTrackingTouch(sb: android.widget.SeekBar?) = Unit
+                override fun onStopTrackingTouch(sb: android.widget.SeekBar?) = Unit
+            })
+        }
+        wrap.addView(label)
+        wrap.addView(seek)
+        return wrap to seek
+    }
+
+    /**
+     * 间距面板：字间距与行间距两个滑块同处一个弹窗，点「保存」一起落盘。
+     *
+     * ⚠️ 不用 `SeekBarPreference` —— 它在偏好条目里内联，拖动时数值不刷新（实测一直显示 0%），
+     * 且它把 progress 存成 int、与百分比语义容易打架。放对话框里自己控制最稳。
+     */
+    private fun showSpacingDialog(pref: Preference) {
+        val ctx = requireContext()
+        val container = LinearLayout(ctx).apply {
+            orientation = LinearLayout.VERTICAL
+            val pad = (20 * ctx.resources.displayMetrics.density).toInt()
+            setPadding(pad, 0, pad, pad)
+        }
+        val (trackRow, trackSeek) = spacingRow(
+            ctx, R.string.manga_tracking_title, TranslationCacheManager.KEY_MANGA_TRACKING
+        )
+        val (leadRow, leadSeek) = spacingRow(
+            ctx, R.string.manga_leading_title, TranslationCacheManager.KEY_MANGA_LEADING
+        )
+        container.addView(trackRow)
+        container.addView(leadRow)
+
+        val dialog = AlertDialog.Builder(ctx)
+            .setTitle(R.string.manga_spacing_title)
+            .setView(container)
+            .setPositiveButton(R.string.save) { _, _ ->
+                prefs.setInt(TranslationCacheManager.KEY_MANGA_TRACKING, trackSeek.progress)
+                prefs.setInt(TranslationCacheManager.KEY_MANGA_LEADING, leadSeek.progress)
+                updateSpacingSummary(pref)
+            }
+            .setNegativeButton(R.string.user_cancel, null)
+            .create()
+        dialog.show()
+        dialog.window?.setBackgroundDrawableResource(R.drawable.dialog_background)
+    }
+
+    // ===== 悬浮球大小 / 透明度（一个面板管两项，游戏与漫画共用） =====
+
+    private fun updateBallStyleSummary(pref: Preference) {
+        val sp = prefs.getSharedPreferences()
+        pref.summary = getString(
+            R.string.floating_ball_style_summary,
+            FloatingBallStyle.sizePercent(sp),
+            FloatingBallStyle.alphaPercent(sp)
+        )
+    }
+
+    /** 一行「标签 + 百分比 + 滑块」，范围 [min, max]；拖动时数值实时刷新。 */
+    private fun percentSliderRow(
+        ctx: android.content.Context,
+        labelRes: Int,
+        key: String,
+        min: Int,
+        max: Int,
+        default: Int
+    ): Pair<LinearLayout, android.widget.SeekBar> {
+        val density = ctx.resources.displayMetrics.density
+        val current = prefs.getInt(key, default).coerceIn(min, max)
+        val wrap = LinearLayout(ctx).apply {
+            orientation = LinearLayout.VERTICAL
+            setPadding(0, (12 * density).toInt(), 0, 0)
+        }
+        fun text(v: Int) = ctx.getString(labelRes) + "  " +
+            ctx.getString(R.string.floating_ball_style_value, v)
+        val label = TextView(ctx).apply {
+            text = text(current)
+            textSize = 15f
+        }
+        val seek = android.widget.SeekBar(ctx).apply {
+            this.max = max - min          // SeekBar 从 0 起，取值 = progress + min
+            progress = current - min
+            setOnSeekBarChangeListener(object : android.widget.SeekBar.OnSeekBarChangeListener {
+                override fun onProgressChanged(sb: android.widget.SeekBar?, p: Int, fromUser: Boolean) {
+                    label.text = text(p + min)
+                }
+                override fun onStartTrackingTouch(sb: android.widget.SeekBar?) = Unit
+                override fun onStopTrackingTouch(sb: android.widget.SeekBar?) = Unit
+            })
+        }
+        wrap.addView(label)
+        wrap.addView(seek)
+        return wrap to seek
+    }
+
+    /**
+     * 悬浮球大小/透明度面板：两个滑块同处一个弹窗，点「保存」一起落盘。
+     *
+     * 落盘后不用通知任何 Service —— 两个 Service 都注册了 `OnSharedPreferenceChangeListener`，
+     * 收到这两个 key 就把新尺寸/透明度应用到在屏的球（见 [FloatingBallStyle.apply]）。
+     */
+    private fun showBallStyleDialog(pref: Preference) {
+        val ctx = requireContext()
+        val container = LinearLayout(ctx).apply {
+            orientation = LinearLayout.VERTICAL
+            val pad = (20 * ctx.resources.displayMetrics.density).toInt()
+            setPadding(pad, 0, pad, pad)
+        }
+        val (sizeRow, sizeSeek) = percentSliderRow(
+            ctx, R.string.floating_ball_size_label, FloatingBallStyle.KEY_SIZE,
+            FloatingBallStyle.MIN_SIZE_PERCENT, FloatingBallStyle.MAX_SIZE_PERCENT,
+            FloatingBallStyle.DEFAULT_SIZE_PERCENT
+        )
+        val (alphaRow, alphaSeek) = percentSliderRow(
+            ctx, R.string.floating_ball_alpha_label, FloatingBallStyle.KEY_ALPHA,
+            FloatingBallStyle.MIN_ALPHA_PERCENT, FloatingBallStyle.MAX_ALPHA_PERCENT,
+            FloatingBallStyle.DEFAULT_ALPHA_PERCENT
+        )
+        container.addView(sizeRow)
+        container.addView(alphaRow)
+
+        val dialog = AlertDialog.Builder(ctx)
+            .setTitle(R.string.floating_ball_style_title)
+            .setView(container)
+            .setPositiveButton(R.string.save) { _, _ ->
+                prefs.setInt(FloatingBallStyle.KEY_SIZE, sizeSeek.progress + FloatingBallStyle.MIN_SIZE_PERCENT)
+                prefs.setInt(FloatingBallStyle.KEY_ALPHA, alphaSeek.progress + FloatingBallStyle.MIN_ALPHA_PERCENT)
+                updateBallStyleSummary(pref)
+            }
+            .setNegativeButton(R.string.user_cancel, null)
+            .create()
+        dialog.show()
+        dialog.window?.setBackgroundDrawableResource(R.drawable.dialog_background)
+    }
+
+    // 手势 key 列表，用于互换逻辑
+    private val gestureKeys = listOf("Ball_Gesture_Single_Click", "Ball_Gesture_Double_Click", "Ball_Gesture_Long_Press")
+    private val gesturePrefs = mutableListOf<ListPreference>()
+
+    private fun setupGesturePreference(pref: ListPreference, key: String) {
+        gesturePrefs.add(pref)
+        pref.setOnPreferenceChangeListener { _, newValue ->
+            if (isAnyTranslationServiceRunning()) {
+                UiUtils.showToast(requireContext(), getString(R.string.stop_service_first), isShort = true)
+                false
+            } else {
+                val newAction = newValue.toString().toInt()
+                val otherPrefs = gestureKeys.filter { it != key }
+                // 检查是否有冲突，有则互换
+                for (otherKey in otherPrefs) {
+                    val otherValue = try { prefs.getString(otherKey, "0").toInt() } catch (_: Exception) { 0 }
+                    if (otherValue == newAction) {
+                        val oldValue = try { prefs.getString(key, "0").toInt() } catch (_: Exception) { 0 }
+                        prefs.setString(otherKey, oldValue.toString())
+                        val otherPref = gesturePrefs.firstOrNull { it.key == otherKey }
+                        if (otherPref != null) updateGestureSummary(otherPref, oldValue)
+                        break
+                    }
+                }
+                prefs.setString(key, newAction.toString())
+                updateGestureSummary(pref, newAction)
+                true
+            }
+        }
+        val currentValue = try { prefs.getString(key, "0").toInt() } catch (_: Exception) { 0 }
+        updateGestureSummary(pref, currentValue)
+    }
+
+    private fun updateGestureSummary(pref: ListPreference, value: Int) {
+        val actionName = when (Constants.BallAction.fromValue(value)) {
+            Constants.BallAction.TRANSLATE -> getString(R.string.ball_action_translate)
+            Constants.BallAction.MENU -> getString(R.string.ball_action_menu)
+            Constants.BallAction.AUTO_TRANSLATE -> getString(R.string.ball_action_auto_translate)
+            Constants.BallAction.CLOSE_FLOATING -> getString(R.string.ball_action_close)
+        }
+        pref.summary = getString(R.string.ball_gesture_summary, actionName)
+    }
+
+
+    private fun showBallOptionsDialog(prefKey: String){
+        val options = arrayOf(getString(R.string.ball_icon_default), getString(R.string.pic_choose))
+        val dialog = AlertDialog.Builder(requireContext())
+            .setTitle(R.string.ball_setting)
+            .setItems(options) { _, which ->
+                when (which) {
+                    0 -> handleDefaultIcon(prefKey)
+                    1 -> pickPicFile(prefKey)
+                }
+            }
+            .create()
+        dialog.show()
+        dialog.window?.setBackgroundDrawableResource(R.drawable.dialog_background)
+    }
+
+    private fun showPressDialog() {
+//        val input = EditText(requireContext()).apply {
+//            hint = getString(R.string.current_judgment_time, prefs.getLong("Custom_Long_Press_Delay", 300L).toString())
+//            inputType = android.text.InputType.TYPE_CLASS_NUMBER
+//
+//            // 设置padding
+//            val padding = TypedValue.applyDimension(
+//                TypedValue.COMPLEX_UNIT_DIP,
+//                16f,
+//                resources.displayMetrics
+//            ).toInt()
+//            setPadding(padding, padding, padding, padding)
+//        }
+
+        val customView = LayoutInflater.from(requireContext())
+            .inflate(R.layout.dialog_message_edittext, null)
+        customView.findViewById<TextView>(R.id.dialog_top_message).apply {
+            text = getString(R.string.int_only)
+        }
+        val input = customView.findViewById<EditText>(R.id.dialog_bottom_edittext).apply {
+            hint = getString(R.string.current_judgment_time, prefs.getLong("Custom_Long_Press_Delay", 300L).toString())
+        }
+
+        val dialog = AlertDialog.Builder(requireContext())
+            .setTitle(R.string.set_floating_ball_press)
+            .setView(customView)
+            .setPositiveButton(R.string.save) { _, _ ->
+                try {
+                    val value = input.text.toString().toLong()
+                    prefs.setLong("Custom_Long_Press_Delay", value)
+                    updatePressSummary()
+                } catch (e: Exception) {
+                    UiUtils.showToast(requireContext(), getString(R.string.font_size_invalid), isShort = true)
+                }
+            }
+            .setNegativeButton(R.string.user_cancel, null)
+            .create()
+        dialog.show()
+        dialog.window?.setBackgroundDrawableResource(R.drawable.dialog_background)
+    }
+
+    private fun showFontOptionsDialog() {
+        val options = arrayOf(getString(R.string.font_default), getString(R.string.font_choose))
+        val dialog = AlertDialog.Builder(requireContext())
+            .setTitle(R.string.font_setting)
+            .setItems(options) { _, which ->
+                when (which) {
+                    0 -> handleSystemFont()
+                    1 -> pickFontFile()
+                }
+            }
+            .create()
+        dialog.show()
+        dialog.window?.setBackgroundDrawableResource(R.drawable.dialog_background)
+    }
+
+    private fun showFontSizeDialog(){
+        val dialog = Dialogs.fontSizeDialog(requireContext(), null){ size ->
+            // 弹窗只负责收集数值，落盘在这里 —— 游戏结果字号由 CustomFontSize 统一管理
+            CustomFontSize.setSize(requireContext(), size)
+            updateFontSizeSummary()
+        }
+        dialog.show()
+        dialog.window?.setBackgroundDrawableResource(R.drawable.dialog_background)
+    }
+
+    /**
+     * 漫画翻译结果**字号**：自动 / 固定档位。
+     *
+     * 与悬浮窗的「字体大小」菜单弹窗、阅读器翻译面板的字号组件是**同一份设置**
+     * （都走 [MangaFontSize]），任何一处改完另两处立刻一致。
+     */
+    private fun showMangaFontSizeDialog() {
+        // 三处共用的弹窗实现；设置页与悬浮窗一样走**全局主题**（ThemeManager.isNight），
+        // 阅读器面板才用它自己的内置主题
+        MangaFontSizeDialog.create(requireContext(), dark = ThemeManager.isNight(requireContext())) {
+            updateMangaFontSizeSummary()
+        }.show()
+    }
+
+    private fun updateMangaFontSizeSummary() {
+        findPreference<Preference>("manga_font_size")?.summary = MangaFontSize.summary(requireContext())
+    }
+
+    /**
+     * 超分模型摘要 = 当前选中的模型名。
+     *
+     * 三种状态都**显式赋值**（未选 / 选了但没下载 / 正常），不能只写"正常"那一支 ——
+     * 否则用户删掉模型后这里还显示着名字，以为它还能用。
+     * ⚠️ 与 `ModelManagementFragment` 共用 [SrModelManager.nameResOf]，不要各写一份模型名映射。
+     */
+    private fun updateSrModelSummary(pref: Preference) {
+        val sp = prefs.getSharedPreferences()
+        val key = SrModelManager.getActiveKey(sp)
+        pref.summary = when {
+            key == null -> getString(R.string.sr_no_model_selected)
+            !SrModelManager.isDownloaded(requireContext(), key) ->
+                getString(R.string.sr_model_missing_format, getString(SrModelManager.nameResOf(key)))
+            else -> getString(SrModelManager.nameResOf(key))
+        }
+    }
+
+    /**
+     * 译文替换表摘要 = 当前规则条数。
+     *
+     * ⚠️ 必须在 `onResume` 里再刷一次：用户从二级面板返回时本页只是 resume（不重建），
+     * 只在 onCreatePreferences 里设一次的话条数会一直停在进面板之前的数字。
+     */
+    private fun updateReplacementSummary(pref: Preference) {
+        val count = TranslationTextRules.load(prefs.getSharedPreferences()).size
+        pref.summary = if (count == 0) {
+            getString(R.string.manga_replacement_summary_empty)
+        } else {
+            getString(R.string.manga_replacement_summary, count)
+        }
+    }
+
+    override fun onResume() {
+        super.onResume()
+        findPreference<Preference>("manga_translation_replacements")?.let { updateReplacementSummary(it) }
+        // 超分模型摘要也要在返回时重刷：用户可能在模型管理页删掉/换了模型
+        findPreference<Preference>("sr_model_manage")?.let { updateSrModelSummary(it) }
+    }
+
+    private fun handleDefaultIcon(prefKey: String) {
+        // 1. 拿到旧文件名（如果有）
+        val oldName = prefs.getString(prefKey, "")
+        // 2. 清除 SharedPreferences 中的值
+        prefs.setString(prefKey, "")
+        // 3. 只删除旧文件，不动整个目录（避免误删另一模式的图）
+        if (oldName.isNotEmpty()) {
+            val oldFile = File(requireContext().getExternalFilesDir(null), "icon/$oldName")
+            if (oldFile.exists()) oldFile.delete()
+        }
+        // 4. 通知活跃 Service 重读默认值
+        LocalBroadcastManager.getInstance(requireContext())
+            .sendBroadcast(Intent(BroadcastAction.ACTION_FLOATING_BALL_ICON_CHANGED).putExtra(BroadcastAction.EXTRA_ICON_KEY, prefKey))
+        // 5. 更新两个预览（防止另一模式也持有相同摘要）
+        refreshIconPreviews()
+    }
+
+    private fun handleSystemFont() {
+        // 清除自定义字体设置
+        prefs.setString("Custom_Result_Font", "")
+
+        // 删除存在的字体文件，节省空间
+        File(requireContext().getExternalFilesDir(null), "font").apply {
+            if (!exists()) {
+                mkdirs()
+            } else {
+                // 删除目录中的所有文件
+                listFiles()?.forEach { file ->
+                    file.delete()
+                }
+            }
+        }
+        // 更新summary
+        updateFontSummary()
+    }
+
+    private fun pickPicFile(prefKey: String) {
+        pendingIconKey = prefKey
+        pickFileLauncher.launch("image/*")
+    }
+
+    private fun pickFontFile() {
+        pickFileLauncher.launch("font/ttf")
+    }
+
+    private fun handleFileSelection(uri: Uri) {
+        try {
+            // Snapshot and clear pendingIconKey up front so it doesn't leak across paths.
+            val iconKey = pendingIconKey ?: ""
+            pendingIconKey = null
+
+            // 获取原始文件名
+            val originalFileName = requireContext().contentResolver.query(uri, null, null, null, null)?.use { cursor ->
+                val nameIndex = cursor.getColumnIndex(OpenableColumns.DISPLAY_NAME)
+                cursor.moveToFirst()
+                cursor.getString(nameIndex)
+            } ?: throw IllegalStateException("get file name error.")
+
+            // 获取文件扩展名并转换为小写
+            val fileExtension = originalFileName.substringAfterLast('.', "").lowercase()
+
+            when (fileExtension) {
+                "ttf" -> handleFontFile(uri, originalFileName)
+                else -> handleImageFile(uri, originalFileName, iconKey)
+            }
+        } catch (e: Exception) {
+            // 通用错误处理
+            UiUtils.showToast(requireContext(), e.message ?: getString(R.string.error_unknown), isShort = false)
+        }
+    }
+
+    private fun handleFontFile(uri: Uri, originalFileName: String) {
+        // 创建字体目录
+        val fontDir = File(requireContext().getExternalFilesDir(null), "font").apply {
+            if (!exists()) {
+                mkdirs()
+            } else {
+                // 删除目录中的所有文件
+                listFiles()?.forEach { it.delete() }
+            }
+        }
+
+        // 复制文件
+        val destinationFile = File(fontDir, originalFileName)
+        copyFile(uri, destinationFile)
+
+        // 更新配置
+        prefs.setString("Custom_Result_Font", originalFileName)
+        updateFontSummary()
+        UiUtils.showToast(requireContext(), getString(R.string.set_success), isShort = true)
+    }
+
+    private fun handleImageFile(uri: Uri, originalFileName: String, prefKey: String = "") {
+        val effectiveKey = if (prefKey.isNotEmpty()) prefKey else "Custom_Floating_Pic"
+
+        // 1. 删除被替换的旧文件
+        val oldName = prefs.getString(effectiveKey, "")
+        if (oldName.isNotEmpty() && oldName != originalFileName) {
+            val oldFile = File(requireContext().getExternalFilesDir(null), "icon/$oldName")
+            if (oldFile.exists()) oldFile.delete()
+        }
+
+        // 2. 写入新文件
+        val iconDir = File(requireContext().getExternalFilesDir(null), "icon").apply {
+            if (!exists()) mkdirs()
+        }
+        val destinationFile = File(iconDir, originalFileName)
+        copyFile(uri, destinationFile)
+
+        // 3. 保存到对应的 key
+        prefs.setString(effectiveKey, originalFileName)
+
+        // 4. 通知活跃 Service
+        LocalBroadcastManager.getInstance(requireContext())
+            .sendBroadcast(Intent(BroadcastAction.ACTION_FLOATING_BALL_ICON_CHANGED).putExtra(BroadcastAction.EXTRA_ICON_KEY, effectiveKey))
+
+        // 5. 刷新预览
+        refreshIconPreviews()
+        UiUtils.showToast(requireContext(), getString(R.string.set_success), isShort = true)
+    }
+
+    // 文件复制方法
+    private fun copyFile(uri: Uri, destinationFile: File) {
+        requireContext().contentResolver.openInputStream(uri)?.use { input ->
+            FileOutputStream(destinationFile).use { output ->
+                input.copyTo(output)
+            }
+        } ?: throw IOException("open file error")
+    }
+
+    private fun isAnyTranslationServiceRunning(): Boolean {
+        return AccessibilityServiceManager.getService() != null &&
+                (ServiceUtils.isServiceRunning(requireContext(), FloatingBallService::class.java) ||
+                 ServiceUtils.isServiceRunning(requireContext(), MangaFloatingService::class.java))
+    }
+
+}

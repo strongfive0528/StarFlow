@@ -1,0 +1,207 @@
+<?xml version="1.0" encoding="utf-8"?>
+<FrameLayout xmlns:android="http://schemas.android.com/apk/res/android"
+    xmlns:app="http://schemas.android.com/apk/res-auto"
+    android:layout_width="match_parent"
+    android:layout_height="match_parent"
+    android:clipChildren="false"
+    android:background="#FF000000">
+
+    <!-- 图片翻页 -->
+    <androidx.viewpager2.widget.ViewPager2
+        android:id="@+id/viewPager"
+        android:layout_width="match_parent"
+        android:layout_height="match_parent"
+        android:clipChildren="false" />
+
+    <!-- 顶部页码 -->
+    <TextView
+        android:id="@+id/tvPageIndicator"
+        android:layout_width="wrap_content"
+        android:layout_height="wrap_content"
+        android:layout_gravity="top|center_horizontal"
+        android:layout_marginTop="48dp"
+        android:textColor="@color/white"
+        android:textSize="16sp"
+        android:background="#80000000"
+        android:paddingHorizontal="16dp"
+        android:paddingVertical="6dp" />
+
+    <!-- 关闭按钮 -->
+    <ImageButton
+        android:id="@+id/btnClose"
+        android:layout_width="48dp"
+        android:layout_height="48dp"
+        android:layout_gravity="top|start"
+        android:layout_margin="16dp"
+        android:background="@drawable/bg_manga_toolbar_btn"
+        android:src="@android:drawable/ic_menu_close_clear_cancel"
+        app:tint="@color/white" />
+
+    <!-- 右上角按钮组：旋转 + 原文/译文切换 + 删除（共享背景） -->
+    <LinearLayout
+        android:layout_width="wrap_content"
+        android:layout_height="wrap_content"
+        android:layout_gravity="top|end"
+        android:layout_margin="16dp"
+        android:orientation="horizontal"
+        android:background="@drawable/bg_manga_toolbar_btn"
+        android:paddingHorizontal="4dp">
+
+        <ImageButton
+            android:id="@+id/btnRotate"
+            android:layout_width="48dp"
+            android:layout_height="48dp"
+            android:background="@android:color/transparent"
+            android:src="@android:drawable/ic_menu_rotate"
+            app:tint="@color/white"
+            android:contentDescription="旋转视图" />
+
+        <ImageButton
+            android:id="@+id/btnToggleImage"
+            android:layout_width="48dp"
+            android:layout_height="48dp"
+            android:background="@android:color/transparent"
+            android:src="@android:drawable/ic_menu_camera"
+            app:tint="@color/white"
+            android:contentDescription="切换原图/译文" />
+
+        <ImageButton
+            android:id="@+id/btnDeleteEntry"
+            android:layout_width="48dp"
+            android:layout_height="48dp"
+            android:background="@android:color/transparent"
+            android:src="@android:drawable/ic_menu_delete"
+            app:tint="#FFFF6B6B"
+            android:contentDescription="@string/delete" />
+    </LinearLayout>
+
+    <!-- 底部控制栏 -->
+    <LinearLayout
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        android:layout_gravity="bottom"
+        android:layout_marginBottom="88dp"
+        android:gravity="center_vertical"
+        android:paddingHorizontal="12dp"
+        android:orientation="horizontal"
+        android:clipChildren="false">
+
+        <!-- 变体尺寸下拉 -->
+        <Spinner
+            android:id="@+id/spinnerVariant"
+            android:layout_width="wrap_content"
+            android:layout_height="36dp"
+            android:layout_marginEnd="8dp"
+            android:background="@drawable/bg_manga_toolbar_btn"
+            android:paddingHorizontal="8dp"
+            android:visibility="gone"
+            android:popupBackground="@drawable/popup_rounded_dark" />
+
+        <!-- 占位弹簧 -->
+        <View
+            android:layout_width="0dp"
+            android:layout_height="1dp"
+            android:layout_weight="1" />
+
+        <!-- 详情按钮 -->
+        <com.google.android.material.button.MaterialButton
+            android:id="@+id/btnShowTranslation"
+            android:layout_width="wrap_content"
+            android:layout_height="40dp"
+            android:text="@string/history_detail"
+            android:textColor="@color/white"
+            android:textSize="13sp"
+            app:backgroundTint="#CC555555"
+            app:cornerRadius="20dp" />
+
+        <!-- 重新翻译按钮：MaterialButton 带文本，避免和「旋转」按钮图标重复 -->
+        <com.google.android.material.button.MaterialButton
+            android:id="@+id/btnRetranslate"
+            android:layout_width="wrap_content"
+            android:layout_height="40dp"
+            android:layout_marginStart="8dp"
+            android:paddingHorizontal="12dp"
+            android:text="@string/history_retranslate"
+            android:textColor="@color/white"
+            android:textSize="13sp"
+            app:backgroundTint="#CC55AEEA"
+            app:cornerRadius="20dp" />
+    </LinearLayout>
+
+    <!-- 底部译文面板 -->
+    <LinearLayout
+        android:id="@+id/bottomSheetPanel"
+        android:layout_width="match_parent"
+        android:layout_height="400dp"
+        android:layout_gravity="bottom"
+        android:orientation="vertical"
+        android:background="#F0222222"
+        android:elevation="8dp">
+
+        <View
+            android:id="@+id/dragHandle"
+            android:layout_width="40dp"
+            android:layout_height="4dp"
+            android:layout_gravity="center_horizontal"
+            android:layout_marginTop="8dp"
+            android:layout_marginBottom="8dp"
+            android:background="#66FFFFFF" />
+
+        <LinearLayout
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:orientation="horizontal"
+            android:gravity="center_vertical"
+            android:paddingHorizontal="16dp"
+            android:paddingBottom="8dp">
+
+            <TextView android:ellipsize="end" android:maxLines="1" android:autoSizeTextType="uniform" android:autoSizeMinTextSize="10sp" android:autoSizeMaxTextSize="16sp" android:autoSizeStepGranularity="1sp" 
+                android:layout_width="0dp"
+                android:layout_height="wrap_content"
+                android:layout_weight="1"
+                android:text="@string/translation_detail"
+                android:textColor="@color/white"
+                android:textSize="16sp"
+                android:textStyle="bold" />
+
+            <ImageButton
+                android:id="@+id/btnCloseSheet"
+                android:layout_width="36dp"
+                android:layout_height="36dp"
+                android:background="?attr/selectableItemBackgroundBorderless"
+                android:src="@android:drawable/ic_menu_close_clear_cancel"
+                app:tint="@color/white" />
+        </LinearLayout>
+
+        <TextView
+            android:id="@+id/tvTranslationInfo"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:paddingHorizontal="16dp"
+            android:paddingBottom="6dp"
+            android:textColor="#88FFFFFF"
+            android:textSize="10sp"
+            android:lineSpacingExtra="2dp" />
+
+        <ScrollView
+            android:id="@+id/scrollTranslationDetail"
+            android:layout_width="match_parent"
+            android:layout_height="0dp"
+            android:layout_weight="1"
+            android:paddingHorizontal="16dp">
+
+            <TextView
+                android:id="@+id/tvTranslationDetail"
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:textSize="12sp"
+                android:lineSpacingExtra="4dp"
+                android:textColor="#CCFFFFFF"
+                android:textIsSelectable="true"
+                android:paddingBottom="48dp" />
+
+        </ScrollView>
+
+    </LinearLayout>
+
+</FrameLayout>
