@@ -430,14 +430,17 @@ class NovelReaderActivity : AppCompatActivity() {
     private fun pushNoticeTopBelowPill() {
         val pill = binding.topPill
         val density = resources.displayMetrics.density
-        val screenBottom = if (pill.height > 0) {
-            val loc = IntArray(2)
-            pill.getLocationOnScreen(loc)
-            loc[1] + pill.height
-        } else {
-            (TranslationStatusOverlay.READER_TOP_OFFSET_DP * density).toInt()
+        val overlay = TranslationStatusOverlay.getInstance(this)
+        // 胶囊还没布局 → 先用**全局固定值**；布局完成后「高度变化」回调会推一次实测值，此后一直用它。
+        // ⚠️ 不做"每条提示都重新量"（用户口径 2026-10-03：顶距固定下来，别把通知系统搞复杂）。
+        if (pill.height <= 0) {
+            overlay.setTopScreenY((TranslationStatusOverlay.READER_TOP_OFFSET_DP * density).toInt())
+            return
         }
-        TranslationStatusOverlay.getInstance(this).setTopScreenY(screenBottom + (2 * density).toInt())
+        val loc = IntArray(2)
+        pill.getLocationOnScreen(loc)
+        // ⚠️ 单位是**屏幕坐标**（与浮层的 [TranslationStatusOverlay.setTopScreenY] 同口径）
+        overlay.setTopScreenY(loc[1] + pill.height + (2 * density).toInt())
     }
 
     override fun onStop() {
@@ -470,8 +473,8 @@ class NovelReaderActivity : AppCompatActivity() {
         // ⚠️ **章批量任务（应用级宿主）不受影响**：用户要求它「除非清后台否则继续翻」，
         // 进度走前台服务通知栏，回到阅读器时译文已经写库、`refreshTranslations` 直接读到。
         TranslationStatusOverlay.getInstance(this@NovelReaderActivity).dismiss()
-        // 恢复提示条的默认顶距（进程级单例，不清的话别的页面也跟着偏移）
-        TranslationStatusOverlay.getInstance(this@NovelReaderActivity).setTopScreenY(null)
+        // ⚠️ **不复位顶距**（用户口径 2026-10-03）：提示系统全应用固定在同一个位置，
+        //    复位就等于回到"两条链路两个位置"。
         // ⚠️ 提示放在 `dismiss()` **之后**：浮层是共享单例，dismiss 会清掉所有堆叠消息
         if (notifyPause) showPausedNotice(R.string.novel_translate_paused_background)
         // 离开阅读器清掉选择集：它是「长按多选」的临时状态，回到阅读器时不该还亮着
@@ -519,6 +522,9 @@ class NovelReaderActivity : AppCompatActivity() {
         // 视口尺寸变了 → 页表必须按新尺寸重排，否则字会溢出或被裁。
         // 走防抖：旋转/分屏会连着一串布局回调，直接重排会重排很多遍
         applyBackground()
+        // ⚠️ 旋转/分屏会改浮层窗口的系统栏内缩量，而胶囊高度可能没变 → 必须主动重推，
+        //    否则浮层没有重新校准的机会，提示条会带旧内缩量偏上去压住胶囊（与漫画侧同一条）
+        pushNoticeTopBelowPill()
         scheduleRepaginate()
     }
 

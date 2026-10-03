@@ -6,33 +6,35 @@ import org.junit.Test
 import java.io.File
 
 /**
- * 顶部「章节页码胶囊」与提示浮层的**上下关系**（用户口径 2026-10）：
+ * 顶部「章节页码胶囊」与提示浮层的**上下关系**。
  *
- * > 「章节胶囊**不要紧贴屏幕顶部**，**保证提示在章节胶囊下面**就行了；
- * >  这个位置不要动，感觉有点太靠下了……不要间隔那么大的空间」
- *
- * 所以是**胶囊留在原位、提示条紧贴它下沿**：
  * ```
  *   34dp  [←]          [⋮]      ← 返回 / 菜单在两侧，与居中的胶囊不抢横向空间
  *   38dp  ┌ 第3章 · 5/22 ┐      ← 胶囊（约 26dp 高 → 下沿 ~64dp）
- *  ~66dp  ▓ 正在超分第 5 页… ▓   ← 提示条**紧贴**胶囊下沿（实测 pill.bottom + 2dp）
+ *  ~66dp  ▓ 正在超分第 5 页… ▓   ← 提示条**固定**在这条线上
  *         ▓ 翻译中 · P5 ▓
  * ```
  *
- * ⚠️ 为什么必须钉死：提示浮层是 `TYPE_APPLICATION_OVERLAY` **系统窗口**，
+ * ## 用户口径（2026-10-03 定稿，「先回答问题」那一轮之后）
+ *
+ * > 「整个提示系统顶部就固定在当前计算过尺寸的位置，**不管是阅读器还是截屏位置固定在这个位置**
+ * >  （没必要非要在屏幕最顶部）」
+ *
+ * 于是：
+ * 1. **全应用一个位置**：游戏 / 截屏 / 阅读器 / 小说共用同一个顶距常量
+ *    （`TranslationStatusOverlay.READER_TOP_OFFSET_DP`，以前截图那条链路另写了一个 24dp）；
+ * 2. **只算一次**：阅读器 `onStart` + 胶囊高度变化时推一次实测值，此后一直用它 ——
+ *    **不再每条提示都重新量**（那是把通知系统复杂化）；
+ * 3. **退出不复位**：阅读器 `onStop` 不再 `setTopScreenY(null)`（复位 = 又分成两个位置）；
+ * 4. 点屏幕中央收起上下 UI 时提示**不跟着挪**（顶距固定）。
+ *
+ * ⚠️ 为什么必须钉死「必须落在胶囊下面」：提示浮层是 `TYPE_APPLICATION_OVERLAY` **系统窗口**，
  * 会**吞掉落在它矩形内的触摸** —— 提示条压住胶囊那一段，胶囊就点不动，
  * 而「点胶囊开章节目录」正是用户报「不知道怎么没有了」的那条路。
  *
- * ⚠️ 浮层是进程级单例、`Status_Position` 是**用户设置**，所以阅读器不能改设置，
- * 只能在 `onStart`/`onStop` 用 `setTopScreenY` 临时覆盖**屏幕坐标**顶距。
- * 这里是**静态**检查（布局里的 marginTop 与兜底估算常量），真正的"紧贴"由宿主的
- * 实测推送保证 —— 固定 dp 在大字号下会压住胶囊、在小字号下会留大缝，用户两次都在纠这一点。
- *
- * ⚠️ **必须是屏幕坐标（`getLocationOnScreen`），不能是视图的 `pill.bottom`**（2026-10 事故）：
- * `View.bottom` 相对父布局，而 `TYPE_APPLICATION_OVERLAY` 窗口被 WMS 按系统栏内缩
- * （真机 `Frames: parent=[0,138][1220,2660]`，即窗口 `y=0` 对应屏幕 138px）。
- * 阅读器窗口是整屏的（`frame=[0,0][1220,2712]`），于是两边差了一个系统栏高 ≈ 42dp ——
- * 表现就是「提示条永远比胶囊低一大截，怎么改 dp 都像原地没动」。
+ * ⚠️ 单位必须是**屏幕坐标**（`getLocationOnScreen`）：浮层窗口可能被 WMS 按系统栏内缩
+ * （真机 `Frames: parent=[0,138][1220,2660]`，窗口 `y=0` 对应屏幕 138px），
+ * 而阅读器窗口是整屏的（`frame=[0,0][1220,2712]`）。混用会让提示条整体偏一条系统栏（≈42dp）。
  */
 class ReaderTopPillInsetTest {
 
@@ -73,7 +75,7 @@ class ReaderTopPillInsetTest {
         return m!!.groupValues[1].toInt()
     }
 
-    /** 浮层里那个「阅读器专用顶距」常量。 */
+    /** 浮层里那个「全应用统一的提示顶距」常量。 */
     private fun readerNoticeTopDp(): Int {
         val m = Regex("const val READER_TOP_OFFSET_DP = (\\d+)").find(read(OVERLAY))
         assertTrue("TranslationStatusOverlay 里找不到 READER_TOP_OFFSET_DP", m != null)
@@ -84,7 +86,7 @@ class ReaderTopPillInsetTest {
      * 静态守卫：**兜底估算值不能压住胶囊**。
      *
      * ⚠️ 只检查"估算 ≥ 胶囊下沿"。**别在这里要求"留多少余量"** —— 真正的位置是
-     * `pill.bottom + 2dp` 实测推的（见 [bothReadersPushTheNoticeStripBelowThePillAndRestoreIt]），
+     * `pill.bottom + 2dp` 实测推的（见 [bothReadersPushTheNoticeStripBelowThePill]），
      * 估算值只在胶囊还没布局的那几毫秒用得上。
      */
     private fun assertPillIsAboveTheNotices(where: String, topDp: Int) {
@@ -128,14 +130,13 @@ class ReaderTopPillInsetTest {
     }
 
     /**
-     * **两个阅读器都必须真的覆盖提示条顶距**，并且离开时恢复。
+     * **两个阅读器都要真的算一次提示条顶距**（按实测的胶囊下沿，屏幕坐标）。
      *
-     * ⚠️ 光改布局没用：浮层是**进程级单例**、顶距默认 24dp（截图翻译链路的口径），
-     * 阅读器不主动让位就还是压在胶囊上。也不能改用户的 `Status_Position` 设置 ——
-     * 那是全局的，改完游戏/截屏两条链路跟着变。
+     * ⚠️ 光改布局没用：浮层是**进程级单例**、默认值就是那个固定常量，阅读器不算这一次
+     * 就会在章名换行（胶囊撑成两行）时压住胶囊。
      */
     @Test
-    fun bothReadersPushTheNoticeStripBelowThePillAndRestoreIt() {
+    fun bothReadersPushTheNoticeStripBelowThePill() {
         for ((name, rel) in listOf(
             "漫画阅读器" to MANGA_ACT,
             "小说阅读器" to NOVEL_ACT,
@@ -144,22 +145,17 @@ class ReaderTopPillInsetTest {
             assertTrue("$name 的 onStart 要推提示条位置", src.contains("pushNoticeTopBelowPill()"))
             assertTrue(
                 "$name 必须按**实测的胶囊下沿**推（不猜固定 dp：猜的在大字号下压住胶囊、" +
-                    "在小字号下留缝 —— 用户两次都在纠这一点）",
+                    "在小字号下留缝）",
                 src.contains("pill.height"),
             )
-            // ⚠️ 取屏幕坐标，不是视图的 pill.bottom —— 浮层窗口被系统栏内缩，两者差一个系统栏高
             assertTrue(
                 "$name 必须用 getLocationOnScreen() 取**屏幕坐标**：视图的 pill.bottom 相对父布局，" +
-                    "而浮层窗口坐标被系统栏内缩过，混用会让提示条整体低一条系统栏（约 42dp）",
+                    "而浮层窗口坐标可能被系统栏内缩过，混用会让提示条整体偏一条系统栏（约 42dp）",
                 src.contains("getLocationOnScreen"),
             )
             assertTrue(
                 "$name 的胶囊下沿必须是「屏幕 y + 高度」，不是视图的 `pill.bottom`",
                 src.contains("loc[1] + pill.height"),
-            )
-            assertTrue(
-                "$name 的 onStop 必须恢复默认顶距（单例不清会连带别的页面一起偏）",
-                src.contains("setTopScreenY(null)"),
             )
             assertTrue(
                 "$name 要监听胶囊高度变化（章名换行会把胶囊撑高）",
@@ -171,13 +167,102 @@ class ReaderTopPillInsetTest {
         assertTrue("浮层要提供屏幕坐标的覆盖入口", overlay.contains("fun setTopScreenY(screenY: Int?)"))
         assertTrue("要有布局前的兜底估算", overlay.contains("const val READER_TOP_OFFSET_DP ="))
         assertTrue(
-            "浮层必须把屏幕坐标换算成窗口坐标（减去系统栏内缩），不能直接当 LayoutParams.y 用",
+            "浮层必须把屏幕坐标换算成窗口坐标（减去内缩量），不能直接当 LayoutParams.y 用",
             overlay.contains("want - windowTopOffsetPx"),
         )
         assertTrue(
-            "内缩量只能**量**出来（WindowInsets 在沉浸全屏下报 0，而 parent frame 仍是 138）",
+            "内缩量只能**量**出来（WindowInsets 在沉浸全屏下报 0，而 parent frame 仍是 138）；" +
+                "浮层窗口虽然加了 FLAG_LAYOUT_IN_SCREEN，这一层仍要留作兜底",
             overlay.contains("private fun calibrateTopOffset(") && overlay.contains("lastRawTopPx"),
         )
+    }
+
+    /**
+     * **顶距只算一次，之后全应用固定用它**（用户口径 2026-10-03：
+     * 「整个提示系统顶部就固定在当前计算过尺寸的位置，不管是阅读器还是截屏位置固定在这个位置」）。
+     *
+     * 钉三件事：
+     * 1. **不许每条提示都重新量**（那是把通知系统复杂化）—— `notifyUser` 只管发提示；
+     * 2. 阅读器**退出时不许复位**（复位 = 又回到"阅读器一个位置、截屏一个位置"）；
+     * 3. 兜底默认值只有**一个常量**（`READER_TOP_OFFSET_DP`），游戏/截屏那条链路也用同一值
+     *    —— 以前那边另写了一个 24dp（贴在屏幕最顶部）。
+     */
+    @Test
+    fun theNoticeTopIsComputedOnceAndSharedByEveryScreen() {
+        val overlay = read(OVERLAY)
+        assertTrue(
+            "顶距默认值必须只有一处（游戏/截屏/阅读器同一个值）；" +
+                "以前截图链路另有一个 24dp 常量，两条链路就会落在两个位置",
+            !overlay.contains("private const val TOP_OFFSET_DP = 24") &&
+                overlay.contains("desiredTopScreenY ?: (READER_TOP_OFFSET_DP"),
+        )
+        for ((name, rel) in listOf(
+            "漫画阅读器" to MANGA_ACT,
+            "小说阅读器" to NOVEL_ACT,
+        )) {
+            val src = read(rel)
+            assertTrue(
+                "$name 退出时**不许**复位顶距（复位会让阅读器与截屏又分成两个位置）",
+                !src.contains("setTopScreenY(null)"),
+            )
+            val notifyAt = src.indexOf("notifyUser(")
+            if (notifyAt > 0) {
+                assertTrue(
+                    "$name 的提示出口不该每条提示都重新量顶距（用户口径：固定下来，别复杂化）",
+                    !src.substring(notifyAt, (notifyAt + 1200).coerceAtMost(src.length))
+                        .contains("pushNoticeTopBelowPill()"),
+                )
+            }
+        }
+    }
+
+    /**
+     * 两个阅读器都只在**胶囊没量到尺寸**时用固定兜底值；不做"重试量尺寸"，也不因胶囊被隐藏而挪位置。
+     *
+     * ⚠️ 之前那版为了"每条提示都贴紧胶囊"加了可见性判断 + 有限次重试，被用户当场否掉
+     * （「为什么要量尺寸？这完全就是复杂化整个通知系统」）—— 别再往回加。
+     */
+    @Test
+    fun bothReadersUseOnlyTheFixedTopWithoutPerNoticeWork() {
+        for ((name, rel) in listOf(
+            "漫画阅读器" to MANGA_ACT,
+            "小说阅读器" to NOVEL_ACT,
+        )) {
+            val src = read(rel)
+            assertTrue(
+                "$name 未布局时要用**全局固定值**顶上",
+                src.contains("READER_TOP_OFFSET_DP"),
+            )
+            assertTrue(
+                "$name 不该再有「重试量尺寸」那套（已按用户口径删掉）",
+                !src.contains("MAX_PILL_MEASURE_RETRY"),
+            )
+            assertTrue(
+                "$name 不该因胶囊被隐藏（点中央收起 UI）而挪动提示位置 —— 顶距是固定的",
+                !src.contains("pill.visibility != "),
+            )
+        }
+    }
+
+    /**
+     * 转屏/分屏要把顶距**重推一次**：胶囊几何没变，但浮层窗口的系统栏内缩量会变，
+     * 而浮层只有在 `setTopScreenY` 被调用时才有机会重新校准（`calibrateTopOffset`）。
+     */
+    @Test
+    fun bothReadersRefreshTheNoticeTopOnRotation() {
+        for ((name, rel) in listOf(
+            "漫画阅读器" to MANGA_ACT,
+            "小说阅读器" to NOVEL_ACT,
+        )) {
+            val src = read(rel)
+            val at = src.indexOf("override fun onConfigurationChanged(")
+            assertTrue("$name 找不到 onConfigurationChanged", at > 0)
+            assertTrue(
+                "$name 转屏后要重推顶距（内缩量会变、胶囊高度可能一点不变，不推就没机会校准）",
+                src.substring(at, (at + 900).coerceAtMost(src.length))
+                    .contains("pushNoticeTopBelowPill()"),
+            )
+        }
     }
 
     /**

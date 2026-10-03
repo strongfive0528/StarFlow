@@ -38,18 +38,18 @@ class TranslationStatusOverlay private constructor(private val context: Context)
         private const val TAG = "StatusOverlay"
         private const val MAX_SLOTS = 3
 
-        /** 顶部贴边距离（dp）——**截图翻译链路**的口径；阅读器会用 [setTopScreenY] 覆盖它。 */
-        private const val TOP_OFFSET_DP = 24
-
         /**
-         * 阅读器里提示条顶距的**兜底估算值**（dp，胶囊 `marginTop 38dp` + 高约 26dp + 2dp 缝）。
+         * 提示条顶距（dp，**屏幕坐标**）——**全应用统一的固定值**（用户口径 2026-10-03）。
          *
-         * ⚠️ 只在**胶囊还没布局**（`height == 0`，例如刚进阅读器就弹提示）时用；
-         * 布局完成后宿主会推**实测的**胶囊下沿（`setTopScreenY`）。
-         * 之所以要实测：用户口径是「放在胶囊下面就行，不重叠就行，**不要间隔那么大的空间**」——
-         * 固定 dp 在放大字号下会压住胶囊、在标准字号下会留缝，实测两边都不占。
-         * ⚠️ 这个兜底值算的是**屏幕坐标**（和 [setTopScreenY] 同口径），窗口内缩由
-         * [windowTopOffsetPx] 抵消，见那里的注释。
+         * > 「整个提示系统顶部就固定在当前计算过尺寸的位置，不管是阅读器还是截屏位置固定在这个位置
+         * >  （没必要非要在屏幕最顶部）」
+         *
+         * 所以不再分"阅读器一套 / 截图翻译一套"：游戏、截屏、阅读器、小说**都落在这一条线上**。
+         * 取值 = 胶囊 `marginTop 38dp` + 一行胶囊（13sp + 上下 5dp padding ≈ 26dp）+ 2dp 缝。
+         *
+         * ⚠️ 阅读器进 `onStart` 时会用**实测的**胶囊下沿覆盖它一次（章名换行会把胶囊撑高，
+         * 一行/两行差 15dp 左右），此后**这个值一直生效**——退出阅读器**不复位**
+         * （复位就等于回到"两条链路两个位置"，正是用户要消掉的东西）。
          */
         const val READER_TOP_OFFSET_DP = 66
 
@@ -88,15 +88,15 @@ class TranslationStatusOverlay private constructor(private val context: Context)
     private var isShowing = false
 
     /**
-     * 宿主想要的「提示条顶边**屏幕坐标**」（像素）；null = 不覆盖，走默认 24dp / 用户设置。
+     * 提示条顶边**屏幕坐标**（像素）；null = 还没人推过，走全局固定值 [READER_TOP_OFFSET_DP]。
      *
-     * ⚠️ 收的是**屏幕坐标**而不是 `LayoutParams.y` —— 两者**不是同一个坐标系**：
-     * `TYPE_APPLICATION_OVERLAY` 窗口会被 WMS 按系统栏/刘海内缩（真机实测
-     * `Frames: parent=[0,138][1220,2660]`，即 `y=0` 对应屏幕 138px），
-     * 而阅读器窗口是 `layoutInDisplayCutoutMode=always` 的**整屏**窗口（`frame=[0,0][1220,2712]`），
-     * 视图坐标 == 屏幕坐标。宿主按 `pill.bottom`（视图坐标）推、浮层按窗口坐标用，
-     * 中间差的这 138px（约 42dp）就是"提示条永远比胶囊低一大截"的根因。
-     * 所以这里统一成**屏幕坐标**，由 [windowTopOffsetPx] 换算成窗口坐标。
+     * ⚠️ 收的是**屏幕坐标**而不是 `LayoutParams.y`：窗口虽然已经加了 `FLAG_LAYOUT_IN_SCREEN`
+     * （正常情况两者相等），但某些 ROM 仍会按系统栏内缩（真机实测过
+     * `Frames: parent=[0,138][1220,2660]`）——所以统一用屏幕坐标表达，由 [windowTopOffsetPx] 换算。
+     *
+     * ⚠️ **推一次就一直用它**（用户口径 2026-10-03：「顶部就固定在当前计算过尺寸的位置，
+     * 不管是阅读器还是截屏位置固定在这个位置」）：**不再每条提示都重新量**，阅读器退出时
+     * 也**不复位**（复位等于回到"两条链路两个位置"）。
      */
     @Volatile
     private var desiredTopScreenY: Int? = null
@@ -322,13 +322,12 @@ class TranslationStatusOverlay private constructor(private val context: Context)
     }
 
     /**
-     * 临时把提示条的**顶边对齐到屏幕坐标** [screenY]（像素）；传 null 恢复用户设置/默认值。
+     * 把提示条的**顶边钉到屏幕坐标** [screenY]（像素）。**全应用同一套位置**：
+     * 游戏/截屏/阅读器/小说都用它，宿主推一次之后就一直生效（传 null 会退回固定值，
+     * 正常路径**不该**再传 null —— 阅读器退出时复位会让两条链路又分成两个位置）。
      *
-     * 阅读器在 `onStart`、胶囊每次改变高度时推实测的胶囊下沿，`onStop` 传 null
-     * （见 `MangaReaderActivity.pushNoticeTopBelowPill`）。已显示的芯片会立刻重排。
-     *
-     * ⚠️ 参数是**屏幕坐标**，不是 `LayoutParams.y` —— 窗口被系统栏内缩，两者差一个
-     * [windowTopOffsetPx]（真机上 138px）。换算与自校准见 [getViewParams] / [calibrateTopOffset]。
+     * ⚠️ 参数是**屏幕坐标**，不是 `LayoutParams.y`（窗口若被系统栏内缩，两者差一个
+     * [windowTopOffsetPx]）——换算与自校准见 [getViewParams] / [calibrateTopOffset]。
      */
     fun setTopScreenY(screenY: Int?) {
         runOnMainThread {
@@ -560,24 +559,25 @@ class TranslationStatusOverlay private constructor(private val context: Context)
             type = WindowManager.LayoutParams.TYPE_APPLICATION_OVERLAY
             format = PixelFormat.RGBA_8888
             flags = WindowManager.LayoutParams.FLAG_NOT_FOCUSABLE or
-                    WindowManager.LayoutParams.FLAG_NOT_TOUCH_MODAL
+                    WindowManager.LayoutParams.FLAG_NOT_TOUCH_MODAL or
+                    // ⚠️ 让浮层窗口**覆盖整屏**：这样 `LayoutParams.y` 与屏幕坐标 1:1，
+                    //    不再依赖"量出系统栏内缩量"那一步（真机内缩 138px，猜错就是提示条整体偏 42dp ——
+                    //    用户 2026-10-03 报的「提示又和章节胶囊重叠」就是这一类偏）。下面的
+                    //    `calibrateTopOffset` 保留为兜底：某些 ROM 忽略该 flag 时它仍能把内缩量量出来。
+                    WindowManager.LayoutParams.FLAG_LAYOUT_IN_SCREEN or
+                    WindowManager.LayoutParams.FLAG_LAYOUT_NO_LIMITS
             width = WindowManager.LayoutParams.WRAP_CONTENT
             height = WindowManager.LayoutParams.WRAP_CONTENT
             gravity = position or Gravity.CENTER_HORIZONTAL
             y = when (position) {
                 Gravity.TOP -> {
-                    // ⚠️ 屏幕坐标 → 窗口坐标要减去窗口内缩量，否则提示条会整体低一个系统栏
-                    //    （真机实测差 138px ≈ 42dp，用户口径「提示还是太靠下，一直在原地没动」）。
-                    //    非覆盖路径（截图翻译链路）保持原样：那边的 24dp 一直是窗口坐标口径，不动它。
-                    val want = desiredTopScreenY
-                    if (want != null) {
-                        val raw = (want - windowTopOffsetPx).coerceAtLeast(0)
-                        lastRawTopPx = raw
-                        raw
-                    } else {
-                        lastRawTopPx = null
-                        (TOP_OFFSET_DP * context.resources.displayMetrics.density).toInt()
-                    }
+                    // ⚠️ 屏幕坐标 → 窗口坐标要减去窗口内缩量（真机 138px ≈ 42dp，见 [windowTopOffsetPx]）。
+                    //    窗口已经加了 `FLAG_LAYOUT_IN_SCREEN`（覆盖整屏）→ 正常情况内缩量量出来是 0，
+                    //    这一步是给"某些 ROM 忽略该 flag"兜底的，不是主路径。
+                    val want = desiredTopScreenY ?: (READER_TOP_OFFSET_DP * context.resources.displayMetrics.density).toInt()
+                    val raw = (want - windowTopOffsetPx).coerceAtLeast(0)
+                    lastRawTopPx = raw
+                    raw
                 }
                 Gravity.BOTTOM -> (80 * context.resources.displayMetrics.density).toInt()
                 else -> 0
