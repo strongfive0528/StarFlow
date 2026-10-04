@@ -322,10 +322,25 @@ IDLE（等变化）──sim<0.95──→ MOTION（等稳定）──连续2次
 View 层并与 `imageMatrix` 逐帧同步，改动横跨 `ReaderAdapters`/`ZoomableImageView`/新 View/控制器**四处**，
 收益与上面这个单参数改动**完全相同**。
 
-**实施结果（2026-10）**：`OverlayRenderer.renderOverlay` 新增末位参数 `renderScale: Float = 1f`
-（**带默认值 → 13 个调用点零改动编译通过**），只让阅读器的渲染出口 `ReaderTranslationController.renderBubbles`
-传 `READER_RENDER_SCALE = 2f`。夹取范围 `[1f, MAX_RENDER_SCALE=2f]`。
-守卫：`OverlayRendererTest` 4 例（尺寸/夹取/2 倍不崩）。
+**实施结果（2026-10，两次修订后定稿）**：`OverlayRenderer.renderOverlay` 末尾参数 `renderScale: Float = 1f`
+（**带默认值 → 调用点零改动编译通过**），夹取 `[1f, MAX_RENDER_SCALE=2f]`。
+
+倍率取值规则（**唯一来源 `manga/render/OverlayRenderer.kt` 的 `readerRenderScale`**）：
+
+```
+上屏倍率 = max(显示倍率, 超分底图倍率)      显示倍率 = 显示宽 / 页图宽
+```
+
+- ⚠️ **不能只按显示宽度算**（曾经的写法）：页图比屏幕宽时显示倍率夹到 1，而
+  `outW = 坐标空间宽 × renderScale` → `outW` **小于超分底图宽** → `OverlayRenderer` 走
+  「重采样铺满」分支，把 2x 底图压回源尺寸 —— **超分的像素一个都进不了画面**
+  （2026-10 真机：「超分有记录、产物 2160×2808 明明更大，两态切换毫无变化」）。
+  抬到 `baseScale` 后 `outW == 底图宽`，命中 `fillBase = false` 的 **1:1 零重采样**分支。
+- ⚠️ **也不能写死 2f**（更早的写法）：输出是 `页宽 × renderScale`，×2 就是 4 倍像素，
+  而多数漫画页本来就比屏幕宽 → 白占内存。
+- 无超分底图时 `baseScale = 1f` → 与原行为**完全一致**。
+- 守卫：`OverlayRendererBaseScaleTest`（尺寸契约 + `srBase_mustRaiseTheRenderScale_otherwiseTheBaseIsResampledAway`
+  的算式）+ `SrReaderWiringTest.onScreenRenderScaleAccountsForTheUpscaledBase`（接线）。
 
 ⚠️ **环境限制（别再试）**：Robolectric 的 Canvas **既不兑现 `canvas.scale()`，也不兑现
 `drawBitmap(src, srcRect, dstRect, paint)` 的目标矩形**（实测 2 倍输出右下角全透明、白块位置不放大）。

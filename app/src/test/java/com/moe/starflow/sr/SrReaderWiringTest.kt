@@ -551,4 +551,28 @@ class SrReaderWiringTest {
         )
         assertFalse("不许再内联 1.001f 这类私有阈值", ctl.contains("scale <= 1.001f"))
     }
+
+    /**
+     * **上屏倍率必须把底图倍率算进来**（2026-10 真机：超分有记录、产物 2160×2808 明明更大，
+     * 两态切换却**毫无变化**）。
+     *
+     * 根因不在超分链路，而在渲染出口：`outW = 坐标空间宽 × renderScale`，
+     * 而 `renderScale` 只按「显示宽/页图宽」算 —— 页图比屏幕宽时恒为 **1**，
+     * 于是 2160 宽的底图被 `drawBitmap` 重采样压回 1650，超分像素一个都没进画面。
+     * 这里钉住接线：`renderPage` 必须走 `readerRenderScale(显示倍率, 底图倍率)`。
+     * 算式本身由 `OverlayRendererBaseScaleTest` 断言。
+     */
+    @Test
+    fun onScreenRenderScaleAccountsForTheUpscaledBase() {
+        val ctl = controller()
+        assertTrue(
+            "renderPage 必须用 readerRenderScale 抬倍率（否则超分底图会被重采样掉）",
+            ctl.contains("readerRenderScale(display, base?.scale ?: 1f)"),
+        )
+        // 反面：不许再出现"只按显示宽度决定上屏倍率"的旧写法
+        assertFalse(
+            "renderPage 里不许再直接 renderScale = renderScaleFor(...)",
+            ctl.contains("renderScale = renderScaleFor(original.width),"),
+        )
+    }
 }

@@ -122,4 +122,44 @@ class OverlayRendererBaseScaleTest {
         assertTrue("2x 底图要缩到源尺寸 → 得重画", g.fillBase)
         assertEquals(1f, g.scale, 0.0001f)
     }
+
+    // ---------- 上屏倍率必须 ≥ 底图倍率（2026-10 真机：超分有记录但两态切换毫无变化） ----------
+
+    /**
+     * **这就是那个真机 bug 的算式**（PDF 页 1650×2146、超分底图 2160×2808、屏宽 1220）：
+     *
+     * ```
+     * 显示倍率 = 1220/1650 → 夹到 1
+     * 若照它渲染：outW = 坐标空间 1650 × 1 = 1650 < 底图宽 2160 → fillBase=true
+     *            → 2160 的超分底图被 drawBitmap **重采样压回 1650** → 超分像素全丢 → 看起来没变
+     * 抬到 baseScale(1.309) 后：outW = 2160 == 底图宽 → fillBase=false → 1:1 零重采样
+     * ```
+     */
+    @Test
+    fun srBase_mustRaiseTheRenderScale_otherwiseTheBaseIsResampledAway() {
+        val baseScale = 2160f / 1650f
+        val display = 1f // 1220px 屏 / 1650px 页 → 夹到 1
+
+        val before = solveOverlayCanvas(bitmapW = 2160, bitmapH = 2808, baseScale = baseScale, renderScale = display)
+        assertEquals("旧行为：输出只有源图那么大", 1650, before.outW)
+        assertTrue("旧行为要把超分底图压回去（等于白超）", before.fillBase)
+
+        val fixed = readerRenderScale(display, baseScale)
+        assertEquals("倍率必须抬到底图倍率", baseScale, fixed, 0.0001f)
+        val after = solveOverlayCanvas(bitmapW = 2160, bitmapH = 2808, baseScale = baseScale, renderScale = fixed)
+        assertEquals("输出正好等于底图宽", 2160, after.outW)
+        assertEquals(2808, after.outH)
+        assertFalse("底图 1:1 落上去、零重采样", after.fillBase)
+    }
+
+    @Test
+    fun readerRenderScale_keepsDisplayScaleWithoutBase_andClampsBothEnds() {
+        // 没有超分底图 → 与原行为完全一致（低分辨率页仍按显示倍率超采样文字）
+        assertEquals(1.35f, readerRenderScale(1.35f, 1f), 0.0001f)
+        // 4x 底图 → 夹到上限（×2 已是 4 倍像素，防 OOM）
+        assertEquals(2f, readerRenderScale(1f, 4f), 0.0001f)
+        assertEquals(1f, readerRenderScale(1f, 1f), 0.0001f)
+        assertEquals("下界恒为 1（不缩）", 1f, readerRenderScale(0.5f, 1f), 0.0001f)
+        assertEquals("显示倍率比底图倍率大时取显示倍率", 1.8f, readerRenderScale(1.8f, 1.2f), 0.0001f)
+    }
 }

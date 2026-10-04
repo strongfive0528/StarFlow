@@ -76,6 +76,29 @@ internal fun solveOverlayCanvas(
     )
 }
 
+/**
+ * 阅读器**上屏倍率**：`max(显示倍率, 超分底图倍率)`，夹在 `[1f, MAX_RENDER_SCALE]`。
+ *
+ * ## 为什么底图倍率必须参与
+ * `outW = 坐标空间宽 × renderScale`，而坐标空间宽 = `底图宽 / baseScale`。于是只有当
+ * **`renderScale ≥ baseScale`** 时 `outW ≥ 底图宽`；若显示倍率更小（**页图比屏幕宽时它恒为 1**），
+ * `outW` 就小于底图宽 → `fillBase = true` → 那张超分底图会被 **`drawBitmap` 重采样压小**，
+ * 超分多出来的像素**一个都进不了最终画面**。
+ *
+ * 2026-10 真机反馈的「超分有记录、两态切换毫无变化」就是这条：
+ * ```
+ * PDF 页 1650×2146（比 1220px 屏幕宽）→ 显示倍率夹到 1
+ * 超分底图 2160×2808（baseScale 1.309）→ outW 却只有 1650 → 底图被压回 1650 → 白超
+ * ```
+ * 抬到 1.309 之后 `outW == 底图宽`，命中 `fillBase = false` 的"底图 1:1 直接铺"分支，
+ * 零重采样；屏幕再整体缩放这张图（一直如此，`ZoomableImageView` 的 `imageMatrix`）。
+ *
+ * @param displayScale 显示宽 / 页图宽（`[1f, MAX_RENDER_SCALE]` 内）
+ * @param baseScale 底图宽 / 页图宽（无超分底图时传 1f）
+ */
+internal fun readerRenderScale(displayScale: Float, baseScale: Float): Float =
+    maxOf(displayScale, baseScale).coerceIn(1f, MAX_RENDER_SCALE)
+
 object OverlayRenderer {
 
     /**
