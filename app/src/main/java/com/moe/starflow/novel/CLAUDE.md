@@ -77,13 +77,14 @@ Robolectric 的文本引擎是**桩**：`Paint.breakText` 不按宽度换行、�
 | 抽地址 | `HtmlTextExtractor.extractWithImages` | 图片标记 `📷 [图片]` **前后各留一个空行**（单独成段）；地址表（`src` / `xlink:href` / `href`）**按文档顺序**，标签没写地址的也占一个空位 |
 | 读字节 | `NovelParser.loadChapterSource` + `ZipImages` | 一次开包读完整章；相对地址按**条目所在目录**解析（基准目录**必须带结尾 `/`**，`ZipImages.baseDirOf`）；`../`、百分号转义、`data:`、SVG 包装往里找一层 |
 | 落盘+量尺寸 | `NovelChapterRepository.imagesOf` | 按**内容哈希**写进 `novel_import/<书 id>/images/`（删书一起清）；`inJustDecodeBounds` 量原始像素尺寸 |
-| 分页+绘制 | `NovelPaginator` / `NovelPageView` / `NovelScrollAdapter` | 尺寸口径**只有一份**：`NovelImageMetrics`（等比、只缩不放、分页时限一页高）；插图段没有 `StaticLayout`，高度伪装成"整段一行" |
+| 分页+绘制 | `NovelPaginator` / `NovelPageView` / `NovelScrollAdapter` | 尺寸口径**只有一份**：`NovelImageMetrics`（等比、放大封顶 3×、分页时限一页高）；插图段没有 `StaticLayout`，高度伪装成"整段一行" |
 
 - ⚠️ **图片段数是配对规则的锚**：`第 i 个 IMAGE 段` 配 `第 i 张图`。所以 `head` / `script` 里的
   图片**必须**在抽地址前就被剥掉（`stripClosedBlock` 先跑），标签没地址的也必须占位 ——
   少一项就是"第 3 章配了第 4 章的脸"，**看不出错**
-- ⚠️ **只缩不放**：电子书里 1×1 的占位/间距小图非常多（`<img src="dot.gif">`），允许放大
-  会被撑成一整屏的方块
+- ⚠️ **放大到列宽、封顶 3×**（2026-10-04 从"只缩不放"改成这样）：电子书里 1×1 的占位/间距小图
+  非常多，无上限放大就是**一整屏色块**；而完全不放又让真插图贴着原始像素显示（用户报的
+  「图片感觉都太小了」）。详见下面「插图**翻译**」一节的尺寸条与 `NovelImageMetrics.MAX_UPSCALE`。
 - ⚠️ 读不到的图写 `null` → 该段**回落成占位文本**：少一张图不能把正文也丢了
 - ⚠️ 单 HTML / 文件夹里的**散章**没有图：导入只复制 txt/epub（SAF 单文件授权拿不到兄弟文件），
   所以 `HtmlParser.loadChapterSource` 那条路解析出来的地址在导入后都取不到（留着的意义是
@@ -109,10 +110,12 @@ Robolectric 的文本引擎是**桩**：`Paint.breakText` 不按宽度换行、�
 
 **硬约束与踩过的坑**：
 
-- ⚠️ **图片段独占一批**（`NovelBatchPlanner.splitImageUnits`，队列与章任务都走它）：混进文本批的话
-  文本引擎（`NovelTranslationEngine.asUnits` 只认 TEXT）会把图片段滤掉 → **整批被标失败**。
-- ⚠️ **图片单位串行**（`NovelTranslationQueue.imageBusy`）：OCR 是单例引擎，两批同时起飞只会在锁上
-  干等、还白占一个并发槽位。用户口径也是"依次 OCR 翻译每张"。
+- ⚠️ **插图不拆批**（`NovelBatchPlanner.planBatches` 就是普通 `chunked(每批段数)`）：一批里
+  可以混着文本与插图，批内插图由 `NovelChapterTranslator` **串行** OCR（见下面那条）。
+  真正的约束是"插图**绝不能**被送进文本引擎的请求里"——那由翻译器自己分流保证，
+  **不是**靠成批规则拆批（老实现拆批，代价是用户报的「每批段数遇到图片就中断」）。
+- ⚠️ **含插图的批之间串行**（`NovelTranslationQueue.imageBusy`，判据是"批内含图"而不是"首段是图"）：
+  OCR 是单例引擎，两批含图的批同时起飞只会在锁上干等、还白占一个并发槽位。
 - ⚠️ **`imagePayload` 必须在清译文时一起清**（`resetToIdleRows` 的 `imagePayload = NULL`）：
   它是"这张图已经翻过"的**另一份凭据**，留着的话用户点了「删除译文」屏幕上什么都没变。
 - ⚠️ **DB v21 → v22**（`MIGRATION_21_22` 加列：可空、无 DEFAULT）。守卫
@@ -156,8 +159,24 @@ Robolectric 的文本引擎是**桩**：`Paint.breakText` 不按宽度换行、�
 - ⚠️ **`NovelImageControls` 的几何不许建在 `RectF` 上**：几何是"纯算术、普通 JVM 单测"的
   （`Paint` 都是 `by lazy`），而 `RectF` 在普通 JVM 单测里是**空实现**（构造完四个字段全是 0，
   守卫 `选中框外扩 3dp` 就是这么红过的）→ 用自己的 `Box` 数据类，只在画的时候 `toRectF()`。
-- **面板开关在折叠组之外、常显**（用户点名要的开关，藏进默认折叠的「批次处理」里等于没做）；
-  默认**关**（每张图 = 一次 OCR 几秒 + 一次翻译请求）。
+- ⚠️⚠️ **含插图的批，外面绝不能再持 `OcrLock`**（2026-10-04 真机事故：「翻译过程中只要遇到
+  图片就会卡住，等了很长时间显示 `IllegalStateException: OCR 引擎被占用（别的翻译/超分正在跑），
+  稍后再试`，而我**没有任何别的占用**」）。根因是 `OcrLock` **不可重入**：队列在 `serial`
+  （本地引擎，或 AUTO 被夹成 1 后再看引擎）时整批持锁，而插图流水线要**自己**拿这把锁做 OCR ——
+  自己等自己 60s。现在 `NovelTranslationQueue.runInFlight` / `runBatch` 遇到**批内含图就跳过外锁**
+  （批级串行改由 `imageBusy` 保证），并把等锁上限从 60s 收到 20s。
+  守卫：`NovelTranslationQueueTest`（插图与文本同批 / 三张连续插图同一批 / 含图批之间串行）。
+- ⚠️ **插图也要有"状态框"**：分页与滚动两处绘制都按「选中(蓝) > 失败(红) > 正在翻译(琥珀)」
+  给插图描边（`NovelImageControls.drawFrame`）—— 只高亮文本段的话，一整批都是图时屏幕上毫无反馈。
+- ⚠️ **插图允许放大，但封顶 3×**（用户口径：「显示的图片感觉都太小了」）：`NovelImageMetrics`
+  的 `MAX_UPSCALE = 3f`，同时仍受"列宽"与"一页高"两道限制。⚠️ 不能无上限：电子书里 1×1
+  的占位/间距小图会被撑成一整屏色块（老实现因此写成"只缩不放"，代价是真插图贴着原始像素显示）。
+- ⚠️ **绝不裁图**：绘制端按「本段记的高度」与「一页正文高度」取**较小值**再 `fit` 一次
+  （`drawImageSegment`）—— 换排版参数/换屏尺寸的瞬间分页与绘制可能不同源，那时按分页记的高度
+  画就会顶出这条带子（用户口径：「绝不允许图片内容被切割遮挡」）。
+- ⚠️ **返回键先退编辑模式**（用户口径：「选中文本可以通过返回退出编辑，为什么选中图片返回直接就
+  退出阅读器？」）：`OnBackPressedCallback` 里 `selecting` 与 `focusedImagePara != null` 同一套处理，
+  都只退出编辑态、不 finish、**也不打断在途翻译**。
 - **长按单张图不受开关限制**（那是用户对这张图的显式指令）；开关只管自动/增量/整章/手动一批
   要不要把插图也带上。
 - 图片视图的载荷走 **`setImageState(visuals, focused, translations)` 单独灌**，不读适配器手里那份

@@ -324,6 +324,19 @@ class NovelReaderActivity : AppCompatActivity() {
     /** 在途的图片翻译（长按触发那次）；切章/退出要取消。 */
     private var imageJob: Job? = null
 
+    /**
+     * 「正在识别插图 第 i/N 张」的浮层文案；null = 没有插图在跑（用队列的默认文案）。
+     *
+     * 由 [NovelChapterTranslator] 的 `onImageProgress` 上报（批内插图串行，OCR 一张要几秒），
+     * 是用户口径「提示系统要显示当前正在翻译的图片状态」的落点。
+     */
+    @Volatile
+    private var imageStageText: String? = null
+
+    /** 队列最近一次状态（插图进度上报时要据此判断"现在确实在翻"，用默认文案兜底）。 */
+    @Volatile
+    private var queueState: NovelQueueState = NovelQueueState()
+
     /** 图片流水线（懒建：它自己要持有翻译引擎）。 */
     private var imagePipeline: NovelImagePipeline? = null
 
@@ -630,7 +643,31 @@ class NovelReaderActivity : AppCompatActivity() {
         // 图片段：**开关关着时返回 null**（那时图片段按设计不翻译）。
         // ⚠️ 走 lambda：这份 translator 是按值缓存的，开关随时会变。
         imageHost = { imageHostOrNull() },
+        // 批内插图串行 OCR，一张几秒：浮层要说得出"现在是第几张"（用户口径 2026-10-04）
+        onImageProgress = { ch, index, total -> onImageStage(ch, index, total) },
     )
+
+    /**
+     * 插图进度上报（在翻译协程里被调，**可能在 IO 线程**）→ 只写一个 `@Volatile` 文案 +
+     * 在主线程刷新浮层。`index = 0` = 这一批的插图跑完了（清文案）。
+     *
+     * ⚠️ 参数名**不能叫 `chapterIndex`**（会遮蔽 Activity 自己的那个同名属性，
+     * `chapter != chapterIndex` 就永远是 false —— 这种自己跟自己比的写法编译器不报错）。
+     */
+    private fun onImageStage(chapter: Int, index: Int, total: Int) {
+        if (chapter != chapterIndex) return
+        imageStageText = if (index <= 0 || total <= 0) {
+            null
+        } else {
+            getString(R.string.novel_image_translating_progress, index, total)
+        }
+        runOnUiThread {
+            val st = queueState
+            if (st.phase == NovelQueuePhase.TRANSLATING) {
+                showOverlay(imageStageText ?: queuePositionText(st), autoDismiss = false)
+            }
+        }
+    }
 
     /**
      * 图片翻译宿主（阅读器侧）：把"图在哪"与"怎么 OCR + 翻译"接给 [NovelChapterTranslator]。
@@ -651,13 +688,22 @@ class NovelReaderActivity : AppCompatActivity() {
     // ===== chrome（与漫画逐项对齐） =====
 
     private fun setupOverlays() {
-        // 返回键：选择模式下先退出选择（与「点空白处退出」同一件事），否则才退出阅读器。
-        // `isEnabled=false` → 转发一次 → 再打开，是为了把"退出阅读器"这个默认行为交回系统，
-        // 不自己 finish（自绘返回会漏掉系统的一些收尾）。
+        // 返回键：选择模式 / **插图编辑模式**下先退出它们（与「点空白处退出」同一件事），
+        // 否则才退出阅读器。`isEnabled=false` → 转发一次 → 再打开，是为了把"退出阅读器"
+        // 这个默认行为交回系统，不自己 finish（自绘返回会漏掉系统的一些收尾）。
+        //
+        // ⚠️ 插图编辑模式这条是用户报的（2026-10-04）：「选中文本可以通过返回退出编辑，
+        // 为什么选中图片返回直接就退出阅读器？」—— 两处理必须是同一套心智。
         onBackPressedDispatcher.addCallback(this, object : OnBackPressedCallback(true) {
             override fun handleOnBackPressed() {
                 if (selecting) {
                     exitSelection()
+                    return
+                }
+                if (focusedImagePara != null) {
+                    // ⚠️ 只退出编辑模式，**不打断在途翻译**（见 onLongPressImage 的说明）
+                    focusedImagePara = null
+                    refreshImageChrome()
                     return
                 }
                 isEnabled = false
@@ -2602,6 +2648,7 @@ class NovelReaderActivity : AppCompatActivity() {
         queueObserverJob?.cancel()
         queueObserverJob = lifecycleScope.launch {
             q.state.collect { st ->
+                queueState = st
                 // 队列状态一变就把整份状态推给面板（否则面板不知道"正在翻/停了"）
                 pushPanelState()
                 // 同一份状态也镜像到**通知栏**（用户口径 2026-10-03：翻译过程的提示必须进通知系统，
@@ -2625,7 +2672,10 @@ class NovelReaderActivity : AppCompatActivity() {
                 }
                 when (st.phase) {
                     NovelQueuePhase.TRANSLATING -> showOverlay(
-                        queuePositionText(st), autoDismiss = false,
+                        // 批内有插图正在 OCR 时优先报"第 i/N 张图"（用户口径 2026-10-04：
+                        // 「由于 ocr 串行，提示系统要显示当前正在翻译的图片状态」）——
+                        // 三张图要一张张来，只报"正在翻译 · 第 X/Y 页"用户不知道在等什么
+                        imageStageText ?: queuePositionText(st), autoDismiss = false,
                     )
                     // ⚠️ **等页面稳定要有明文提示**（用户口径 2026-10-04：「我没看到任何等待页面稳定…
                     // 的相关提示信息」）—— 这一态**还没有发请求**，所以黄底是空的，

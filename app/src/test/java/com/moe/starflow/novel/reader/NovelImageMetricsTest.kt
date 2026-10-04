@@ -30,15 +30,26 @@ class NovelImageMetricsTest {
      * 电子书里 1×1 的"占位/间距"小图非常多（`<img src="dot.gif">`），允许放大的话
      * 它们会被撑成一整屏的方块，把整本书的排版撕碎。
      */
+    /**
+     * ⚠️ 用户口径 2026-10-04「显示的图片感觉都太小了」→ **允许放大**，但有两道闸：
+     * ① 封顶 [NovelImageMetrics.MAX_UPSCALE] 倍；② 1×1 这种"占位/间距"小图绝不能撑满屏。
+     */
     @Test
-    fun `小图保持原尺寸不放大`() {
-        val size = NovelImageMetrics.fit(img(1, 1), contentWidth = 900, maxHeightPx = 1600f)!!
-        assertEquals(1f, size.width, 0.5f)
-        assertEquals(1f, size.height, 0.5f)
-
+    fun `小图按上限放大而不是无脑撑满`() {
+        // 300×200 的图：列宽 900 → 3 倍正好封顶，放成 900×600
         val mid = NovelImageMetrics.fit(img(300, 200), contentWidth = 900, maxHeightPx = 1600f)!!
-        assertEquals(300f, mid.width, 0.5f)
-        assertEquals(200f, mid.height, 0.5f)
+        assertEquals(900f, mid.width, 0.5f)
+        assertEquals(600f, mid.height, 0.5f)
+
+        // 1×1 的占位图：只放大到 3 倍（不是 900 倍变一整屏色块）
+        val dot = NovelImageMetrics.fit(img(1, 1), contentWidth = 900, maxHeightPx = 1600f)!!
+        assertEquals(NovelImageMetrics.MAX_UPSCALE, dot.width, 0.5f)
+        assertEquals(NovelImageMetrics.MAX_UPSCALE, dot.height, 0.5f)
+
+        // 本来就是整列宽的图：不多放（3 倍封顶之外还有"列宽"这一道）
+        val wide = NovelImageMetrics.fit(img(900, 400), contentWidth = 900, maxHeightPx = 1600f)!!
+        assertEquals(900f, wide.width, 0.5f)
+        assertEquals(400f, wide.height, 0.5f)
     }
 
     /**

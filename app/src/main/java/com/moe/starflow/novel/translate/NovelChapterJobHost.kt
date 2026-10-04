@@ -295,8 +295,9 @@ class NovelChapterJobHost(
                 chapterParaIndexes = paras,
                 translated = done,
                 batchSize = NovelPanelStyle.batchSize(readerPrefs),
-                // ⚠️ 图片段独占一批：OCR 单例、必须依次跑（见 NovelBatchPlanner.splitImageUnits）
-                isImage = { it in imageParas },
+                // ⚠️ **插图不拆批**（用户口径 2026-10-04：「图片算段落的一段！每批 3 段，
+                // 哪怕三张都是图片，也要先后翻译三张图片」）：批按每批段数切，
+                // 批内的插图由 `NovelChapterTranslator` 串行 OCR（它自己拿 OCR 锁）
             )
             if (plan.isEmpty()) {
                 LogCollector.i(TAG, "第 $chapterIndex 章没有待翻的段落")
@@ -312,10 +313,10 @@ class NovelChapterJobHost(
                 chapterUnits.remove(chapterIndex)?.forEach { units.remove(it) }
                 plan.forEachIndexed { ordinal, batch ->
                     val id = nextUnit.incrementAndGet()
-                    // 一个单位的"是不是图片"由成批规则保证（图片独占一批）：整批都是图 = 图片单位
+                    // 批里**全是插图**时面板行标「一张插图」；混着文本就照旧报段号区间
                     units[id] = NovelWaitingBatch(
                         chapterIndex, ordinal, batch,
-                        isImageUnit = batch.size == 1 && batch.first() in imageParas,
+                        isImageUnit = batch.isNotEmpty() && batch.all { it in imageParas },
                     )
                     ids += id
                 }

@@ -85,6 +85,14 @@ class NovelChapterTranslator(
      * 「同时翻译图片」开关随时会变 —— 传值的话开关要重启阅读器才生效。
      */
     private val imageHost: (() -> NovelImageHost?)? = null,
+    /**
+     * 批内插图的**进度上报**：`(chapterIndex, 第几张(1 起), 共几张)`。
+     *
+     * 用户口径 2026-10-04：「由于 ocr 串行，**提示系统要显示当前正在翻译的图片状态**」——
+     * 一批里三张图要一张张 OCR，界面必须说得出"现在是第 2 张"，否则用户只看到一段很长的
+     * "翻译中"却不知道在等什么。null = 不上报（纯逻辑单测 / 不关心进度的调用方）。
+     */
+    private val onImageProgress: ((Int, Int, Int) -> Unit)? = null,
 ) : NovelBatchTranslator {
 
     private companion object {
@@ -317,8 +325,10 @@ class NovelChapterTranslator(
         }
         // ── 图片段：一张图 = 一个段 = 一次 OCR + 一次翻译请求 ──
         // ⚠️ 与文本段**分开处理**：文本引擎翻不了图（`NovelTranslationEngine.asUnits` 只认 TEXT），
-        // 而图也不该混进文本批（一次请求里半是文字半是 OCR 文本，编号对位会乱）。
-        // 成批规则由 `NovelBatchPlanner` 保证"图片段独占一批"，这里再兜一次底。
+        // 而图也不该混进文本请求（一次请求里半是文字半是 OCR 文本，编号对位会乱）。
+        // ⚠️ **但批不拆**（用户口径：「图片算段落的一段，每批几段就是几段」）：同一个批里
+        // 文本合成一次请求、插图逐个 OCR+翻译，最后合到同一个 `NovelBatchResult` —— 所以
+        // 面板里这一批仍是一行、进度条仍按批推进、黄色高亮覆盖整批（含那几张图）。
         val host = imageHost?.invoke()
         val images = if (host == null) {
             emptyList()
@@ -374,7 +384,11 @@ class NovelChapterTranslator(
         }
 
         // ── 图片段：依次 OCR + 翻译（`OcrLock` 天然把它们串起来，见 NovelImagePipeline）──
-        for (p in images) {
+        // ⚠️ 用户口径 2026-10-04：「每批 3 段，哪怕三张都是图片，也要**先后**翻译三张图片
+        // （这三张图片都要显示黄色状态，由于 ocr 串行，提示系统要显示**当前正在翻译的图片**状态）」，
+        // 所以这里是**批内串行**：一张一张来，每张开跑前上报"第 i/N 张"。
+        images.forEachIndexed { i, p ->
+            onImageProgress?.invoke(chapterIndex, i + 1, images.size)
             val one = translateOneImage(book, chapterIndex, p, host!!, sourceLang, targetLang, translatorName)
             if (one.first != null) {
                 got[p.index] = one.first!!
@@ -382,6 +396,8 @@ class NovelChapterTranslator(
                 one.second?.let { if (error == null) error = it }
             }
         }
+        // 这一批的插图跑完了（或本来就没有）→ 清掉"第 i/N 张"的提示，别让它挂到下一批
+        if (images.isNotEmpty()) onImageProgress?.invoke(chapterIndex, 0, images.size)
 
         val mineIndexes = mine.map { it.index }
         val missed = (mineIndexes + images.map { it.index })

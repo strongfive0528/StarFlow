@@ -386,14 +386,10 @@ class NovelTranslationQueue(
                 val batch = if (anchor == null) {
                     emptyList()
                 } else {
-                    // ⚠️ **图片段独占一个单位**（用户口径：「如果队列存在多个图片，依次 OCR 翻译每张图片」）：
-                    // 取本轮单位 = 切分后的**第一段**。锚点是图片 → 就它一张；锚点是文本 → 取到
-                    // 第一张图之前的那些文本段（图片留给下一轮，于是图片天然被"依次"处理）。
-                    val isImage = { p: Int -> runCatching { isImagePara(chapter, p) }.getOrDefault(false) }
-                    NovelBatchPlanner.splitImageUnits(
-                        NovelBatchPlanner.nextBatch(chapterParas, anchor, done, size),
-                        isImage,
-                    ).firstOrNull().orEmpty()
+                    // ⚠️ **插图不拆批**（用户口径 2026-10-04：「图片算段落的一段！每批 3 段，
+                    // 哪怕三张都是图片，也要先后翻译三张图片」）：按每批段数正常取一批，
+                    // 批内的插图由翻译器串行 OCR（它自己拿 OCR 锁）。
+                    NovelBatchPlanner.nextBatch(chapterParas, anchor, done, size)
                 }
                 if (anchor == null || batch.isEmpty()) {
                     if (synchronized(lock) { inflight.isNotEmpty() }) {
@@ -407,12 +403,15 @@ class NovelTranslationQueue(
                     continue
                 }
 
-                // ⚠️ **图片单位串行**：OCR 是单例引擎（`OcrLock` 一把），两批图片同时起飞只会
-                // 让后来那张在锁上干等（还占着并发槽位）。用户口径也是"依次 OCR 翻译每张图片" ——
-                // 这里就不认领，等上一张收尾（下一轮立刻补位）。
-                val batchIsImage = batch.isNotEmpty() &&
-                    runCatching { isImagePara(chapter, batch.first()) }.getOrDefault(false)
-                if (batchIsImage && imageBusy.get()) {
+                // ⚠️ **含插图的批要串行**：OCR 是单例引擎（`OcrLock` 一把），两批含图的批同时起飞
+                // 只会让后来那批在锁上干等（还占着并发槽位）。用户口径也是"依次 OCR 翻译每张图片" ——
+                // 这里就不认领，等上一批收尾（下一轮立刻补位）。
+                // ⚠️ 判据是 **"这一批里有没有插图"**（不是只看首段）：批按「每批段数」切，
+                // 一批里可以混着文本与插图（用户口径 2026-10-04：「图片算段落的一段」）。
+                val batchHasImage = batch.any {
+                    runCatching { isImagePara(chapter, it) }.getOrDefault(false)
+                }
+                if (batchHasImage && imageBusy.get()) {
                     delay(SLOT_POLL_MS)
                     continue
                 }
@@ -424,7 +423,7 @@ class NovelTranslationQueue(
                     inflightParasView = inflightParas.toSet()
                     inflightParas.toList().sorted()
                 }
-                if (batchIsImage) imageBusy.set(true)
+                if (batchHasImage) imageBusy.set(true)
                 _state.value = NovelQueueState(
                     NovelQueuePhase.TRANSLATING, chapter, claimedParas,
                     synchronized(lock) { batchesDone }, remaining,
@@ -471,7 +470,7 @@ class NovelTranslationQueue(
                         // 「黄色翻译中的背景在上一批翻译完后就会立刻跳到当前正在翻的页面」）。
                         // 认领下一批之前先停一拍，黄底之间才看得见间隔；`N > 1`（增量）时
                         // 只要还有别的批在飞就不会被它拖住。
-                        if (batchIsImage) imageBusy.set(false)
+                        if (batchHasImage) imageBusy.set(false)
                         if (idle) settled.set(true)
                     }
                 }
@@ -484,10 +483,19 @@ class NovelTranslationQueue(
     }
 
     /**
-     * 一个在飞批的实际请求：抢锁（仅 [serial]）→ 翻 → 落库（在 [NovelBatchTranslator] 里）。
+     * 一个在飞批的实际请求：抢锁（仅 [serial] 且**批里没有插图**）→ 翻 → 落库。
      *
      * ⚠️ 与 [runBatch] 的区别只有两处：**不写 `_state`**（并发下多个工人会互相覆盖状态，
      * 调度器才是状态的唯一写入者），以及只在 [serial] 时持 `OcrLock`（见调用点的说明）。
+     *
+     * ⚠️⚠️ **批里含插图时绝不能在外面持 `OcrLock`**（2026-10-04 真机事故：
+     * 「翻译过程中只要遇到图片就会卡住，等了很长时间显示：IllegalStateException:
+     * OCR 引擎被占用（别的翻译/超分正在跑），稍后再试」，而用户**没有任何别的占用**）：
+     * 插图翻译要**自己**拿这把锁做 OCR（`NovelImagePipeline.ocrWithLock`），而 `OcrLock` 不是
+     * 可重入的 —— 外面持着、里面再 `acquire()` 只会拿到 0，于是干等 60s 后报一句
+     * "OCR 引擎被占用"，把责任推给根本不存在的"别的任务"。
+     * AUTO 模式 `slots` 被夹成 1、以及本地引擎（`serial=true`）都会走进这条死路。
+     * 现在：含图批**不持外锁**（OCR 锁由插图流水线自己按张持有；批级串行由 `imageBusy` 保证）。
      */
     private suspend fun runInFlight(
         book: ImportedNovel,
@@ -496,9 +504,13 @@ class NovelTranslationQueue(
         serial: Boolean,
         settled: suspend (NovelBatchResult) -> Unit,
     ) {
+        val batchHasImage = batch.any {
+            runCatching { isImagePara(chapterIndex, it) }.getOrDefault(false)
+        }
+        val holdLock = serial && !batchHasImage
         var lockToken = 0L
         try {
-            if (serial) {
+            if (holdLock) {
                 _state.value = NovelQueueState(NovelQueuePhase.WAITING_LOCK, chapterIndex, batch)
                 lockToken = acquireLockWithWait()
                 if (lockToken == 0L) {
@@ -556,11 +568,8 @@ class NovelTranslationQueue(
         val anchor = NovelBatchPlanner.anchorOnPage(currentPageParaIndexes(), done)
             ?: chapterParas.firstOrNull { it !in done && it !in failedAnchors }
             ?: return NovelBatchResult(emptyMap(), "没有待翻译的段落了")
-        // ⚠️ 与队列同一条成批规则：**图片段独占一批**（一张图 = 一次 OCR + 一次翻译请求）
-        val batch = NovelBatchPlanner.splitImageUnits(
-            NovelBatchPlanner.nextBatch(chapterParas, anchor, done, batchSize()),
-            { p -> runCatching { isImagePara(chapterIndex, p) }.getOrDefault(false) },
-        ).firstOrNull().orEmpty()
+        // ⚠️ 与队列同一条成批规则：**插图不拆批**（一张图 = 一个段，批内串行 OCR）
+        val batch = NovelBatchPlanner.nextBatch(chapterParas, anchor, done, batchSize())
         if (batch.isEmpty()) return NovelBatchResult(emptyMap(), "没有待翻译的段落了")
         return runBatch(book, chapterIndex, batch)
     }
@@ -609,11 +618,8 @@ class NovelTranslationQueue(
         while (currentCoroutineContext().isActive) {
             val translated = skipSetFor(translatedIndexes(book, chapterIndex))
             val anchor = chapterParas.firstOrNull { it !in translated } ?: return done
-            // 同一条成批规则：图片段独占一批（依次 OCR）
-            val batch = NovelBatchPlanner.splitImageUnits(
-                NovelBatchPlanner.nextBatch(chapterParas, anchor, translated, batchSize()),
-                { p -> runCatching { isImagePara(chapterIndex, p) }.getOrDefault(false) },
-            ).firstOrNull().orEmpty()
+            // 同一条成批规则：**插图不拆批**（用户口径「图片算段落的一段」，见 NovelBatchPlanner）
+            val batch = NovelBatchPlanner.nextBatch(chapterParas, anchor, translated, batchSize())
             if (batch.isEmpty()) return done
             val result = runBatch(book, chapterIndex, batch)
             onBatch(result)
@@ -627,12 +633,32 @@ class NovelTranslationQueue(
         return done
     }
 
-    /** 一批（已确定段号）的实际请求：抢锁 → 翻 → 落库（在 [NovelBatchTranslator] 里）。 */
+    /**
+     * 一批（已确定段号）的实际请求：抢锁 → 翻 → 落库（在 [NovelBatchTranslator] 里）。
+     *
+     * ⚠️ 与 [runInFlight] 同一个坑：整章/手动那条路也**不能在含图批外面持 `OcrLock`**
+     * （插图流水线要自己拿它做 OCR，`OcrLock` 不可重入 —— 会干等 60s 后报"引擎被占用"）。
+     */
     private suspend fun runBatch(
         book: ImportedNovel,
         chapterIndex: Int,
         batch: List<Int>,
     ): NovelBatchResult {
+        val batchHasImage = batch.any {
+            runCatching { isImagePara(chapterIndex, it) }.getOrDefault(false)
+        }
+        if (batchHasImage) {
+            _state.value = NovelQueueState(NovelQueuePhase.TRANSLATING, chapterIndex, batch)
+            return translator.translateBatch(
+                book = book,
+                chapterIndex = chapterIndex,
+                paragraphs = paragraphsOf(book, chapterIndex),
+                paraIndexes = batch,
+                sourceLang = sourceLang(),
+                targetLang = targetLang(),
+                translatorName = translatorName(),
+            )
+        }
         _state.value = NovelQueueState(NovelQueuePhase.WAITING_LOCK, chapterIndex, batch)
         val lockToken = acquireLockWithWait()
         if (lockToken == 0L) return NovelBatchResult(emptyMap(), "翻译引擎被占用（别的翻译正在跑）")

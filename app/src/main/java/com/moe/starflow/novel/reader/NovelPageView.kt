@@ -398,12 +398,18 @@ class NovelPageView(context: Context) : View(context) {
     private fun drawImageSegment(canvas: Canvas, c: ChapterContent, paraIndex: Int, top: Float, bottom: Float) {
         val image = c.images[paraIndex] ?: return
         val cw = style.contentWidthPx(width)
-        val size = NovelImageMetrics.fit(image, cw, style.contentHeightPx(height)) ?: return
+        // ⚠️ **绝不裁图**：可用高度取「本段记的高度」与「一页正文高度」的**较小值**再夹一次 ——
+        // 分页与绘制虽然共用 [NovelImageMetrics]，但换排版参数/换屏尺寸的瞬间两者可能不同源，
+        // 那时按分页记的高度画就会顶出这条带子（用户口径：「绝不允许图片内容被切割遮挡」）。
+        val bandHeight = (bottom - top).coerceAtLeast(1f)
+        val size = NovelImageMetrics.fit(
+            image, cw, minOf(bandHeight, style.contentHeightPx(height)),
+        ) ?: return
         val left = style.paddingPx + (cw - size.width) / 2f
         val imageRight = left + size.width
         val density = resources.displayMetrics.density
         val focused = paraIndex == focusedImage
-        val selection = NovelImageControls.selectionRect(left, top, imageRight, bottom, density)
+        val selection = NovelImageControls.selectionRect(left, top, imageRight, top + size.height, density)
         // 额外裁一道该段自己的高度：图片永远是"画在本段给它记的那条带子里"，
         // 万一哪天公式改了导致尺寸对不上，也只会少画几个像素，不会盖住下一段
         canvas.save()
@@ -423,11 +429,22 @@ class NovelPageView(context: Context) : View(context) {
             NovelImageStore.draw(canvas, image, left, top, size)
         }
         canvas.restore()
-        // ⚠️ 选中描边与按钮条都画在 `clipRect` **外面**：描边本来就在图片矩形外侧（外扩 3dp），
-        // 画在裁剪里会被切掉上/下两条边；按钮条在"图太小"时会落到图片下方，同样会被裁掉。
-        // 越界由 `NovelImageControls.layout` 的 bounds 夹取兜住（不会画到屏幕外）。
+        // ⚠️ 边框都画在 `clipRect` **外面**：它们本来就在图片矩形外侧（外扩 3dp），
+        // 画在裁剪里会被切掉上/下两条边。越界由 [NovelImageControls.layout] 的 bounds 夹取兜住。
+        //
+        // 边框优先级与文本段底色**同一套**（选中 > 失败 > 正在翻译）：
+        // 「这几张图正在翻」必须像文本段一样有**可见的黄框**（用户口径 2026-10-04：
+        // 「这三张图片都要显示黄色状态」）—— 只高亮文本段的话，一整批都是图时屏幕上毫无反馈。
+        val frame = when {
+            focused -> NovelImageControls.SELECTION_BORDER to NovelImageControls.SELECTION_BORDER_DP
+            paraIndex in failedBatch -> NovelTextRenderer.COLOR_FAILED_BATCH to 3f
+            paraIndex in activeBatch -> NovelTextRenderer.COLOR_ACTIVE_BATCH to 3f
+            else -> null
+        }
+        if (frame != null) {
+            NovelImageControls.drawFrame(canvas, selection, frame.first, frame.second, density)
+        }
         if (focused) {
-            NovelImageControls.drawSelectionFrame(canvas, selection, density)
             val items = controlsOf()?.items.orEmpty()
             NovelImageControls.drawBackdrop(canvas, items, density)
             for (item in items) {

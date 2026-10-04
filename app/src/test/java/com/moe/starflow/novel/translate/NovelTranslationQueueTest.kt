@@ -130,17 +130,18 @@ class NovelTranslationQueueTest {
         q.stop()
     }
 
-    // ===== 图片段（一张图 = 一个段 = 一次 OCR；用户口径：多张依次翻）=====
+    // ===== 插图（用户口径 2026-10-04：「图片算段落的一段！每批 3 段，哪怕三张都是图片，
+    //       也要先后翻译三张图片」）=====
 
     /**
-     * **图片段独占一批**：批次里不许混着文本段。
+     * **插图不拆批**：批按「每批段数」切，一批里可以混着文本与插图 ——
+     * 老实现把图拆成独占批，用户实测就是「每批段数的设置遇到图片就中断」。
      *
-     * 混进去的后果不是"慢一点"，而是文本引擎（只认 TEXT）把图片段滤掉 → 那一批被标成失败，
-     * 用户看到"翻了个寂寞 + 一堆红"。成批规则收敛在 `NovelBatchPlanner.splitImageUnits`，
-     * 这条守卫钉的是**队列真的用了它**。
+     * "一张一张来"改由 `NovelChapterTranslator` 在批内串行（它自己拿 OCR 锁）实现，
+     * 队列这边只管照常按段数成批。
      */
     @Test
-    fun `图片段独占一批不混进文本`() = runTest {
+    fun `插图与文本同批且按每批段数切`() = runTest {
         val t = FakeTranslator()
         val translated = mutableSetOf<Int>()
         // 章内 0..5，第 2 段是插图；每批 3 段
@@ -156,29 +157,48 @@ class NovelTranslationQueueTest {
         advanceTimeBy(30_000)
 
         assertEquals(
-            "前两段一批、图片独占一批、后面继续成批（顺序不变）",
-            listOf(listOf(0, 1), listOf(2), listOf(3, 4, 5)),
+            "严格按每批段数切，插图留在自己那一批里（顺序不变）",
+            listOf(listOf(0, 1, 2), listOf(3, 4, 5)),
             t.batches,
         )
         q.stop()
     }
 
-    /**
-     * **图片单位串行**（用户口径：「如果队列存在多个图片，**依次** ocr 翻译每张图片」）。
-     *
-     * 并发 N=4 也一样：图片要抢全局 OCR 锁，同时起飞只会互相等锁、白占并发槽位。
-     * 断言用**并发峰值**（`maxConcurrent`）而不是"数在第 1.2 秒跑了几批"——
-     * 后者取决于虚拟时钟推进到哪，稍一改动就假红；峰值直接证明"从没有两张同时在跑"。
-     */
+    /** **三张连续的图 = 一批三张**（用户点名的场景）。 */
     @Test
-    fun `并发下图片单位仍然依次跑`() = runTest {
+    fun `三张连续插图同一批`() = runTest {
         val t = FakeTranslator()
-        t.holdMs = 1_000
         val translated = mutableSetOf<Int>()
-        // 章内 0..3 全是图片段，并发 4
         val q = queue(
             backgroundScope, t, translated,
             page = { listOf(0, 1, 2, 3) }, chapterSize = 4, batchSize = 3,
+            isImage = { true },
+        )
+
+        q.start(book(), NovelTranslateMode.AHEAD, quota = NovelQuota.of(10), currentChapter = { 0 }) { _, r ->
+            translated += r.translations.keys
+        }
+        advanceTimeBy(30_000)
+
+        assertEquals("三张图一批、第四张下一批", listOf(listOf(0, 1, 2), listOf(3)), t.batches)
+        q.stop()
+    }
+
+    /**
+     * **含插图的批之间不并发**：OCR 是单例引擎（`OcrLock` 一把），两批含图的批同时起飞
+     * 只会让后来那批在锁上干等、还白占并发槽位。
+     *
+     * 断言用**并发峰值**（假翻译器记 `maxConcurrent`）：并发 4 下也必须是 1。
+     */
+    @Test
+    fun `含插图的批之间串行`() = runTest {
+        val t = FakeTranslator()
+        t.holdMs = 1_000
+        val translated = mutableSetOf<Int>()
+        // 六张图、每批 3 段 → 两批，各自含图
+        val q = queue(
+            backgroundScope, t, translated,
+            page = { (0..5).toList() }, chapterSize = 6, batchSize = 3,
             concurrency = 4, isImage = { true },
         )
 
@@ -187,12 +207,8 @@ class NovelTranslationQueueTest {
         }
         advanceTimeBy(10_000)
 
-        assertEquals("同一时刻只允许一张图在飞（并发 4 也一样）", 1, t.maxConcurrent)
-        assertEquals(
-            "四张图要按顺序依次翻完",
-            listOf(listOf(0), listOf(1), listOf(2), listOf(3)),
-            t.batches,
-        )
+        assertEquals("同一时刻只允许一批含图的批在飞（并发 4 也一样）", 1, t.maxConcurrent)
+        assertEquals(listOf(listOf(0, 1, 2), listOf(3, 4, 5)), t.batches)
         q.stop()
     }
 

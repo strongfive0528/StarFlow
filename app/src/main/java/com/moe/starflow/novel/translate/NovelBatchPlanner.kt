@@ -88,47 +88,19 @@ object NovelBatchPlanner {
      *
      * ⚠️ **只在本章内成批**（调用方按章调用）：批不跨章是既有约定。
      *
-     * @param isImage 图片段判据（默认"没有图片段"，即与旧行为逐字一致）：
-     *   一张图 = 一个段 = 一次 OCR + 一次翻译请求，所以**图片段独占一批**（见 [splitImageUnits]）。
+     * ⚠️ **插图不再单独拆批**（用户口径 2026-10-04）：「图片算段落的一段！每批 3 段，
+     * 哪怕三张都是图片，也要先后翻译三张图片」—— 所以这里就是普通 `chunked(batchSize)`，
+     * 一批里可以混着文本与插图；**插图在批内串行处理**是 `NovelChapterTranslator` 的职责
+     * （它自己把文本段合成一次请求、插图段逐个 OCR+翻译，见 `translateBatch`）。
+     * 老实现把插图拆成独占批，后果正是用户报的「每批段数的设置遇到图片就中断」。
      */
     fun planBatches(
         chapterParaIndexes: List<Int>,
         translated: Set<Int>,
         batchSize: Int,
-        isImage: (Int) -> Boolean = { false },
     ): List<List<Int>> =
         chapterParaIndexes.filter { it !in translated }
             .chunked(batchSize.coerceAtLeast(1))
-            .flatMap { splitImageUnits(it, isImage) }
-
-    /**
-     * 把一批段号切成「图片段各自独占一批、文本段保持原样」的若干批（顺序不变）。
-     *
-     * 队列与章任务都走它：调度侧拿 `first()` 当本轮要翻的单位，提交侧拿整个列表当 unit 计划。
-     * 各写一套的话，队列里图片会混进文本批（文本引擎把图片段滤掉 → 整批被标失败），
-     * 而章任务里又不会 —— 同一个功能两条路两个结果，排查起来极难。
-     *
-     * 例：`[1,2,3(图),4,5]` → `[[1,2],[3],[4,5]]`
-     */
-    fun splitImageUnits(batch: List<Int>, isImage: (Int) -> Boolean): List<List<Int>> {
-        if (batch.isEmpty()) return emptyList()
-        if (batch.none(isImage)) return listOf(batch)
-        val out = mutableListOf<List<Int>>()
-        var run = mutableListOf<Int>()
-        for (p in batch) {
-            if (isImage(p)) {
-                if (run.isNotEmpty()) {
-                    out += run
-                    run = mutableListOf()
-                }
-                out += listOf(p)
-            } else {
-                run += p
-            }
-        }
-        if (run.isNotEmpty()) out += run
-        return out
-    }
 }
 
 /**

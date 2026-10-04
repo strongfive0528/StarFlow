@@ -128,9 +128,19 @@ object NovelImageControls {
 
     /** 选中效果的**描边**（画在图片之后，外扩 [SELECTION_INFLATE_DP]，任何尺寸的图都看得见）。 */
     fun drawSelectionFrame(canvas: Canvas, rect: Box, density: Float) {
+        drawFrame(canvas, rect, SELECTION_BORDER, SELECTION_BORDER_DP, density)
+    }
+
+    /**
+     * 通用描边（选中框 / 「这批正在翻译」的黄框 / 「失败」的红框都用它）。
+     *
+     * ⚠️ 与 [drawSelectionFill] 一样，**必须画在图片之后、段裁剪之外**：框在图片矩形外侧，
+     * 画进裁剪里会被切掉上/下两条边。图片不透明，只有"框"能表达状态。
+     */
+    fun drawFrame(canvas: Canvas, rect: Box, color: Int, widthDp: Float, density: Float) {
         val stroke = strokePaint
-        stroke.color = SELECTION_BORDER
-        stroke.strokeWidth = SELECTION_BORDER_DP * density
+        stroke.color = color
+        stroke.strokeWidth = widthDp * density
         val r = 6f * density
         canvas.drawRoundRect(rect.toRectF(), r, r, stroke)
     }

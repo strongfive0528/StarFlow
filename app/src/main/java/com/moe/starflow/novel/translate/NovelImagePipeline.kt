@@ -91,7 +91,14 @@ class NovelImagePipeline(
 
         /** 等 OCR 锁的轮询与超时（与漫画阅读器同量级：它等 60s）。 */
         const val LOCK_POLL_MS = 200L
-        const val LOCK_WAIT_TIMEOUT_MS = 60_000L
+        /**
+     * 等锁的最长时间。
+     *
+     * ⚠️ 从 60s 收到 **20s**（2026-10-04）：正常情况这把锁几秒内就该到手（单页 OCR 是秒级），
+     * 等满 20s 基本只剩"上一张图还在 OCR"这一种可能 —— 再等下去用户只会看到一条很长的
+     * "正在识别插图"然后失败。时间短一点，失败得快、重试得快。
+     */
+    const val LOCK_WAIT_TIMEOUT_MS = 20_000L
 
         /** 持锁期间的心跳间隔，必须远小于 `OcrLock.STALE_TIMEOUT_MS`(30s)。 */
         const val LOCK_HEARTBEAT_MS = 5_000L
@@ -193,7 +200,12 @@ class NovelImagePipeline(
         var heartbeat: Job? = null
         try {
             token = acquireLockWithWait()
-            if (token == 0L) throw IllegalStateException("OCR 引擎被占用（别的翻译/超分正在跑），稍后再试")
+            if (token == 0L) {
+                // ⚠️ 这条**只该在真的排队时**出现（同一时刻只有一个 OCR 引擎）——外面再持一把
+                // 就变成自己等自己（`OcrLock` 不可重入），所以队列侧含图批一律不持外锁
+                // （见 `NovelTranslationQueue.runInFlight` 的注释）。
+                throw IllegalStateException("OCR 引擎忙（前面还有插图在识别），等一下重试")
+            }
             heartbeat = startHeartbeat(token)
             val (det, ocr) = TranslationEngineInit.ensureReady(app)
             OcrLock.heartbeat(token)

@@ -330,9 +330,19 @@ class NovelScrollAdapter : RecyclerView.Adapter<NovelScrollAdapter.VH>() {
                         NovelImageStore.draw(canvas, img, left, 0f, size)
                     }
                     if (drawn) {
+                        // 边框都画在图片**之后**（在图片矩形外侧，不遮挡图内容）。
+                        // 优先级与文本段底色同一套：选中(蓝) > 失败(红) > 正在翻译(琥珀) ——
+                        // 「这几张图正在翻」要有可见的黄框（用户口径：三张图都要显示黄色状态）
+                        val frame = when {
+                            focused -> NovelImageControls.SELECTION_BORDER to NovelImageControls.SELECTION_BORDER_DP
+                            failed -> NovelTextRenderer.COLOR_FAILED_BATCH to 3f
+                            active -> NovelTextRenderer.COLOR_ACTIVE_BATCH to 3f
+                            else -> null
+                        }
+                        if (frame != null) {
+                            NovelImageControls.drawFrame(canvas, selection, frame.first, frame.second, density)
+                        }
                         if (focused) {
-                            // 描边 + 按钮条画在图片**之后**（描边在图片外侧；图太小按钮会落到图外）
-                            NovelImageControls.drawSelectionFrame(canvas, selection, density)
                             val items = imageControls()
                             NovelImageControls.drawBackdrop(canvas, items, density)
                             for (item in items) {
