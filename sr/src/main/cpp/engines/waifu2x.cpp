@@ -47,7 +47,7 @@ int Waifu2x::load(const std::string& parampath, const std::string& modelpath)
     //    真正影响速度的是 use_fp16_arithmetic —— 只开存储、把算术留在 FP32 会平白慢一截。
     //    `net.vulkan_device()` 在 use_vulkan_compute=false（CPU 路径）时为空 → 自动退回 FP32。
     {
-        ncnn::VulkanDevice* dev = net.vulkan_device();
+        const ncnn::VulkanDevice* dev = net.vulkan_device();
         net.opt.use_fp16_arithmetic = fp16_arithmetic && dev && dev->info.support_fp16_arithmetic();
     }
     net.opt.use_int8_storage = true;
