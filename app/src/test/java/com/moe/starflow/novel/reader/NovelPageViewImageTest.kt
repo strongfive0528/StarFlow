@@ -109,7 +109,7 @@ class NovelPageViewImageTest {
         val canvasBitmap = Bitmap.createBitmap(600, 900, Bitmap.Config.ARGB_8888)
         view.draw(Canvas(canvasBitmap))
 
-        // 按钮条贴图片右下角 → 用**视图自己那份几何**算出按钮位置，点它必须命中。
+        // 按钮条位置 → 用**视图自己的几何**算出按钮位置，点它必须命中。
         // ⚠️ 按钮个数跟着"有没有译文"变（用户口径：还没翻过时只有一颗「翻译」），
         // 所以这里必须用同一个判据构造期望几何 —— 否则就成了"按另一套布局点按钮"。
         val cw = style.contentWidthPx(600)
@@ -118,7 +118,10 @@ class NovelPageViewImageTest {
         val top = style.topPaddingPx
         val density = ctx.resources.displayMetrics.density
         val withPayload = NovelImageControls.layout(
-            left + size.width, top + size.height, density, NovelImageControls.buttonsFor(true),
+            imageLeft = left, imageTop = top, imageRight = left + size.width, imageBottom = top + size.height,
+            density = density, buttons = NovelImageControls.buttonsFor(true),
+            boundsLeft = style.paddingPx, boundsTop = style.topPaddingPx,
+            boundsRight = style.paddingPx + cw, boundsBottom = 900f - style.bottomPaddingPx,
         )
         assertEquals(
             "有译文时点最左那颗 = 重新翻译",
@@ -168,7 +171,10 @@ class NovelPageViewImageTest {
         val top = style.topPaddingPx
         val density = ctx.resources.displayMetrics.density
         val one = NovelImageControls.layout(
-            left + size.width, top + size.height, density, NovelImageControls.buttonsFor(false),
+            imageLeft = left, imageTop = top, imageRight = left + size.width, imageBottom = top + size.height,
+            density = density, buttons = NovelImageControls.buttonsFor(false),
+            boundsLeft = style.paddingPx, boundsTop = style.topPaddingPx,
+            boundsRight = style.paddingPx + cw, boundsBottom = 900f - style.bottomPaddingPx,
         )
         assertEquals(1, one.size)
         assertEquals(
@@ -177,13 +183,77 @@ class NovelPageViewImageTest {
             view.imageControlAt(one[0].centerX, one[0].centerY),
         )
         // 三颗布局里 TOGGLE 会占的位置（单颗布局里是空白）不该有命中区。
-        // ⚠️ 不能拿 `three[2]`（最右那颗）去断言 —— 单颗按钮也是**贴右边界**的，
-        // 它与三颗布局里的 DELETE 位置完全重合，那里本来就该命中「翻译」。
+        // ⚠️ 不能拿最右那颗去断言 —— 单颗按钮也是按同一套规则摆的，位置可能重合。
         val three = NovelImageControls.layout(
-            left + size.width, top + size.height, density, NovelImageControls.buttonsFor(true),
+            imageLeft = left, imageTop = top, imageRight = left + size.width, imageBottom = top + size.height,
+            density = density, buttons = NovelImageControls.buttonsFor(true),
+            boundsLeft = style.paddingPx, boundsTop = style.topPaddingPx,
+            boundsRight = style.paddingPx + cw, boundsBottom = 900f - style.bottomPaddingPx,
         )
         assertNull("没译文时不该有三态按钮的命中区", view.imageControlAt(three[1].centerX, three[1].centerY))
         assertNull("没译文时左边那两颗的位置都该是空白", view.imageControlAt(three[0].centerX, three[0].centerY))
+        // ⚠️ 不能拿 `three[2]`（最右那颗）去断言：整条是**贴图片右边界**摆的，
+        // 单颗布局那颗与三颗布局的 DELETE 位置重合，那里本来就该命中「翻译」。
+    }
+
+    /**
+     * **很小的图**（电子书里到处都是的占位小图）：按钮不缩，而是落到**图外**，仍然可点。
+     *
+     * 用户口径：「要考虑到多种图片尺寸，翻译按钮可能因为图片尺寸太小没法放在图片上面」。
+     * 这条同时钉住：① 画得出来不崩；② 按钮尺寸不变；③ 按钮在图外但**仍在正文框内**且可命中；
+     * ④ 选中框把图片**包住**（外扩），各种尺寸都看得见"已选中"。
+     */
+    @Test
+    fun `极小的图按钮落到图外且选中框包住图片`() {
+        val ctx = RuntimeEnvironment.getApplication()
+        val image = NovelImage(pngFile(20, 20), 20, 20)
+        val content = contentWithImage(image, withPayload = true)
+        val page = pageWithImage(content)
+
+        val view = NovelPageView(ctx)
+        view.bind(content, page, style, Color.BLACK)
+        view.setImageState(
+            mapOf(1 to NovelImageVisual.TRANSLATED), focused = 1, translations = content.imageTranslations,
+        )
+        view.measure(
+            android.view.View.MeasureSpec.makeMeasureSpec(600, android.view.View.MeasureSpec.EXACTLY),
+            android.view.View.MeasureSpec.makeMeasureSpec(900, android.view.View.MeasureSpec.EXACTLY),
+        )
+        view.layout(0, 0, 600, 900)
+        view.draw(Canvas(Bitmap.createBitmap(600, 900, Bitmap.Config.ARGB_8888)))
+
+        val controls = view.controlsOf()!!
+        // 选中框要把图片包进去（上/下/左/右都外扩）
+        val cw2 = style.contentWidthPx(600)
+        val size2 = NovelImageMetrics.fit(image, cw2, style.contentHeightPx(900))!!
+        val imgLeft = style.paddingPx + (cw2 - size2.width) / 2f
+        assertTrue("选中框左边界要在图片左侧", controls.selection.left < imgLeft)
+        assertTrue("选中框右边界要在图片右侧", controls.selection.right > imgLeft + size2.width)
+        assertTrue("选中框上边界要在图片上方", controls.selection.top <= style.topPaddingPx)
+        assertEquals(
+            "未聚焦时不该有按钮（这条是聚焦态，所以三颗都在）",
+            3,
+            controls.items.size,
+        )
+        val density = ctx.resources.displayMetrics.density
+        for (it in controls.items) {
+            assertEquals(
+                "按钮不因图小而缩水",
+                NovelImageControls.BUTTON_DP * density,
+                it.size,
+                0.01f,
+            )
+            assertTrue("按钮不能画到屏幕外", it.left >= 0f && it.right <= 600f && it.bottom <= 900f)
+        }
+        assertEquals(
+            "图外的按钮同样点得到",
+            NovelImageButton.TRANSLATE,
+            view.imageControlAt(controls.items[0].centerX, controls.items[0].centerY),
+        )
+        assertEquals(
+            NovelImageButton.DELETE,
+            view.imageControlAt(controls.items[2].centerX, controls.items[2].centerY),
+        )
     }
 
     /** 没有译文载荷时也能画（原图态），且**不显示**按钮条（没聚焦）。 */

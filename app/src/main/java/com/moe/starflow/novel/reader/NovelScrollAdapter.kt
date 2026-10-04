@@ -315,6 +315,10 @@ class NovelScrollAdapter : RecyclerView.Adapter<NovelScrollAdapter.VH>() {
                 val size = NovelImageMetrics.fit(img, contentWidth, 0f)
                 if (size != null) {
                     val left = style.paddingPx + (contentWidth - size.width) / 2f
+                    val density = resources.displayMetrics.density
+                    // 选中效果的**填充**画在图片下面（图片会盖掉中间，只在边缘留一圈底色）
+                    val selection = NovelImageControls.selectionRect(left, 0f, left + size.width, size.height, density)
+                    if (focused) NovelImageControls.drawSelectionFill(canvas, selection, density)
                     // 有译文载荷 → 画覆盖层（译文 / 识别原文）；纯图态或没载荷 → 画原图
                     val overlay = payload?.let {
                         NovelImageOverlay.of(context, img, it, visual, size.width.toInt())
@@ -326,7 +330,15 @@ class NovelScrollAdapter : RecyclerView.Adapter<NovelScrollAdapter.VH>() {
                         NovelImageStore.draw(canvas, img, left, 0f, size)
                     }
                     if (drawn) {
-                        if (focused) drawImageControls(canvas, left + size.width, size.height)
+                        if (focused) {
+                            // 描边 + 按钮条画在图片**之后**（描边在图片外侧；图太小按钮会落到图外）
+                            NovelImageControls.drawSelectionFrame(canvas, selection, density)
+                            val items = imageControls()
+                            NovelImageControls.drawBackdrop(canvas, items, density)
+                            for (item in items) {
+                                NovelImageControls.drawIcon(canvas, item, imageIconOf(item.button), density)
+                            }
+                        }
                         return
                     }
                     // 画不出来（文件没了/解码失败）→ 落回下面的占位文本，别留一片空白
@@ -344,36 +356,42 @@ class NovelScrollAdapter : RecyclerView.Adapter<NovelScrollAdapter.VH>() {
             )
         }
 
-        /** 编辑模式里那张图右下角的按钮条（按"有没有译文"决定显示几颗）。 */
-        private fun drawImageControls(canvas: Canvas, right: Float, bottom: Float) {
-            val density = resources.displayMetrics.density
-            val items = NovelImageControls.layout(
-                right, bottom, density,
-                NovelImageControls.buttonsFor(hasTranslation = payload != null),
+        /**
+         * 编辑模式里那张图的**按钮条几何**（画与命中都走它）。
+         *
+         * ⚠️ 滚动模式的条目**高度就是图片高度**（没有额外留白），所以"放到图片下方"没有空间，
+         * 于是把**正文框下方的段间距**也算进可摆放区域（[style.paragraphSpacingPx]）——
+         * 否则极小的图（占位小图）永远只能把按钮缩到看不清。真正的边界由列表自己的
+         * clipping 兜住，这里只是给 `layout` 一个合理的摆放范围。
+         */
+        private fun imageControls(): List<NovelImageControls.Item> {
+            val img = image ?: return emptyList()
+            val contentWidth = style.contentWidthPx(width)
+            val size = NovelImageMetrics.fit(img, contentWidth, 0f) ?: return emptyList()
+            val left = style.paddingPx + (contentWidth - size.width) / 2f
+            return NovelImageControls.layout(
+                imageLeft = left,
+                imageTop = 0f,
+                imageRight = left + size.width,
+                imageBottom = size.height,
+                density = resources.displayMetrics.density,
+                buttons = NovelImageControls.buttonsFor(hasTranslation = payload != null),
+                boundsLeft = style.paddingPx,
+                boundsTop = 0f,
+                boundsRight = style.paddingPx + contentWidth,
+                boundsBottom = height.toFloat().coerceAtLeast(size.height),
             )
-            NovelImageControls.drawBackdrop(canvas, items, density)
-            for (item in items) {
-                NovelImageControls.drawIcon(canvas, item, imageIconOf(item.button), density)
-            }
         }
 
         /**
          * 插图按钮条的命中测试（坐标相对本条目）。
          *
-         * 走法与 [onDraw] 同一份几何（`fit` + 居中 + 同一份按钮列表），
+         * 走法与 [onDraw] 同一份几何（同一个 [imageControls]），
          * 所以"点到的按钮"与"看到的按钮"必然一致。
          */
         fun imageControlAt(x: Float, y: Float): NovelImageButton? {
             if (!focused) return null
-            val img = image ?: return null
-            val contentWidth = style.contentWidthPx(width)
-            val size = NovelImageMetrics.fit(img, contentWidth, 0f) ?: return null
-            val left = style.paddingPx + (contentWidth - size.width) / 2f
-            val items = NovelImageControls.layout(
-                left + size.width, size.height, resources.displayMetrics.density,
-                NovelImageControls.buttonsFor(hasTranslation = payload != null),
-            )
-            return NovelImageControls.hit(items, x, y)
+            return NovelImageControls.hit(imageControls(), x, y)
         }
 
         /** 按钮图标（白色 tint：按钮底是深色药丸）。 */

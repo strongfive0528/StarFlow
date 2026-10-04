@@ -2,6 +2,7 @@ package com.moe.starflow.novel.reader
 
 import android.graphics.Canvas
 import android.graphics.Paint
+import android.graphics.RectF
 import android.graphics.drawable.Drawable
 
 /**
@@ -23,13 +24,14 @@ enum class NovelImageButton {
 }
 
 /**
- * **插图按钮条**的几何与命中测试（纯算术，可普通单测）。
+ * **插图编辑模式**的几何：选中效果 + 按钮条的位置与命中（纯算术，可普通单测）。
  *
  * 用户口径（2026-10）：
  * - 「长按图片 → **出现翻译按钮**，点击翻译才会 OCR 翻译」（长按**不**自动开翻）
  * - 「图片右下角的按钮**小一点、加点透明**」
  * - 「**退出编辑模式隐藏**相关按钮」
- * 所以按钮**画在图上**（贴图片绘制矩形的右下角内侧），而不是另开一个底部面板。
+ * - 「选中图片要有对应的**选中效果**」
+ * - 「要考虑到多种图片尺寸，**翻译按钮可能因为图片尺寸太小没法放在图片上面**」
  *
  * ⚠️ 几何收敛在这里一份：分页模式（[NovelPageView]）与滚动模式
  * （[NovelScrollAdapter.ParagraphView]）各画各的，但**位置与命中必须同源** ——
@@ -50,6 +52,20 @@ object NovelImageControls {
 
     /** 图标在按钮里的内边距（dp）：26dp 的按钮留 5dp，图标 16dp。 */
     private const val ICON_PAD_DP = 5f
+
+    /** 选中框：描边宽度（dp）与向外扩的余量（dp，让描边不压住图片内容）。 */
+    const val SELECTION_BORDER_DP = 2f
+    const val SELECTION_INFLATE_DP = 3f
+
+    /**
+     * 选中效果：半透明填充（与文本段选中的蓝同一个色相，见
+     * [NovelTextRenderer.COLOR_SELECTION]）+ 不透明描边。
+     *
+     * ⚠️ 用**蓝色**而不是翻译的琥珀：琥珀的语义是"这批正在翻译"（[NovelTextRenderer.COLOR_ACTIVE_BATCH]），
+     * 编辑模式与"在翻译"是两件事 —— 而且翻译完之后琥珀就擦掉了，选中态必须一直看得到。
+     */
+    const val SELECTION_FILL = 0x3D55AEEA
+    const val SELECTION_BORDER = 0xFF55AEEA.toInt()
 
     /** 按钮的绘制位置（屏幕/画布坐标，左上右下）。 */
     data class Item(
@@ -79,35 +95,99 @@ object NovelImageControls {
             listOf(NovelImageButton.TRANSLATE)
         }
 
+    /** 选中框的矩形（用**自己的**四浮点盒子，不用 `RectF`）。 */
+    data class Box(val left: Float, val top: Float, val right: Float, val bottom: Float) {
+        /** 画的时候才转 `RectF`（⚠️ `RectF` 在普通 JVM 单测里是空实现，几何不能建在它上面）。 */
+        fun toRectF(): RectF = RectF(left, top, right, bottom)
+    }
+
+    /** 选中框的矩形：图片绘制矩形向外扩 [SELECTION_INFLATE_DP]（描边画在框上、不压住图片内容）。 */
+    fun selectionRect(
+        imageLeft: Float,
+        imageTop: Float,
+        imageRight: Float,
+        imageBottom: Float,
+        density: Float,
+    ): Box {
+        val pad = SELECTION_INFLATE_DP * density
+        return Box(imageLeft - pad, imageTop - pad, imageRight + pad, imageBottom + pad)
+    }
+
     /**
-     * 按钮条的位置：贴 [right]/[bottom]（插图绘制矩形的右下角）**内侧**排一行。
+     * 选中效果的**填充**（画在图片**下面**：图片不透明会把填充盖住，所以它只是"边缘一圈底色"）。
      *
-     * ⚠️ 条带整体夹在图片内：图很窄（竖长条插图）时按比例缩到图宽以内，
-     * 免得按钮画到图外压住正文。
+     * ⚠️ 描边要单独用 [drawSelectionFrame] 画在图片**之后**（[NovelPageView] 那段有自己的
+     * `clipRect`，把描边画在里面会被裁掉一半 —— 而且描边本来就在图片矩形**外面**）。
+     */
+    fun drawSelectionFill(canvas: Canvas, rect: Box, density: Float) {
+        val fill = fillPaint
+        fill.color = SELECTION_FILL
+        val r = 6f * density
+        canvas.drawRoundRect(rect.toRectF(), r, r, fill)
+    }
+
+    /** 选中效果的**描边**（画在图片之后，外扩 [SELECTION_INFLATE_DP]，任何尺寸的图都看得见）。 */
+    fun drawSelectionFrame(canvas: Canvas, rect: Box, density: Float) {
+        val stroke = strokePaint
+        stroke.color = SELECTION_BORDER
+        stroke.strokeWidth = SELECTION_BORDER_DP * density
+        val r = 6f * density
+        canvas.drawRoundRect(rect.toRectF(), r, r, stroke)
+    }
+
+    /**
+     * 按钮条的位置。**三步走**（越靠前越优先）：
+     *
+     * 1. **图片内右下角**（[INSET_DP] 内侧）—— 图片够大时的常规摆放
+     * 2. **图片正下方、与图片右边缘对齐**（[GAP_DP] 之外）—— 图片太窄/太矮时（用户口径：
+     *    「翻译按钮可能因为图片尺寸太小没法放在图片上面」）。⚠️ 绝不再缩按钮：缩到十几 dp
+     *    就点不准了，宁可挪到图外
+     * 3. **图片正上方**（下方没空间时）
+     *
+     * 最后统一夹进 [boundsLeft]..[boundsRight] / [boundsTop]..[boundsBottom]（正文框），
+     * 保证按钮**永远在屏内、可点**；正文框比按钮条还窄（极端分屏）时才等比缩小。
      */
     fun layout(
-        right: Float,
-        bottom: Float,
+        imageLeft: Float,
+        imageTop: Float,
+        imageRight: Float,
+        imageBottom: Float,
         density: Float,
         buttons: List<NovelImageButton> = buttonsFor(hasTranslation = true),
+        boundsLeft: Float = 0f,
+        boundsTop: Float = 0f,
+        boundsRight: Float = imageRight,
+        boundsBottom: Float = imageBottom,
     ): List<Item> {
         if (buttons.isEmpty()) return emptyList()
         val size = BUTTON_DP * density
         val gap = GAP_DP * density
         val inset = INSET_DP * density
-        var width = buttons.size * size + (buttons.size - 1) * gap
-        // ⚠️ 图片比按钮条还窄 → **整体等比缩小**，绝不能设"最小尺寸"下限：
-        // 一设下限就会在极窄的图（占位小图/竖长条）上撑出图外，压住正文那一列
-        // （守卫 `NovelImageControlsTest.窄图里按钮条被夹在图片内` 就是这条）。
-        val avail = (right - inset * 2).coerceAtLeast(1f)
-        val scale = if (width > avail) avail / width else 1f
+        var natural = buttons.size * size + (buttons.size - 1) * gap
+        val availW = (boundsRight - boundsLeft).coerceAtLeast(1f)
+        // 只有"正文框比按钮条还窄"才缩（极端分屏）；图片本身小不缩，改成挪到图外
+        val scale = if (natural > availW) availW / natural else 1f
         val s = size * scale
         val g = gap * scale
-        width = buttons.size * s + (buttons.size - 1) * g
-        val left0 = right - inset - width
-        val top = (bottom - inset - s).coerceAtLeast(0f)
+        natural = buttons.size * s + (buttons.size - 1) * g
+
+        val imgW = imageRight - imageLeft
+        val imgH = imageBottom - imageTop
+        val fitsInside = natural + inset * 2f <= imgW && s + inset * 2f <= imgH
+
+        var left = if (fitsInside) imageRight - inset - natural else imageRight - natural
+        var top = when {
+            fitsInside -> imageBottom - inset - s
+            // 图片下方放得下就放下方；否则放上方；再不行就贴着图片底边（夹取会兜住）
+            imageBottom + gap + s <= boundsBottom -> imageBottom + gap
+            imageTop - gap - s >= boundsTop -> imageTop - gap - s
+            else -> imageBottom - s
+        }
+        left = left.coerceIn(boundsLeft, (boundsRight - natural).coerceAtLeast(boundsLeft))
+        top = top.coerceIn(boundsTop, (boundsBottom - s).coerceAtLeast(boundsTop))
+
         return buttons.mapIndexed { i, b ->
-            val l = left0 + i * (s + g)
+            val l = left + i * (s + g)
             Item(b, l, top, l + s, top + s)
         }
     }
@@ -148,6 +228,10 @@ object NovelImageControls {
     /** 半透明深色底（与 `bg_reader_translate_group` 同一观感，但更透一点：60%）。 */
     private const val BACKDROP_COLOR = 0x991E1E22.toInt()
 
-    /** ⚠️ `by lazy`：纯几何单测在普通 JVM 里跑，类加载时碰 `Paint` 会 "not mocked"。 */
+    /** ⚠️ 都是 `by lazy`：纯几何单测在普通 JVM 里跑，类加载时碰 `Paint` 会 "not mocked"。 */
     private val backdropPaint: Paint by lazy { Paint(Paint.ANTI_ALIAS_FLAG) }
+    private val fillPaint: Paint by lazy { Paint(Paint.ANTI_ALIAS_FLAG) }
+    private val strokePaint: Paint by lazy {
+        Paint(Paint.ANTI_ALIAS_FLAG).apply { style = Paint.Style.STROKE }
+    }
 }

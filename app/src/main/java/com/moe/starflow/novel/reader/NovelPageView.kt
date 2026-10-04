@@ -171,39 +171,61 @@ class NovelPageView(context: Context) : View(context) {
      * [controlsOf]），所以"手指点到的按钮"与"屏幕上画的那个按钮"按定义一致。
      */
     fun imageControlAt(x: Float, y: Float): NovelImageButton? {
-        val items = controlsOf() ?: return null
-        return NovelImageControls.hit(items, x, y)
+        val controls = controlsOf() ?: return null
+        return NovelImageControls.hit(controls.items, x, y)
     }
 
     /**
-     * **正在编辑的那张图**的按钮条几何（没在编辑 / 那张图不在本页 → null）。
+     * **正在编辑的那张图**的几何（没在编辑 / 那张图不在本页 → null）。
      *
      * ⚠️ 画与命中都必须走它：两处各算一遍的话，改一下按钮个数/尺寸就会出现
      * 「画了三颗、只认一颗」这类只能靠肉眼发现的错位。
+     *
+     * @param items 按钮条；[selection] 是选中框（图片矩形向外扩一点）
      */
-    internal fun controlsOf(): List<NovelImageControls.Item>? {
+    internal class ImageControls(
+        val items: List<NovelImageControls.Item>,
+        val selection: NovelImageControls.Box,
+    )
+
+    internal fun controlsOf(): ImageControls? {
         val p = page ?: return null
         val c = content ?: return null
         val focus = focusedImage ?: return null
         ensureLayouts()
         val cw = style.contentWidthPx(width)
-        var out: List<NovelImageControls.Item>? = null
-        NovelPageGeometry.walk(p.segments, { lineHeights[it] }, style.paragraphSpacingPx, style.topPaddingPx) { seg, top, _ ->
+        val boundsLeft = style.paddingPx
+        val boundsTop = style.topPaddingPx
+        val boundsRight = style.paddingPx + cw
+        val boundsBottom = (height - style.bottomPaddingPx).coerceAtLeast(style.topPaddingPx + 1f)
+        val density = resources.displayMetrics.density
+        var out: ImageControls? = null
+        NovelPageGeometry.walk(p.segments, { lineHeights[it] }, style.paragraphSpacingPx, style.topPaddingPx) { seg, top, bottom ->
             if (out != null || seg.paraIndex != focus) return@walk
             val image = c.images[seg.paraIndex] ?: return@walk
             val size = NovelImageMetrics.fit(image, cw, style.contentHeightPx(height)) ?: return@walk
             val left = style.paddingPx + (cw - size.width) / 2f
-            out = controlsAt(left + size.width, top + size.height, seg.paraIndex)
+            out = ImageControls(
+                items = NovelImageControls.layout(
+                    imageLeft = left,
+                    imageTop = top,
+                    imageRight = left + size.width,
+                    imageBottom = bottom,
+                    density = density,
+                    buttons = NovelImageControls.buttonsFor(
+                        hasTranslation = imageTranslations.containsKey(seg.paraIndex),
+                    ),
+                    // ⚠️ 图太小的时候按钮要能落到图外 —— 但**必须留在正文框内**（否则会画到屏幕外/压住 UI）
+                    boundsLeft = boundsLeft,
+                    boundsTop = boundsTop,
+                    boundsRight = boundsRight,
+                    boundsBottom = boundsBottom,
+                ),
+                selection = NovelImageControls.selectionRect(left, top, left + size.width, bottom, density),
+            )
         }
         return out
     }
-
-    /** 右下角在 ([right], [bottom]) 的图，其按钮条（按"有没有译文"决定显示几颗）。 */
-    private fun controlsAt(right: Float, bottom: Float, paraIndex: Int): List<NovelImageControls.Item> =
-        NovelImageControls.layout(
-            right, bottom, resources.displayMetrics.density,
-            NovelImageControls.buttonsFor(hasTranslation = imageTranslations.containsKey(paraIndex)),
-        )
 
     /**
      * 把当前文字色灌进**已经排好**的 layout。
@@ -378,12 +400,18 @@ class NovelPageView(context: Context) : View(context) {
         val cw = style.contentWidthPx(width)
         val size = NovelImageMetrics.fit(image, cw, style.contentHeightPx(height)) ?: return
         val left = style.paddingPx + (cw - size.width) / 2f
+        val imageRight = left + size.width
+        val density = resources.displayMetrics.density
+        val focused = paraIndex == focusedImage
+        val selection = NovelImageControls.selectionRect(left, top, imageRight, bottom, density)
         // 额外裁一道该段自己的高度：图片永远是"画在本段给它记的那条带子里"，
         // 万一哪天公式改了导致尺寸对不上，也只会少画几个像素，不会盖住下一段
         canvas.save()
         canvas.clipRect(0f, top, width.toFloat(), bottom)
         val visual = visualOf(paraIndex)
         val payload = imageTranslations[paraIndex]
+        // **编辑模式**：填充画在图片下面（图片会把中间盖掉，只在边缘留一圈底色）
+        if (focused) NovelImageControls.drawSelectionFill(canvas, selection, density)
         val overlay = if (payload != null) {
             NovelImageOverlay.of(context, image, payload, visual, size.width.toInt())
         } else {
@@ -394,16 +422,18 @@ class NovelPageView(context: Context) : View(context) {
         } else {
             NovelImageStore.draw(canvas, image, left, top, size)
         }
-        // **编辑模式**里那张图：右下角按钮条（翻译 / 三态 / 删除），与命中测试同一份几何
-        if (paraIndex == focusedImage) {
-            val density = resources.displayMetrics.density
-            val items = controlsAt(left + size.width, top + size.height, paraIndex)
+        canvas.restore()
+        // ⚠️ 选中描边与按钮条都画在 `clipRect` **外面**：描边本来就在图片矩形外侧（外扩 3dp），
+        // 画在裁剪里会被切掉上/下两条边；按钮条在"图太小"时会落到图片下方，同样会被裁掉。
+        // 越界由 `NovelImageControls.layout` 的 bounds 夹取兜住（不会画到屏幕外）。
+        if (focused) {
+            NovelImageControls.drawSelectionFrame(canvas, selection, density)
+            val items = controlsOf()?.items.orEmpty()
             NovelImageControls.drawBackdrop(canvas, items, density)
             for (item in items) {
                 NovelImageControls.drawIcon(canvas, item, imageIconOf(item.button, visual, paraIndex), density)
             }
         }
-        canvas.restore()
     }
 
     /** 按钮图标（矢量图，白色 tint：按钮底是深色药丸）。 */
