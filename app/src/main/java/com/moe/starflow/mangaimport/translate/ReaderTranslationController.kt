@@ -466,9 +466,15 @@ class ReaderTranslationController(
                 return null
             }
             val scale = stored.width.toFloat() / spaceWidth
-            if (scale <= 1.001f) {
-                // 尺寸不对（截断/损坏）→ 宁可不放大，也不要把译文画错位
-                LogCollector.w(TAG, "超分底图尺寸异常 ${stored.width}x${stored.height} page=$pageIndex → 回落原图")
+            // ⚠️ 判据与**产出侧**（`SrProcessor`）同源：`SrDisplayBase.isUsableBase`。
+            //    不看"存储有没有成功"，只看"这张图是不是真的比原图大" ——
+            //    不比原图大就只会比原图糊（像素来自被压过的输入），宁可回落原图。
+            if (!SrDisplayBase.isUsableBase(stored.width, spaceWidth)) {
+                LogCollector.w(
+                    TAG,
+                    "超分底图不比原图大 ${stored.width}x${stored.height} vs 原图宽 $spaceWidth" +
+                        " page=$pageIndex → 回落原图",
+                )
                 stored.recycle()
                 return null
             }
@@ -801,6 +807,24 @@ class ReaderTranslationController(
             // 尺寸/模型/字节都从**磁盘上的真实产物**读回来（标记 + 文件本身就是真值），
             // 不从内存里的 bitmap 猜 —— 两处读会漂移。
             val info = SrStore.infoOf(context, manga.id, page, manga.translationKey)
+            // ⚠️ **自愈**：老版本会把"不比原图大"的产物落盘（那时还没有产出侧判据），
+            //    而显示侧 `srBaseFor` 一律丢弃它 → 记录写「完成」、画面永远是原图。
+            //    今天再跑一次超分时就把这种行改写成**真实原因**，让面板与真机画面一致。
+            if (info != null && old.srcWidth > 0 && !SrDisplayBase.isUsableBase(info.width, old.srcWidth)) {
+                LogCollector.w(
+                    TAG,
+                    "超分记录自愈：产物 ${info.width}px 不比原图 ${old.srcWidth}px 大，改记为未产出可用底图 page=$page",
+                )
+                return@upsertSrRow old.copy(
+                    state = ImportedPageSr.STATE_FAILED,
+                    failCode = SrFailReason.NOT_LARGER_THAN_SOURCE.name,
+                    failMessage = SrOutcome.fail(
+                        SrFailReason.NOT_LARGER_THAN_SOURCE,
+                        "stored ${info.width}x${info.height}, source ${old.srcWidth}x${old.srcHeight}",
+                    ).message(context),
+                    finishedAtMs = now,
+                )
+            }
             old.copy(
                 state = ImportedPageSr.STATE_SUCCESS,
                 failCode = null, failMessage = null,

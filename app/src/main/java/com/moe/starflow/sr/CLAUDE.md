@@ -196,6 +196,40 @@ API 已就绪（`forGame=true` 走游戏模式开关、`false` 走漫画模式�
 根因是把「节约空间」当成了**单页尺寸**问题，而它其实是**总容量**问题。
 守卫：`SrReaderWiringTest.theUpscaledProductIsStoredAsIs`（源码级：不许再出现 `clampTo` / `outputBudget`）。
 
+### ⚠️ 产物必须**比原图大**，否则不许落盘（2026-10 真机反馈「超分显示完成但没作用」）
+
+**症状**：超分按钮/记录显示「完成」，画面一点没变（来回切底图也没区别）。
+**根因**（纯算术，可复现）：
+
+```
+300 DPI 的 PDF 页（PdfRasterPolicy 的产物）A4 = 2480×3508
+  → 输入被压到短边 1080（SrDownscale.SHORT_SIDE_TARGET）= 1080×1528
+  → 2× 产物只有 2160px 宽 ≤ 原图 2480px
+  → 显示侧 srBaseFor 判定「不比原图大」→ 丢弃、回落原图（以前只写一条 W 日志）
+  而面板读的是**数据库那行**（当时已写 SUCCESS）→ 界面说完成、画面是原图
+```
+
+**为什么"不比原图大"就必须丢**：超分底图只有在**像素比原图多**时才有意义。它比原图窄时
+只是"更少像素被放大"（像素来自被压过的输入），画上去等于**降画质**。
+
+**修法（两处同源，别再各写一份）**
+- 判据收在 `SrDisplayBase.isUsableBase`（+ `MIN_BASE_SCALE`）：**产出侧**（`SrProcessor`，落盘前拦）
+  与**显示侧**（`reader/ReaderTranslationController.srBaseFor`，取底图时拦）都调它。
+- 产出侧拦下时返回 `SrFailReason.NOT_LARGER_THAN_SOURCE`（**具体文案**，`detail` 里带
+  原图/输入/产物三个尺寸）→「完成」变成「这页本身就比超分能给出的更清晰…已跳过」，
+  不再有幽灵完成态，也省掉一次白跑的推理（`NOT_UPSCALED` 那条只比**输入**，拦不住这种）。
+- 老版本已落盘的这种产物：`markSrFinished` 的**自愈**分支在下次超分时把该行改写成失败 + 原因。
+
+**用户问「为什么 PDF 超分没效果」就照这个答**：2× 产物宽 = 2 × min(原图宽, 1080)（还受引擎输入上限
+2.5MP 二次约束）→ **原图宽 ≥ 2160px 的页超分一定不会变大**：
+A4@300dpi(2480) ✗ / B5@300dpi(2150) 临界 / A5@300dpi(1746) ✓ 只能到 1.24×。
+低分辨率扫描页（800×1200 → 1600×2400）才是超分真正发挥的对象。
+要给"本就高分辨率的页"做真超分，只能**分块（tile）推理再拼接** —— 那是新功能，不是这条链路顺手的改动。
+
+守卫：`SrDisplayBaseTest.a4SizedPageCannotProduceAUsableBase_whileA5Can`（就是上面这段算式）
++ `SrReaderWiringTest.bothSidesShareTheSameBaseUsabilityRule`（两处必须同源、旧的内联阈值不许回来）
++ `SrOutcomeTest`（新失败原因必须有独立文案，中英都缺不了）。
+
 ### ⚠️ 只对齐短边是**不够的**（实现时实测出来的，最关键的一条）
 
 `NcnnSrEngine.maxInputPixels = 10MP / scale²` —— **2x 档只有 2.5MP、Real-ESRGAN 4x 只有 0.625MP**，

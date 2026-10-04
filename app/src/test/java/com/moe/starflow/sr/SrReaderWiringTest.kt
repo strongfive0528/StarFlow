@@ -528,4 +528,27 @@ class SrReaderWiringTest {
                 act.contains("binding.srGroup.visibility = View.GONE"),
         )
     }
+
+    /**
+     * **「超分产物能不能用」的判据只能有一处**（2026-10 真机反馈「超分显示完成但没作用」的守卫）。
+     *
+     * 产出侧（`SrProcessor`）与显示侧（`ReaderTranslationController.srBaseFor`）判同一件事：
+     * 产物是否**比原图大**。各写一份的后果是**静默**的 —— 产出侧存了、显示侧丢弃，
+     * 记录写「完成」而画面一直是原图。所以这里机械校验：两边都调
+     * `SrDisplayBase.isUsableBase`，且显示侧那份内联阈值（`scale <= 1.001f`）已消失。
+     */
+    @Test
+    fun bothSidesShareTheSameBaseUsabilityRule() {
+        val ctl = controller()
+        val processor = read("src/main/java/com/moe/starflow/sr/SrProcessor.kt")
+        assertTrue(
+            "显示侧必须用共享判据 SrDisplayBase.isUsableBase",
+            ctl.contains("SrDisplayBase.isUsableBase("),
+        )
+        assertTrue(
+            "产出侧必须用同一个判据（否则会造出「完成但画面没变」的幽灵记录）",
+            processor.contains("SrDisplayBase.isUsableBase("),
+        )
+        assertFalse("不许再内联 1.001f 这类私有阈值", ctl.contains("scale <= 1.001f"))
+    }
 }

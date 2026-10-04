@@ -1155,6 +1155,7 @@
     <!-- ═══ Super-resolution notices (2026-10: NEVER a vague message — every reason must be spelled out; shown in the in-app status chip, not a Toast) ═══ -->
     <string name="sr_fail_disabled">Super resolution is off: turn on "Super resolution" in the reader\'s Colour panel first</string>
     <string name="sr_fail_nothing_enabled">Nothing to enhance with: no super-resolution model is selected and Anime4K is off</string>
+    <string name="sr_fail_not_larger_than_source">This page is already sharper than super resolution can deliver: the model works on an input shrunk to a 1080 short side, so the result would not be wider than the original and was skipped (sizes below)\nSuper resolution is for low-resolution sources - this page does not need it</string>
     <string name="sr_fail_not_upscaled">Only Anime4K ran, and it does not enlarge — no super-resolution model is selected, or its file is missing\nOpen "Super-resolution models → Super resolution", download a model and tap its name to select it</string>
     <string name="sr_fail_no_model">No super-resolution model selected: open "Super-resolution models → Super resolution" and tap a model name to select it (downloading alone does nothing)</string>
     <string name="sr_fail_model_missing">Model file is missing: %1$s\nThe download may be incomplete, or the file was deleted — please download it again from the model page</string>

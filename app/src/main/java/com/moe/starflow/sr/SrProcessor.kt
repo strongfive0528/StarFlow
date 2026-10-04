@@ -176,6 +176,24 @@ object SrProcessor {
                 LogCollector.d(TAG, "超分产物未放大（${raw.width}px <= 输入 ${feed.width}px），不落盘: $k")
                 return@withContext SrOutcome.fail(SrFailReason.NOT_UPSCALED)
             }
+            // ⚠️ 第二道：产物必须**比原图大**才可能当更好的显示底图（判据与显示侧
+            //    `ReaderTranslationController.srBaseFor` **同源**，见 [SrDisplayBase.isUsableBase]）。
+            //    大图走压缩路径时产物可以 ≤ 原图 —— 最典型的就是 300 DPI 的 PDF 页：
+            //    A4 = 2480px 宽 → 输入压到短边 1080 → 2× 只有 2160px ≤ 2480px。
+            //    这种产物以前照落盘，而显示侧一律丢弃 → **记录写「完成」、画面一直是原图**
+            //    （2026-10 真机反馈的「超分显示完成但没作用」）。存下来没有意义：
+            //    它比原图糊（像素来自被压过的输入），所以这里直接返回**具体原因**。
+            if (!SrDisplayBase.isUsableBase(raw.width, src.width)) {
+                LogCollector.d(
+                    TAG,
+                    "超分产物不比原图大（产物 ${raw.width}px <= 原图 ${src.width}px），不落盘: $k",
+                )
+                return@withContext SrOutcome.fail(
+                    SrFailReason.NOT_LARGER_THAN_SOURCE,
+                    "source ${src.width}x${src.height}, feed ${feed.width}x${feed.height}, " +
+                        "product ${raw.width}x${raw.height}",
+                )
+            }
             // ⚠️ **产物原样落盘，不做任何额外缩放**（用户口径：「超分后肯定比原图大啊」）。
             //    空间由两道**既有**的闸管住，不需要在这里再造一条单页预算：
             //      ① 引擎自己的输出上限（`NcnnSrEngine.maxOutputPixels` = 10MP，超了直接不跑）；
