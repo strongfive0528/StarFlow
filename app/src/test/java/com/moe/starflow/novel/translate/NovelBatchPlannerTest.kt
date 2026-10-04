@@ -253,4 +253,79 @@ class NovelBatchPlannerTest {
         assertTrue(NovelBatchPlanner.planBatches((0..4).toList(), setOf(0, 1, 2, 3, 4), 3).isEmpty())
         assertTrue(NovelBatchPlanner.planBatches(emptyList(), emptySet(), 3).isEmpty())
     }
+
+    // ===== 批内拆「请求单位」（用户口径 2026-10-04）=====
+    //
+    // 「图片虽然属于某个批次的一个段落，但是他应该是**单独发送一个 api 请求**，不要和前面的文本或者
+    // 其他图片识别结果放到一起发送出去；例如一个批次：**文本，图片，文本**，三个段落全部变黄，
+    // 但是要**分三次 api 请求**；如果是**文本，文本，图片**的批次，则前两个作为一次请求，
+    // 图片识别的结果单独一个 api 请求」
+
+    /** 段 0..4：0/2/4 正文、1/3 插图、5 过短段。 */
+    private val mixed = listOf(
+        NovelParagraph(0, NovelParagraphType.TEXT, "第一段"),
+        NovelParagraph(1, NovelParagraphType.IMAGE, "📷 [图片]"),
+        NovelParagraph(2, NovelParagraphType.TEXT, "第二段"),
+        NovelParagraph(3, NovelParagraphType.IMAGE, "📷 [图片]"),
+        NovelParagraph(4, NovelParagraphType.TEXT, "第三段"),
+        NovelParagraph(5, NovelParagraphType.SKIP, "……"),
+    )
+
+    private fun runs(vararg indexes: Int, includeImages: Boolean = true) =
+        NovelBatchPlanner.requestRuns(mixed, indexes.toList(), includeImages)
+
+    /** **文本，图片，文本 → 三次请求**（用户点名的场景）。 */
+    @Test
+    fun `文图文拆成三次请求`() {
+        val r = runs(0, 1, 2)
+        assertEquals(3, r.size)
+        assertEquals(listOf(listOf(0), listOf(1), listOf(2)), r.map { it.paraIndexes })
+        assertEquals(listOf(false, true, false), r.map { it.isImage })
+    }
+
+    /** **文本，文本，图片 → 两次请求**（前两个合并，图片单独）。 */
+    @Test
+    fun `文文图拆成两次请求`() {
+        val r = runs(0, 2, 3)
+        assertEquals("两个请求：前两段文本合并 + 图片独占", 2, r.size)
+        assertEquals("按文档顺序：先是那两段文本、再是插图", listOf(false, true), r.map { it.isImage })
+        assertEquals("连续的文本要合并成一个请求", listOf(0, 2), r.first().paraIndexes)
+        assertEquals(listOf(3), r.last().paraIndexes)
+    }
+
+    /** 连续的插图**各自独立**成请求（一张一次 OCR），批本身照旧不拆。 */
+    @Test
+    fun `连续的插图各自独立成请求`() {
+        val r = NovelBatchPlanner.requestRuns(mixed, listOf(1, 3), includeImages = true)
+        assertEquals(listOf(listOf(1), listOf(3)), r.map { it.paraIndexes })
+        assertTrue("两张图各自独立，绝不合并", r.all { it.isImage })
+    }
+
+    /** 一批纯文本 → **一次请求**（老行为零回归）。 */
+    @Test
+    fun `纯文本批仍是一次请求`() {
+        val r = runs(0, 2, 4)
+        assertEquals(1, r.size)
+        assertEquals(listOf(0, 2, 4), r.single().paraIndexes)
+    }
+
+    /** 开关关着（不翻图片）→ 插图段直接不出现在请求里。 */
+    @Test
+    fun `不翻图片时插图不进请求`() {
+        val r = runs(0, 1, 2, includeImages = false)
+        assertEquals(listOf(listOf(0, 2)), r.map { it.paraIndexes })
+    }
+
+    /** 过短段（SKIP）既不进文本请求也不独自成请求。 */
+    @Test
+    fun `过短段不进任何请求`() {
+        assertTrue(runs(5).isEmpty())
+        assertEquals(listOf(listOf(0, 4)), runs(0, 5, 4).map { it.paraIndexes })
+    }
+
+    /** 空批 → 空（调用方据此早退，不发任何请求）。 */
+    @Test
+    fun `空批没有请求`() {
+        assertTrue(NovelBatchPlanner.requestRuns(mixed, emptyList(), includeImages = true).isEmpty())
+    }
 }

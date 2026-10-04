@@ -153,6 +153,8 @@ class NovelChapterJobHost(
             imageHost = { imageHostOrNull() },
             // 批内插图进度（串行 OCR，一张几秒）→ 通知栏 + 阅读器浮层都要显示"第 i/N 张"
             onImageProgress = { ch, i, n -> onImageStageInternal(ch, i, n) },
+            // 一个请求单位落库 → 阅读器立刻上屏（先完成先显示：一张插图 OCR 完就先画出来）
+            onUnitSettled = { ch, paras -> onUnitSettled?.invoke(ch, paras) },
         ).also { translatorCache = it }
     }
 
@@ -165,6 +167,18 @@ class NovelChapterJobHost(
      */
     @Volatile
     var onImageStage: ((chapter: Int, index: Int, total: Int) -> Unit)? = null
+
+    /**
+     * **一个请求单位翻完并落库**（`(chapterIndex, 段号)`）→ 阅读器立刻把那一段/那张图上屏。
+     *
+     * ⚠️ 与 [onImageStage] 同一套纪律：宿主是**应用级**的，这里只能放一个不持有 Activity 的回调，
+     * 阅读器 `onStart` 赋值 / `onStop` 清空。null 时任务照跑，只是不实时上屏（回到阅读器读库即可）。
+     *
+     * 用途见 [NovelChapterTranslator] 的 `onUnitSettled`：整章任务里一批可能发好几个请求
+     * （连续文本一个、每张插图各一个），用户要**先完成先显示**，而不是等整批跑完一起出现。
+     */
+    @Volatile
+    var onUnitSettled: ((chapter: Int, paraIndexes: List<Int>) -> Unit)? = null
 
     /**
      * 图片翻译宿主（**面板开关关着时返回 null** —— 那时整章任务照旧只翻文字）。

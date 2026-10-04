@@ -87,4 +87,98 @@ class NovelImageEditWiringTest {
         assertTrue("拿不到聚焦图就直接返回 null", controls.contains("val focus = focusedImage ?: return null"))
         assertTrue("画之前也要判聚焦", pageView.contains("if (focused) {"))
     }
+
+    // ===== 点图看全图 + 实时上屏（用户口径 2026-10-04）=====
+
+    /**
+     * **点一下插图 = 打开全屏查看器**（不再是"翻页"）。
+     *
+     * 用户口径：「**点击图片应该要可以放大查看全图**（这个查看全图就复用漫画阅读器那边的逻辑，
+     * 底部右下角也要有翻译，切换和删除按钮这些基础按钮）」。
+     */
+    @Test
+    fun `点插图打开全屏查看器`() {
+        val body = bodyOf("private fun handleTap(")
+        assertTrue("点插图要开查看器", body.contains("openImageViewer("))
+        // ⚠️ 顺序关键：必须在九宫格 `when { isScrollMode() -> ... turnPage ... }` 之前 return，
+        // 否则整页插图那一下会被当成翻页（用户点了半天图没反应）
+        val openAt = body.indexOf("openImageViewer(")
+        val turnAt = body.indexOf("turnPage(")
+        assertTrue("开查看器要在翻页判定之前", openAt in 0 until turnAt)
+    }
+
+    /** 查看器的三颗按钮**复用**图上那排的实现（在途去重/落库/上屏只有一份）。 */
+    @Test
+    fun `查看器按钮走同一条实现`() {
+        val body = bodyOf("private fun openImageViewer(")
+        for (f in listOf(
+            "override fun onTranslateImage(paraIndex: Int) = translateImageNow(paraIndex)",
+            "override fun onToggleImageVisual(paraIndex: Int) = cycleImageVisual(paraIndex)",
+            "override fun onDeleteImageTranslation(paraIndex: Int) = deleteImageTranslation(paraIndex)",
+        )) {
+            assertTrue("查看器里必须直接复用 $f", body.contains(f))
+        }
+        // 查看器开着的期间，图上/查看器里的状态一变就要重画（翻译完成、切三态、删译文）
+        val chrome = bodyOf("private fun refreshImageChrome(")
+        assertTrue("状态变化要推给查看器", chrome.contains("imageViewer?.refresh()"))
+    }
+
+    /** 查看器是 Dialog，**必须**在 onStop/onDestroy 收掉（否则窗口泄漏）。 */
+    @Test
+    fun `退出阅读器收掉查看器`() {
+        assertTrue("onStop 要收", bodyOf("override fun onStop(").contains("imageViewer?.dismiss()"))
+        assertTrue("onDestroy 要兜底", bodyOf("override fun onDestroy(").contains("imageViewer?.dismiss()"))
+    }
+
+    /**
+     * **一个请求单位落库就上屏**（"先完成先显示"）—— 四条翻译路都汇到翻译器这一个回调上。
+     */
+    @Test
+    fun `落库即上报接线齐全`() {
+        assertTrue(
+            "阅读器自己的翻译器要接 onUnitSettled",
+            activity.contains("onUnitSettled = { ch, paras -> onUnitSettled(ch, paras) }"),
+        )
+        assertTrue(
+            "onStart 要把回调挂到整章宿主上",
+            bodyOf("override fun onStart(").contains("chapterHost?.onUnitSettled = { ch, paras -> onUnitSettled(ch, paras) }"),
+        )
+        assertTrue(
+            "onStop 要摘掉（宿主是应用级的，挂着就是泄漏）",
+            bodyOf("override fun onStop(").contains("chapterHost?.onUnitSettled = null"),
+        )
+        val host = read("src/main/java/com/moe/starflow/novel/translate/NovelChapterJobHost.kt")
+        assertTrue(
+            "宿主自己的翻译器也要接（整章任务那条路）",
+            host.contains("onUnitSettled = { ch, paras -> onUnitSettled?.invoke(ch, paras) }"),
+        )
+    }
+
+    /**
+     * **插图走轻量上屏**（只重读载荷 + 重画，不重排整章）。
+     *
+     * 插图段的高度由图片自身尺寸定，与"有没有译文"无关 —— 走 `refreshTranslations → loadChapter`
+     * 会白白重排整章，还会把阅读位置掀一下（三张图就是三次）。
+     */
+    @Test
+    fun `插图落库只重画不重排`() {
+        val body = bodyOf("private suspend fun applyUnitResult(")
+        assertTrue("插图走载荷轻量路径", body.contains("loadImageTranslations("))
+        assertTrue("文本才需要重排", body.contains("refreshTranslations()"))
+    }
+
+    /**
+     * **「刚翻完」的高亮**：4 种翻译模式共用 `onUnitSettled` 这一条接线，
+     * 两种阅读模式的视图都要收到（与选中/失败/在飞同一套刷新方式）。
+     */
+    @Test
+    fun `刚翻完的高亮推给两种阅读模式`() {
+        val body = bodyOf("private fun refreshRecentHighlight(")
+        assertTrue(body.contains("pageAdapter.setRecentBatch("))
+        assertTrue(body.contains("scrollAdapter.setRecentBatch("))
+        // ⚠️ 同一章的重排（译文到达自己触发的那次 loadChapter）**不能**把高亮清掉，
+        // 只有真的换章才清 —— 判据是入口处的 chapterIndex（那时它还是旧章）
+        val load = bodyOf("private fun loadChapter(")
+        assertTrue("换章才清高亮", load.contains("if (index != chapterIndex && recentPara.isNotEmpty())"))
+    }
 }

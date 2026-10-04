@@ -179,6 +179,138 @@ class NovelChapterTranslatorTest {
         assertEquals("这张图里没识别到文字", row.failCode)
     }
 
+    // ===== 批内拆请求 + 先完成先显示（用户口径 2026-10-04）=====
+
+    /**
+     * **文本，图片，文本 → 三次请求**，且**顺序就是文档顺序**。
+     *
+     * 用户口径：「例如一个批次：文本，图片，文本，三个段落全部变黄，但是要分三次 api 请求」。
+     * ⚠️ 三次请求 ≠ 三个批：批仍是进度/高亮/配额的单位（这一条由 `NovelBatchPlannerTest` 与
+     * 队列的并发测试分别钉着）。
+     */
+    @Test
+    fun `文图文一批发三次请求`() = runBlocking {
+        var hostCalls = 0
+        val fake = FakeTranslator()
+        val settled = mutableListOf<List<Int>>()
+        val t = NovelChapterTranslator(
+            dao, NovelTranslationEngine(fake), SPLIT_VERSION,
+            imageHost = {
+                NovelImageHost(
+                    fileOf = { _, _, _ -> java.io.File("/tmp/1/cover.png") },
+                    translate = { _, _, _ -> hostCalls++; NovelImageOutcome(payloadOf(), null) },
+                )
+            },
+            onUnitSettled = { _, paras -> settled += paras },
+        )
+
+        val r = t.translateBatch(book, 0, withImage, listOf(0, 1, 2), "ja", "zh", "fake")
+
+        assertEquals("两条文本段各自一次请求（被插图隔开，不能合并）", 2, fake.calls)
+        assertEquals("插图一次 OCR", 1, hostCalls)
+        assertEquals(setOf(0, 1, 2), r.translations.keys)
+        // **先完成先显示**：落库顺序 = 请求顺序 = 文本0 → 图 → 文本2
+        assertEquals(listOf(listOf(0), listOf(1), listOf(2)), settled)
+    }
+
+    /**
+     * **文本，文本，图片 → 两次请求**（前两段合并成一次）。
+     *
+     * 用户口径：「如果是文本，文本，图片的批次，则前两个作为一次请求，图片识别的结果单独一个 api 请求」。
+     */
+    @Test
+    fun `文文图一批发两次请求`() = runBlocking {
+        var hostCalls = 0
+        val fake = FakeTranslator()
+        val settled = mutableListOf<List<Int>>()
+        // 段 0/1 正文、段 2 插图（**按文档顺序**：文本，文本，图片）
+        val batch = listOf(
+            NovelParagraph(0, NovelParagraphType.TEXT, "第一段原文"),
+            NovelParagraph(1, NovelParagraphType.TEXT, "第二段原文"),
+            NovelParagraph(2, NovelParagraphType.IMAGE, "📷 [图片]"),
+        )
+        val t = NovelChapterTranslator(
+            dao, NovelTranslationEngine(fake), SPLIT_VERSION,
+            imageHost = {
+                NovelImageHost(
+                    fileOf = { _, _, _ -> java.io.File("/tmp/1/cover.png") },
+                    translate = { _, _, _ -> hostCalls++; NovelImageOutcome(payloadOf(), null) },
+                )
+            },
+            onUnitSettled = { _, paras -> settled += paras },
+        )
+
+        t.translateBatch(book, 0, batch, listOf(0, 1, 2), "ja", "zh", "fake")
+
+        assertEquals("两段文本合并成一次请求", 1, fake.calls)
+        assertEquals("插图一次 OCR", 1, hostCalls)
+        assertEquals("合并的那一次要把两段一起报上来", listOf(listOf(0, 1), listOf(2)), settled)
+    }
+
+    /**
+     * **一张插图落库就报一次**（不必等这一批剩下的插图/文本跑完）。
+     *
+     * 用户口径：「应该是**先 ocr 完成返回的就先显示结果**，而不是非要等到整个批次都完成再一起显示」。
+     * 三张图的批（每批 3 段）→ 三次上报，每次一段，顺序即 OCR 顺序。
+     */
+    @Test
+    fun `三张插图逐张上报`() = runBlocking {
+        val three = listOf(
+            NovelParagraph(0, NovelParagraphType.IMAGE, "📷 [图片]"),
+            NovelParagraph(1, NovelParagraphType.IMAGE, "📷 [图片]"),
+            NovelParagraph(2, NovelParagraphType.IMAGE, "📷 [图片]"),
+        )
+        val settled = mutableListOf<List<Int>>()
+        val progress = mutableListOf<Pair<Int, Int>>()
+        val t = NovelChapterTranslator(
+            dao, NovelTranslationEngine(FakeTranslator()), SPLIT_VERSION,
+            imageHost = {
+                NovelImageHost(
+                    fileOf = { _, _, _ -> java.io.File("/tmp/1/cover.png") },
+                    translate = { _, _, _ -> NovelImageOutcome(payloadOf(), null) },
+                )
+            },
+            onImageProgress = { _, i, n -> progress += i to n },
+            onUnitSettled = { _, paras -> settled += paras },
+        )
+
+        val r = t.translateBatch(book, 0, three, listOf(0, 1, 2), "ja", "zh", "fake")
+
+        assertEquals(setOf(0, 1, 2), r.translations.keys)
+        assertEquals("逐张上报（先完成先显示）", listOf(listOf(0), listOf(1), listOf(2)), settled)
+        assertEquals("提示系统按张计数，跑完清零", listOf(1 to 3, 2 to 3, 3 to 3, 0 to 3), progress)
+    }
+
+    /** 文本那半被超长预警取消时，同一批里的插图**照常翻**（不该被一起吞掉）。 */
+    @Test
+    fun `取消文本不影响同批插图`() = runBlocking {
+        var hostCalls = 0
+        val fake = FakeTranslator()
+        val t = NovelChapterTranslator(
+            dao, NovelTranslationEngine(fake), SPLIT_VERSION,
+            warnGate = NovelBatchWarnGate(threshold = { 1 }, confirm = { _, _ -> false }),
+            imageHost = {
+                NovelImageHost(
+                    fileOf = { _, _, _ -> java.io.File("/tmp/1/cover.png") },
+                    translate = { _, _, _ -> hostCalls++; NovelImageOutcome(payloadOf(), null) },
+                )
+            },
+        )
+
+        val r = t.translateBatch(book, 0, withImage, listOf(0, 1, 2), "ja", "zh", "fake")
+
+        assertEquals("文本一个请求都不发", 0, fake.calls)
+        assertEquals("插图照翻", 1, hostCalls)
+        assertEquals(setOf(1), r.translations.keys)
+        val rows = dao.forChapter(1, "5000", 0, SPLIT_VERSION)
+        assertTrue("被取消的文本一个字的库都不写（可重来）", rows.none { it.paraIndex == 0 })
+        assertEquals(
+            "插图那一行是成功的",
+            NovelParagraphTranslation.STATE_SUCCESS,
+            rows.first { it.paraIndex == 1 }.state,
+        )
+    }
+
     @Before
     fun setUp() {
         val ctx: Context = RuntimeEnvironment.getApplication()

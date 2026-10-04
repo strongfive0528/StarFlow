@@ -39,6 +39,9 @@ class NovelScrollAdapter : RecyclerView.Adapter<NovelScrollAdapter.VH>() {
     /** 「翻失败了」的段（淡红底）。 */
     private var failedBatch: Set<Int> = emptySet()
 
+    /** **上一次刚翻完**的段（淡绿底；见 [NovelTextRenderer.COLOR_LAST_TRANSLATED]）。 */
+    private var recentBatch: Set<Int> = emptySet()
+
     /** 每张插图的显示态（`段号 -> 三态`）；表里没有 = 译文态。 */
     private var imageVisuals: Map<Int, NovelImageVisual> = emptyMap()
 
@@ -92,6 +95,13 @@ class NovelScrollAdapter : RecyclerView.Adapter<NovelScrollAdapter.VH>() {
         notifyItemRangeChanged(0, itemCount)
     }
 
+    /** 「上一次刚翻完」的高亮变化（只重画）。 */
+    fun setRecentBatch(sel: Set<Int>) {
+        if (recentBatch == sel) return
+        recentBatch = sel
+        notifyItemRangeChanged(0, itemCount)
+    }
+
     /** 插图显示态 + 聚焦态变化（只重画：插图高度与显示态无关）。 */
     fun setImageState(
         visuals: Map<Int, NovelImageVisual>,
@@ -142,6 +152,7 @@ class NovelScrollAdapter : RecyclerView.Adapter<NovelScrollAdapter.VH>() {
             selected = para.index in selected,
             active = para.index in activeBatch,
             failed = para.index in failedBatch,
+            recent = para.index in recentBatch,
         )
     }
 
@@ -155,6 +166,7 @@ class NovelScrollAdapter : RecyclerView.Adapter<NovelScrollAdapter.VH>() {
         private var selected: Boolean = false
         private var active: Boolean = false
         private var failed: Boolean = false
+        private var recent: Boolean = false
 
         /**
          * 这一段的插图（有图就**画图不画那串 `📷 [图片]` 占位文本**）。
@@ -233,11 +245,13 @@ class NovelScrollAdapter : RecyclerView.Adapter<NovelScrollAdapter.VH>() {
             selected: Boolean = false,
             active: Boolean = false,
             failed: Boolean = false,
+            recent: Boolean = false,
         ) {
             if (this.text == text && this.style == style && this.textColor == textColor &&
                 this.backgroundColor == backgroundColor && this.image == image &&
                 this.payload == payload && this.visual == visual && this.focused == focused &&
-                this.selected == selected && this.active == active && this.failed == failed
+                this.selected == selected && this.active == active && this.failed == failed &&
+                this.recent == recent
             ) {
                 return
             }
@@ -256,12 +270,15 @@ class NovelScrollAdapter : RecyclerView.Adapter<NovelScrollAdapter.VH>() {
             this.selected = selected
             this.active = active
             this.failed = failed
-            // 底色优先级：**选中 > 失败 > 正在翻译 > 阅读背景**。
-            // 「正在翻译」用半透明琥珀、「失败」用半透明淡红：深浅两种背景下都看得见，又不盖住正文
+            this.recent = recent
+            // 底色优先级：**选中 > 失败 > 正在翻译 > 刚翻完 > 阅读背景**。
+            // 「正在翻译」用半透明琥珀、「失败」用半透明淡红、「刚翻完」用半透明淡绿：
+            // 深浅两种背景下都看得见，又不盖住正文
             val want = when {
                 selected -> NovelTextRenderer.COLOR_SELECTION
                 failed -> NovelTextRenderer.COLOR_FAILED_BATCH
                 active -> NovelTextRenderer.COLOR_ACTIVE_BATCH
+                recent -> NovelTextRenderer.COLOR_LAST_TRANSLATED
                 else -> backgroundColor
             }
             // ⚠️ 底色变了才动 background：setBackground/setBackgroundColor 内部都会 requestLayout，
@@ -335,8 +352,9 @@ class NovelScrollAdapter : RecyclerView.Adapter<NovelScrollAdapter.VH>() {
                         // 「这几张图正在翻」要有可见的黄框（用户口径：三张图都要显示黄色状态）
                         val frame = when {
                             focused -> NovelImageControls.SELECTION_BORDER to NovelImageControls.SELECTION_BORDER_DP
-                            failed -> NovelTextRenderer.COLOR_FAILED_BATCH to 3f
-                            active -> NovelTextRenderer.COLOR_ACTIVE_BATCH to 3f
+                            failed -> NovelTextRenderer.BORDER_FAILED_BATCH to 3f
+                            active -> NovelTextRenderer.BORDER_ACTIVE_BATCH to 3f
+                            recent -> NovelTextRenderer.BORDER_LAST_TRANSLATED to 3f
                             else -> null
                         }
                         if (frame != null) {

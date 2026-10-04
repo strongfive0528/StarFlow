@@ -1,0 +1,76 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+  插图全屏查看器（点一下正文里的插图打开）。
+
+  ⚠️ 底必须是**不透明黑**：这是"看全图"，任何底色露出一点都会让别人以为看到了图的一部分。
+  ⚠️ 图片用漫画那套 `ZoomableImageView`（双指缩放 / 双击缩放 / 拖动平移）——
+  与漫画阅读器的看图手势**同一份实现**，不另写一套（两套迟早手感不一样）。
+  ⚠️ 右下角三颗按钮与图上那排**同一套语义**（`NovelImageControls.buttonsFor`）：
+  没译文时只显示「翻译」，有译文才出现「切换 / 删除」。按钮显隐由 `NovelImageViewer` 按状态显式赋值
+  （行/弹窗复用后每个状态都必须显式设，漏一处就是"上一次的状态残留"）。
+-->
+<FrameLayout xmlns:android="http://schemas.android.com/apk/res/android"
+    android:layout_width="match_parent"
+    android:layout_height="match_parent"
+    android:background="#FF000000">
+
+    <com.moe.starflow.ui.viewer.ZoomableImageView
+        android:id="@+id/iv_novel_image"
+        android:layout_width="match_parent"
+        android:layout_height="match_parent"
+        android:contentDescription="@string/novel_image_viewer_hint" />
+
+    <TextView
+        android:id="@+id/tv_novel_image_hint"
+        android:layout_width="wrap_content"
+        android:layout_height="wrap_content"
+        android:layout_gravity="bottom|start"
+        android:layout_margin="16dp"
+        android:text="@string/novel_image_viewer_hint"
+        android:textColor="#B3FFFFFF"
+        android:textSize="12sp" />
+
+    <LinearLayout
+        android:id="@+id/ll_novel_image_actions"
+        android:layout_width="wrap_content"
+        android:layout_height="wrap_content"
+        android:layout_gravity="bottom|end"
+        android:layout_margin="16dp"
+        android:background="@drawable/bg_reader_translate_group"
+        android:gravity="center_vertical"
+        android:orientation="horizontal"
+        android:padding="6dp">
+
+        <androidx.appcompat.widget.AppCompatImageButton
+            android:id="@+id/btn_novel_image_translate"
+            android:layout_width="40dp"
+            android:layout_height="40dp"
+            android:background="?attr/selectableItemBackgroundBorderless"
+            android:contentDescription="@string/novel_image_retranslate"
+            android:scaleType="centerInside"
+            android:src="@drawable/ic_reader_translate"
+            android:tint="#FFFFFFFF" />
+
+        <androidx.appcompat.widget.AppCompatImageButton
+            android:id="@+id/btn_novel_image_toggle"
+            android:layout_width="40dp"
+            android:layout_height="40dp"
+            android:layout_marginStart="6dp"
+            android:background="?attr/selectableItemBackgroundBorderless"
+            android:contentDescription="@string/novel_image_toggle"
+            android:scaleType="centerInside"
+            android:src="@drawable/ic_display_translated"
+            android:tint="#FFFFFFFF" />
+
+        <androidx.appcompat.widget.AppCompatImageButton
+            android:id="@+id/btn_novel_image_delete"
+            android:layout_width="40dp"
+            android:layout_height="40dp"
+            android:layout_marginStart="6dp"
+            android:background="?attr/selectableItemBackgroundBorderless"
+            android:contentDescription="@string/novel_image_delete"
+            android:scaleType="centerInside"
+            android:src="@drawable/ic_action_delete"
+            android:tint="#FFFFFFFF" />
+    </LinearLayout>
+</FrameLayout>

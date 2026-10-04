@@ -316,6 +316,17 @@ class NovelReaderActivity : AppCompatActivity() {
     private val imageVisuals = HashMap<Int, NovelImageVisual>()
 
     /**
+     * **上一次翻译完成的那几段**（用户口径 2026-10-04：「上一次翻译完成的段落，不管是对比还是
+     * 原文模式，都要换一个背景色用来提示刚刚翻译的是哪一段，4 种翻译模式都要有这个机制」）。
+     *
+     * ⚠️ 只留**最后一次**（不是累积的集合）：语义是"刚刚翻的是哪几段"，用来在译文到达引起的
+     * 重排之后重新对上阅读位置。它在原文/双语/译文三种显示模式下都画（高亮按**段号**算，
+     * 与显示文本无关），4 种翻译模式（手动/自动/增量/整章）共用 [onUnitSettled] 这一条接线。
+     * 换章时清空（下一条见 [loadChapter]），别的章翻完不影响当前章的高亮。
+     */
+    private var recentPara: Set<Int> = emptySet()
+
+    /**
      * 当前**聚焦的那张插图**（长按选中）：只有它显示右下角那排按钮
      * （三态 / 重翻 / 删除，见 [NovelImageControls]）。点别处、翻页、切章都清掉。
      */
@@ -324,6 +335,13 @@ class NovelReaderActivity : AppCompatActivity() {
     /** 在途的图片翻译（长按触发那次）；切章/退出要取消。⚠️ `@Volatile`：队列线程会读它判"这张图在翻"。 */
     @Volatile
     private var imageJob: Job? = null
+
+    /**
+     * **插图全屏查看器**（点一下插图打开，见 [NovelImageViewer]）。
+     *
+     * 同一时刻最多一个；`onStop`/`onDestroy` 必须收掉（Dialog 持有 window token，留着即泄漏）。
+     */
+    private var imageViewer: NovelImageViewer? = null
 
     /**
      * 「正在识别插图 第 i/N 张」的浮层文案；null = 没有插图在跑（用队列的默认文案）。
@@ -469,6 +487,8 @@ class NovelReaderActivity : AppCompatActivity() {
         // ⚠️ **整章任务在阅读器关掉时也能跑**，所以它的插图进度回调必须**进出阅读器时挂/摘**：
         // 不摘就是「宿主（应用级）持着已销毁的 Activity」—— 泄漏 + 往死掉的界面刷 UI。
         chapterHost?.onImageStage = { ch, i, n -> onImageStage(ch, i, n) }
+        // 同一个理由：整章任务每落库一个请求单位也要**实时上屏**（否则插图要等整批跑完才出现）
+        chapterHost?.onUnitSettled = { ch, paras -> onUnitSettled(ch, paras) }
         // 从设置页返回必须重建：字号/字距等是在 Activity 创建时读进缓存、并已由渲染结果固化的，
         // 就地刷新既漏项又容易只改一半（与漫画同一套理由）。
         if (returnedFromSettings) {
@@ -509,6 +529,7 @@ class NovelReaderActivity : AppCompatActivity() {
         autoTurnJob = null
         // 摘掉整章任务的插图进度回调（宿主是应用级的，挂着就是泄漏 + 往死界面刷 UI）
         chapterHost?.onImageStage = null
+        chapterHost?.onUnitSettled = null
         imageStageText = null
         imageStageChapter = -1
         // ⚠️ 用户口径：「打开菜单或者**退出阅读器**自动暂停回退手动，但我发现这个暂停没有
@@ -532,6 +553,9 @@ class NovelReaderActivity : AppCompatActivity() {
         // 长按翻译一张插图也在途（它持 OcrLock、几秒钟）：退出/切后台同样掐掉
         imageJob?.cancel()
         imageJob = null
+        // 插图全屏查看器也要收（Dialog 持 window token，切后台还开着就是窗口泄漏）
+        imageViewer?.dismiss()
+        imageViewer = null
         focusedImagePara = null
         queue?.stop()
         queueRunning = false
@@ -615,6 +639,9 @@ class NovelReaderActivity : AppCompatActivity() {
         jobFinishedListener = null
         chapterHost?.unbindUi()
         chapterHost = null
+        // 兜底：`onStop` 没走到时（进程被杀之类）也别把查看器窗口留在系统里
+        imageViewer?.dismiss()
+        imageViewer = null
         book?.let { NovelTranslationHub.releaseIfIdle(it.id) }
         if (::repository.isInitialized) repository.evictAll()
         // ⚠️ 状态浮层是**进程级 TYPE_APPLICATION_OVERLAY 系统窗口**，不清会挂在桌面/别的应用上
@@ -657,6 +684,8 @@ class NovelReaderActivity : AppCompatActivity() {
         imageHost = { imageHostOrNull() },
         // 批内插图串行 OCR，一张几秒：浮层要说得出"现在是第几张"（用户口径 2026-10-04）
         onImageProgress = { ch, index, total -> onImageStage(ch, index, total) },
+        // 一个请求单位落库就上报：**先完成先显示**（不等整批跑完），同时点亮"刚翻完的是哪几段"
+        onUnitSettled = { ch, paras -> onUnitSettled(ch, paras) },
     )
 
     /**
@@ -685,6 +714,63 @@ class NovelReaderActivity : AppCompatActivity() {
             // 通知栏同一条状态（前台队列在跑时才会真的刷）
             updateReaderTranslationNotify(queueState)
         }
+    }
+
+    /**
+     * **一个请求单位翻完并落库**（`(chapter, 那几段)`）—— 先完成先显示 + 点亮"刚翻的是哪几段"。
+     *
+     * 用户口径 2026-10-04：「当前多张图片的结果**一起出现**，应该是**先 ocr 完成返回的就先显示结果**，
+     * 而不是非要等到整个批次都完成再一起显示」+「上一次翻译完成的段落（不管是对比还是原文模式）
+     * 都要**换一个背景色**用来提示刚刚翻译的是哪一段，4 种翻译模式都要有」。
+     *
+     * 这个回调被翻译器在**每落库一个请求单位**时调用（见 `NovelChapterTranslator.onUnitSettled`），
+     * 而翻译器是**四条路共用**的：手动一批 / 自动 / 增量（阅读器队列那份实例）、
+     * 整章任务（`NovelChapterJobHost` 那份实例，经它转一手）—— 所以一处接线四种模式全生效。
+     *
+     * ⚠️ 可能在**任意线程**被调（队列的 `Dispatchers.IO`、或章任务的应用级 scope）→ 只写内存态，
+     * UI 与库读取一律切主线程。
+     * ⚠️ 章节号不匹配就整个丢掉（整章任务可能在翻**别的章**；那章的译文由 `loadChapter` 负责）。
+     */
+    private fun onUnitSettled(chapter: Int, paras: List<Int>) {
+        if (chapter != chapterIndex || paras.isEmpty()) return
+        // 高亮只留**最后一次**翻完的那几个段（"刚刚翻译的是哪一段"），随下一次落库自然替换
+        recentPara = paras.toSet()
+        runOnUiThread {
+            refreshRecentHighlight()
+            if (!lifecycle.currentState.isAtLeast(Lifecycle.State.STARTED)) return@runOnUiThread
+            lifecycleScope.launch { applyUnitResult(chapter, paras) }
+        }
+    }
+
+    /**
+     * 把刚落库的那几段**读回来上屏**。
+     *
+     * ⚠️ **插图走轻量路径**（只重读载荷 + 重画）：插图段的高度由图片自身尺寸定，与"有没有译文"
+     * 无关 —— 走 `refreshTranslations → loadChapter` 会白白重排整章，还会把阅读位置掀一下。
+     * 文本段则相反：译文比原文长，**必须重排**并回到同一锚点（那是既有的 `refreshTranslations`）。
+     */
+    private suspend fun applyUnitResult(chapter: Int, paras: List<Int>) {
+        val b = book ?: return
+        if (paras.all { onImageParagraph(it) }) {
+            val map = runCatching { translator().loadImageTranslations(b, chapter) }
+                .getOrDefault(emptyMap())
+            // 读库期间用户可能已经换章：那次结果作废（新章进来时 loadChapter 自己会再取一次）
+            if (chapter != chapterIndex) return
+            imageTranslations = map
+            imageVisuals.keys.retainAll(map.keys)
+            refreshImageChrome()
+            // ⚠️ 浮层组也要跟着重算：插图算「可翻单位」，一张图翻完可能就让这一页"没有待翻段了"
+            // （文本那条路是靠 `loadChapter` 末尾那次刷新，这条轻量路径得自己补）
+            refreshTranslationChrome()
+        } else {
+            refreshTranslations()
+        }
+    }
+
+    /** 「刚翻完」的高亮刷新（两种阅读模式各自的视图都要落到）。 */
+    private fun refreshRecentHighlight() {
+        pageAdapter.setRecentBatch(recentPara)
+        scrollAdapter.setRecentBatch(recentPara)
     }
 
     /**
@@ -996,13 +1082,19 @@ class NovelReaderActivity : AppCompatActivity() {
                 return
             }
         }
-        // 点了正在编辑的那张图本身 → 留在编辑模式（用户多半是想点按钮，只是没点准）；
-        // 点别处 → **退出编辑模式**（按钮跟着收掉），并吃掉这一下，免得顺手翻了页
+        // **点插图本身 = 放大查看全图**（用户口径 2026-10-04：「点击图片应该要可以放大查看全图」）。
+        // ⚠️ 必须放在九宫格翻页判定**之前**：整页插图时用户点它显然是想看图，
+        // 而不是想翻页（翻页还有滑动、以及点正文区两种方式）。
+        val tapped = paragraphAt(x, y)
+        if (tapped != null && onImageParagraph(tapped)) {
+            openImageViewer(tapped)
+            return
+        }
+        // 点了别的段（不是正在编辑的那张图）→ **退出编辑模式**（按钮跟着收掉），再按九宫格处理。
+        // ⚠️ 点正在编辑的那张图本身已经在上面被"打开查看器"接管了（查看器自带那排按钮）。
         if (focusedImagePara != null) {
-            val same = paragraphAt(x, y) == focusedImagePara
             focusedImagePara = null
             refreshImageChrome()
-            if (same) return
         }
         when {
             // 连续滚动：点上下半屏 = 上一段 / 下一段
@@ -1206,6 +1298,37 @@ class NovelReaderActivity : AppCompatActivity() {
         showOverlayToast(getString(visualLabelRes(next)), error = false)
     }
 
+    /**
+     * 打开**插图全屏查看器**（点一下正文里的插图）。
+     *
+     * ⚠️ 查看器里的三颗按钮**不另写一份逻辑**：它们回调到这里，走的还是图上那排按钮同一条路
+     * （[translateImageNow] / [cycleImageVisual] / [deleteImageTranslation]）—— 在途去重、
+     * 落库、上屏、提示都只有一份实现。
+     * ⚠️ 与「同时翻译图片」开关**无关**：那开关管的是批量翻译要不要带上插图，
+     * 而"点开看大图 / 对这张图下指令"是用户的显式动作（与长按同一口径）。
+     */
+    private fun openImageViewer(paraIndex: Int) {
+        if (content?.images?.get(paraIndex) == null) return
+        // 已经开着就先收掉（收尾会把自己那份引用清空），避免叠出第二个窗口
+        imageViewer?.dismiss()
+        imageViewer = NovelImageViewer(
+            activity = this,
+            paraIndex = paraIndex,
+            host = object : NovelImageViewer.Host {
+                override fun imageOf(paraIndex: Int): NovelImage? = content?.images?.get(paraIndex)
+                override fun visualOf(paraIndex: Int): NovelImageVisual = imageVisualOf(paraIndex)
+                override fun payloadOf(paraIndex: Int): NovelImageTranslation? = imageTranslations[paraIndex]
+                override fun onTranslateImage(paraIndex: Int) = translateImageNow(paraIndex)
+                override fun onToggleImageVisual(paraIndex: Int) = cycleImageVisual(paraIndex)
+                override fun onDeleteImageTranslation(paraIndex: Int) = deleteImageTranslation(paraIndex)
+                override fun onViewerClosed() {
+                    imageViewer = null
+                }
+            },
+        )
+        imageViewer?.show()
+    }
+
     /** 删除这一张图的译文（回落原图；与文本段的"清除译文"同一语义）。 */
     private fun deleteImageTranslation(paraIndex: Int) {
         val b = book ?: return
@@ -1231,6 +1354,11 @@ class NovelReaderActivity : AppCompatActivity() {
             if (chapter == chapterIndex) {
                 imageTranslations = imageTranslations - paraIndex
                 imageVisuals.remove(paraIndex)
+                // 这张图已经不是"刚翻完"了（用户刚把译文删了）
+                if (recentPara.contains(paraIndex)) {
+                    recentPara = recentPara - paraIndex
+                    refreshRecentHighlight()
+                }
                 refreshImageChrome()
             }
             refreshChapterStats()
@@ -1647,6 +1775,13 @@ class NovelReaderActivity : AppCompatActivity() {
      */
     private fun loadChapter(index: Int, anchor: NovelAnchor = NovelAnchor(0), atLastPage: Boolean = false) {
         val b = book ?: return
+        // 换章 → 「刚翻的是哪几段」作废（段号在另一章里指向别的内容）。
+        // ⚠️ 判据是**入口处**的 `chapterIndex`（真正换章时它还是旧章）：同一章的译文到达重排
+        // 也会走这里，那时**不能**清 —— 否则刚点亮的高亮立刻被自己抹掉。
+        if (index != chapterIndex && recentPara.isNotEmpty()) {
+            recentPara = emptySet()
+            refreshRecentHighlight()
+        }
         val token = ++loadToken
         lifecycleScope.launch {
             val style = NovelPanelStyle.textStyle(this@NovelReaderActivity, prefs)
@@ -1943,6 +2078,8 @@ class NovelReaderActivity : AppCompatActivity() {
     private fun refreshImageChrome() {
         pageAdapter.setImageState(imageVisuals.toMap(), focusedImagePara, imageTranslations)
         scrollAdapter.setImageState(imageVisuals.toMap(), focusedImagePara, imageTranslations)
+        // 查看器开着时也要跟上（在里面点翻译/切换三态/删除，画面上必须立刻变）
+        imageViewer?.refresh()
     }
 
     private fun onPaged(position: Int) {
@@ -3151,6 +3288,7 @@ class NovelReaderActivity : AppCompatActivity() {
                 // 译文都没了，"刚翻的是哪几段"也就无从谈起
                 activeBatch = emptySet()
                 failedBatch = emptySet()
+                recentPara = emptySet()
                 loadChapter(index, anchor = pendingAnchor)
             }
             refreshChapterStats()
@@ -3207,7 +3345,12 @@ class NovelReaderActivity : AppCompatActivity() {
                 }
             refreshChapterStats()
             // 期间用户可能已经翻到别的章：那就别把他拽回来
-            if (chapter == chapterIndex) loadChapter(chapter, anchor = pendingAnchor)
+            if (chapter == chapterIndex) {
+                // 清掉的段不该再亮"刚翻完"（那已经不是"刚翻完"了）
+                recentPara = recentPara - target.toSet()
+                refreshRecentHighlight()
+                loadChapter(chapter, anchor = pendingAnchor)
+            }
             showOverlayToast(getString(R.string.novel_clear_translation_done, target.size), error = false)
         }
     }

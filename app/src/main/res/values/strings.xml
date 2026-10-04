@@ -1694,6 +1694,7 @@
     <string name="novel_image_visual_original">Recognized text</string>
     <string name="novel_image_visual_plain">Original image</string>
     <string name="novel_image_need_config">Configure a translation engine first</string>
+    <string name="novel_image_viewer_hint">Pinch or double-tap to zoom · tap the image to close</string>
     <!-- ===== 单批超长预警（一批合并文本估算超过阈值 → 弹窗问「继续 / 取消这次翻译」） ===== -->
     <string name="novel_translate_warn">Batch warning threshold</string>
     <string name="novel_translate_warn_hint">Ask once before sending a batch whose source text is estimated above this length (only asked once per run). A larger value means fewer prompts, but overly long requests are more likely to be truncated or mistranslated.</string>

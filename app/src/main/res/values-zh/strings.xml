@@ -1695,6 +1695,7 @@
     <string name="novel_image_visual_original">识别原文</string>
     <string name="novel_image_visual_plain">原图</string>
     <string name="novel_image_need_config">请先配置翻译引擎</string>
+    <string name="novel_image_viewer_hint">双指缩放 / 双击放大 · 点图片关闭</string>
     <!-- ===== 单批超长预警（一批合并文本估算超过阈值 → 弹窗问「继续 / 取消这次翻译」） ===== -->
     <string name="novel_translate_warn">单批预警阈值</string>
     <string name="novel_translate_warn_hint">一批的原文估算超过这个长度时先问一次「是否继续」（同一轮只问一次）。设大一点可以少打扰，但单次请求太长时模型容易漏译或截断。</string>

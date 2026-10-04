@@ -50,6 +50,9 @@ class NovelPageAdapter : RecyclerView.Adapter<NovelPageAdapter.VH>() {
     /** 翻失败了的段（淡红高亮底）。 */
     private var failedBatch: Set<Int> = emptySet()
 
+    /** **上一次刚翻完**的段（淡绿高亮底；见 [NovelTextRenderer.COLOR_LAST_TRANSLATED]）。 */
+    private var recentBatch: Set<Int> = emptySet()
+
     /** 每张插图的显示态（`段号 -> 三态`）；表里没有 = 译文态。 */
     private var imageVisuals: Map<Int, NovelImageVisual> = emptyMap()
 
@@ -103,6 +106,13 @@ class NovelPageAdapter : RecyclerView.Adapter<NovelPageAdapter.VH>() {
         notifyItemRangeChanged(0, itemCount)
     }
 
+    /** 「上一次刚翻完」的高亮变化（只重画）。 */
+    fun setRecentBatch(sel: Set<Int>) {
+        if (recentBatch == sel) return
+        recentBatch = sel
+        notifyItemRangeChanged(0, itemCount)
+    }
+
     /** 插图显示态 + 聚焦态变化（只重画：插图高度与显示态无关，不需要重排）。 */
     fun setImageState(
         visuals: Map<Int, NovelImageVisual>,
@@ -149,7 +159,7 @@ class NovelPageAdapter : RecyclerView.Adapter<NovelPageAdapter.VH>() {
         holder.curl.setPageBackground(backgroundColor)
         val c = content ?: return
         val page = c.pages.getOrNull(position) ?: return
-        holder.page.bind(c, page, style, textColor, selected, activeBatch, failedBatch)
+        holder.page.bind(c, page, style, textColor, selected, activeBatch, failedBatch, recentBatch)
         // 插图显示态/聚焦态/载荷是**宿主灌进来的状态**（不在 bind 的参数里：三态只重画不重排）
         holder.page.setImageState(imageVisuals, focusedImage, imageTranslations)
     }

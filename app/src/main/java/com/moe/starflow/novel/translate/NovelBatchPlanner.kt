@@ -101,6 +101,65 @@ object NovelBatchPlanner {
     ): List<List<Int>> =
         chapterParaIndexes.filter { it !in translated }
             .chunked(batchSize.coerceAtLeast(1))
+
+    /**
+     * 一批里的**一个请求单位**：要么是「连续的若干文本段」（合成一个请求），要么是「一张插图」（独占一个请求）。
+     *
+     * @param isImage true = 插图单位（走 OCR + 图片翻译那条路，见 `NovelChapterTranslator`）
+     */
+    data class RequestRun(val paraIndexes: List<Int>, val isImage: Boolean)
+
+    /**
+     * 把一批切成**请求单位**（纯函数，用户口径 2026-10-04 的落点）。
+     *
+     * 用户口径原文：「图片虽然属于某个批次的一个段落，但是他应该是**单独发送一个 api 请求**，
+     * 不要和前面的文本或者其他图片识别结果放到一起发送出去；例如一个批次：**文本，图片，文本**，
+     * 三个段落全部变黄，但是要**分三次 api 请求**；如果是**文本，文本，图片**的批次，
+     * 则前两个作为一次请求，图片识别的结果单独一个 api 请求」。
+     *
+     * 所以规则是**按文档顺序做同类归并**：
+     * - **连续的文本段** → 合并成一个请求（与旧行为一致：一批纯文本仍是一次请求）
+     * - **每个插图段** → 独占一个请求（一次 OCR + 一次翻译；插图之间**不合并**，
+     *   也不与任何文本合并 —— 混在一起发的话编号对位会把 OCR 文本和正文搅乱）
+     *
+     * ⚠️ 批本身**不拆**（[planBatches] 仍是普通 `chunked`）：批仍是进度/高亮/配额的单位，
+     * 变的只是"这一批内部发几个请求"。拆批的代价早先踩过（用户报的「每批段数遇到图片就中断」）。
+     *
+     * ⚠️ 顺序**原样保留**：`[文本, 图片, 文本]` 就是「先文本、再图片、最后文本」三次请求 ——
+     * 按"文本都排前面"重排会让读者看到的落实顺序与原文顺序不一致。
+     *
+     * @param paraIndexes 本批要翻的段号（**按文档顺序**；调用方来自 `NovelBatchPlanner.nextBatch`）
+     * @param includeImages 「同时翻译图片」是否开着（关着时插图段直接不出现在结果里）
+     */
+    fun requestRuns(
+        paragraphs: List<NovelParagraph>,
+        paraIndexes: List<Int>,
+        includeImages: Boolean,
+    ): List<RequestRun> {
+        if (paraIndexes.isEmpty()) return emptyList()
+        val byIndex = paragraphs.associateBy { it.index }
+        val out = ArrayList<RequestRun>()
+        var text: MutableList<Int> = ArrayList()
+        fun flushText() {
+            if (text.isNotEmpty()) {
+                out += RequestRun(text.toList(), isImage = false)
+                text = ArrayList()
+            }
+        }
+        for (pi in paraIndexes) {
+            val p = byIndex[pi] ?: continue
+            when {
+                p.type == NovelParagraphType.TEXT && p.originalText.isNotBlank() -> text += pi
+                p.type == NovelParagraphType.IMAGE && includeImages -> {
+                    // 遇到插图：先把手上攒的那几段文本收成一个请求（"连续文本合并"与"顺序不变"两条同时成立）
+                    flushText()
+                    out += RequestRun(listOf(pi), isImage = true)
+                }
+            }
+        }
+        flushText()
+        return out
+    }
 }
 
 /**

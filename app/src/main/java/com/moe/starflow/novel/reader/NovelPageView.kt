@@ -38,6 +38,13 @@ class NovelPageView(context: Context) : View(context) {
     /** 「这一批翻失败了」的段（淡红高亮底；见 [NovelTextRenderer.COLOR_FAILED_BATCH]）。 */
     private var failedBatch: Set<Int> = emptySet()
 
+    /**
+     * **上一次刚翻完**的段（淡绿高亮底；见 [NovelTextRenderer.COLOR_LAST_TRANSLATED]）。
+     *
+     * 与 [activeBatch] 是前后两个时刻：琥珀是"正在飞"，这个是"刚落定"。
+     */
+    private var recentBatch: Set<Int> = emptySet()
+
     /** 每张插图的显示态（`段号 -> 三态`）；表里没有 = 译文态。 */
     private var imageVisuals: Map<Int, NovelImageVisual> = emptyMap()
 
@@ -104,6 +111,11 @@ class NovelPageView(context: Context) : View(context) {
         color = NovelTextRenderer.COLOR_FAILED_BATCH
     }
 
+    /** 「上一次刚翻完」的高亮底（淡绿，与滚动模式共用）。 */
+    private val recentBatchPaint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
+        color = NovelTextRenderer.COLOR_LAST_TRANSLATED
+    }
+
     /** 高亮底与滚动模式共用的圆角半径。 */
     private val hlRadiusPx by lazy { NovelTextRenderer.HIGHLIGHT_CORNER_DP * resources.displayMetrics.density }
 
@@ -115,6 +127,7 @@ class NovelPageView(context: Context) : View(context) {
         selected: Set<Int> = emptySet(),
         activeBatch: Set<Int> = emptySet(),
         failedBatch: Set<Int> = emptySet(),
+        recentBatch: Set<Int> = emptySet(),
     ) {
         // ⚠️ 排版输入没变就别作废已排好的 layout：选择模式每点一下都会重绑，
         // 全页重建 StaticLayout 是白烧的（而且会闪）
@@ -138,6 +151,7 @@ class NovelPageView(context: Context) : View(context) {
         this.selected = selected
         this.activeBatch = activeBatch
         this.failedBatch = failedBatch
+        this.recentBatch = recentBatch
         applyTextColor()
         invalidate()
     }
@@ -345,11 +359,13 @@ class NovelPageView(context: Context) : View(context) {
             usedBottom = bottom
 
             // 高亮底画在文字/图片**下面**（同一个矩形范围，逐段累加的高度）。
-            // 优先级：选中 > 失败 > 正在翻译 —— 三者同时命中时得看得出最要紧的那个
+            // 优先级：选中 > 失败 > 正在翻译 > 刚翻完 —— 同时命中时得看得出最要紧的那个
+            //（"还在飞"必须压过"刚翻完"，否则读者会以为已经完事了）
             val hl = when {
                 seg.paraIndex in selected -> selectionPaint
                 seg.paraIndex in failedBatch -> failedBatchPaint
                 seg.paraIndex in activeBatch -> activeBatchPaint
+                seg.paraIndex in recentBatch -> recentBatchPaint
                 else -> null
             }
             if (hl != null) {
@@ -432,13 +448,15 @@ class NovelPageView(context: Context) : View(context) {
         // ⚠️ 边框都画在 `clipRect` **外面**：它们本来就在图片矩形外侧（外扩 3dp），
         // 画在裁剪里会被切掉上/下两条边。越界由 [NovelImageControls.layout] 的 bounds 夹取兜住。
         //
-        // 边框优先级与文本段底色**同一套**（选中 > 失败 > 正在翻译）：
+        // 边框优先级与文本段底色**同一套**（选中 > 失败 > 正在翻译 > 刚翻完）：
         // 「这几张图正在翻」必须像文本段一样有**可见的黄框**（用户口径 2026-10-04：
         // 「这三张图片都要显示黄色状态」）—— 只高亮文本段的话，一整批都是图时屏幕上毫无反馈。
+        // 「刚翻完」给绿框（图片没有"底色"可换，框是它唯一的状态载体）。
         val frame = when {
             focused -> NovelImageControls.SELECTION_BORDER to NovelImageControls.SELECTION_BORDER_DP
-            paraIndex in failedBatch -> NovelTextRenderer.COLOR_FAILED_BATCH to 3f
-            paraIndex in activeBatch -> NovelTextRenderer.COLOR_ACTIVE_BATCH to 3f
+            paraIndex in failedBatch -> NovelTextRenderer.BORDER_FAILED_BATCH to 3f
+            paraIndex in activeBatch -> NovelTextRenderer.BORDER_ACTIVE_BATCH to 3f
+            paraIndex in recentBatch -> NovelTextRenderer.BORDER_LAST_TRANSLATED to 3f
             else -> null
         }
         if (frame != null) {
