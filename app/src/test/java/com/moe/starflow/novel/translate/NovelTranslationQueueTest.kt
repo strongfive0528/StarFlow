@@ -26,6 +26,10 @@ class NovelTranslationQueueTest {
         /** 一批"跑"多久（虚拟时间）；> 0 时用来制造"上一批还在飞"的场景。 */
         var holdMs = 0L
 
+        /** 同时在跑的批数 / 历史峰值 —— 并发与"图片串行"都靠它断言（比数批次数可靠）。 */
+        var concurrent = 0
+        var maxConcurrent = 0
+
         override suspend fun translateBatch(
             book: ImportedNovel,
             chapterIndex: Int,
@@ -36,9 +40,15 @@ class NovelTranslationQueueTest {
             translatorName: String,
         ): NovelBatchResult {
             batches += paraIndexes
-            if (holdMs > 0) kotlinx.coroutines.delay(holdMs)
-            if (failAll) return NovelBatchResult(emptyMap(), "fake 失败")
-            return NovelBatchResult(paraIndexes.associateWith { "译$it" })
+            concurrent++
+            if (concurrent > maxConcurrent) maxConcurrent = concurrent
+            try {
+                if (holdMs > 0) kotlinx.coroutines.delay(holdMs)
+                if (failAll) return NovelBatchResult(emptyMap(), "fake 失败")
+                return NovelBatchResult(paraIndexes.associateWith { "译$it" })
+            } finally {
+                concurrent--
+            }
         }
     }
 
@@ -59,6 +69,8 @@ class NovelTranslationQueueTest {
         debounce: Int = 0,
         /** 同时最多几个批在飞；默认 1（与旧行为一致）。 */
         concurrency: Int = 1,
+        /** 图片段判据（默认"没有图片段"）；图片单位要独占一批并串行。 */
+        isImage: (Int) -> Boolean = { false },
     ) = NovelTranslationQueue(
         scope = scope,
         translator = translator,
@@ -75,6 +87,7 @@ class NovelTranslationQueueTest {
         chapterParaIndexes = { _, _ -> (0 until chapterSize).toList() },
         translatedIndexes = { _, _ -> translated.toSet() },
         concurrency = { concurrency },
+        isImagePara = { _, p -> isImage(p) },
     )
 
     /**
@@ -114,6 +127,72 @@ class NovelTranslationQueueTest {
         advanceTimeBy(5_000)
 
         assertEquals("只翻当前页那一批", listOf(listOf(0, 1)), t.batches)
+        q.stop()
+    }
+
+    // ===== 图片段（一张图 = 一个段 = 一次 OCR；用户口径：多张依次翻）=====
+
+    /**
+     * **图片段独占一批**：批次里不许混着文本段。
+     *
+     * 混进去的后果不是"慢一点"，而是文本引擎（只认 TEXT）把图片段滤掉 → 那一批被标成失败，
+     * 用户看到"翻了个寂寞 + 一堆红"。成批规则收敛在 `NovelBatchPlanner.splitImageUnits`，
+     * 这条守卫钉的是**队列真的用了它**。
+     */
+    @Test
+    fun `图片段独占一批不混进文本`() = runTest {
+        val t = FakeTranslator()
+        val translated = mutableSetOf<Int>()
+        // 章内 0..5，第 2 段是插图；每批 3 段
+        val q = queue(
+            backgroundScope, t, translated,
+            page = { listOf(0, 1, 2, 3, 4, 5) }, chapterSize = 6, batchSize = 3,
+            isImage = { it == 2 },
+        )
+
+        q.start(book(), NovelTranslateMode.AHEAD, quota = NovelQuota.of(10), currentChapter = { 0 }) { _, r ->
+            translated += r.translations.keys
+        }
+        advanceTimeBy(30_000)
+
+        assertEquals(
+            "前两段一批、图片独占一批、后面继续成批（顺序不变）",
+            listOf(listOf(0, 1), listOf(2), listOf(3, 4, 5)),
+            t.batches,
+        )
+        q.stop()
+    }
+
+    /**
+     * **图片单位串行**（用户口径：「如果队列存在多个图片，**依次** ocr 翻译每张图片」）。
+     *
+     * 并发 N=4 也一样：图片要抢全局 OCR 锁，同时起飞只会互相等锁、白占并发槽位。
+     * 断言用**并发峰值**（`maxConcurrent`）而不是"数在第 1.2 秒跑了几批"——
+     * 后者取决于虚拟时钟推进到哪，稍一改动就假红；峰值直接证明"从没有两张同时在跑"。
+     */
+    @Test
+    fun `并发下图片单位仍然依次跑`() = runTest {
+        val t = FakeTranslator()
+        t.holdMs = 1_000
+        val translated = mutableSetOf<Int>()
+        // 章内 0..3 全是图片段，并发 4
+        val q = queue(
+            backgroundScope, t, translated,
+            page = { listOf(0, 1, 2, 3) }, chapterSize = 4, batchSize = 3,
+            concurrency = 4, isImage = { true },
+        )
+
+        q.start(book(), NovelTranslateMode.AHEAD, quota = NovelQuota.of(10), currentChapter = { 0 }) { _, r ->
+            translated += r.translations.keys
+        }
+        advanceTimeBy(10_000)
+
+        assertEquals("同一时刻只允许一张图在飞（并发 4 也一样）", 1, t.maxConcurrent)
+        assertEquals(
+            "四张图要按顺序依次翻完",
+            listOf(listOf(0), listOf(1), listOf(2), listOf(3)),
+            t.batches,
+        )
         q.stop()
     }
 
