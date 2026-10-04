@@ -25,6 +25,7 @@ import com.moe.starflow.manga.pipeline.BatchPipelineConfig
 import com.moe.starflow.manga.pipeline.BatchPipelineHost
 import com.moe.starflow.manga.pipeline.IncrementalBatchPipeline
 import com.moe.starflow.manga.render.OverlayRenderer
+import com.moe.starflow.manga.render.readerRenderScale
 import com.moe.starflow.manga.state.RegionCacheManager
 import com.moe.starflow.manga.types.BubbleRegion
 import com.moe.starflow.manga.types.CroppedBubble
@@ -3294,13 +3295,29 @@ class ReaderTranslationController(
         cfg: TranslationCacheManager.OverlayConfig,
         /** 该页的识别引擎；缺省取"最近一次跑过的"（渲染历史行时手上没有，见 [lastDet]）。 */
         det: DetEngine = lastDet,
-    ): Bitmap = renderBubbles(
-        original = original, bubbles = bubbles, mode = mode, cfg = cfg,
-        base = srBaseFor(pageIndex, original, original.width),
-        det = det,
-        // 上屏路径：按「显示宽 / 页图宽」决定超采样倍率（见 renderScaleFor）
-        renderScale = renderScaleFor(original.width),
-    )
+    ): Bitmap {
+        val base = srBaseFor(pageIndex, original, original.width)
+        val display = renderScaleFor(original.width)
+        // ⚠️ **上屏倍率必须 ≥ 超分底图倍率**（`readerRenderScale`）：
+        //    页图比屏幕宽时显示倍率恒为 1，若照它渲染，`outW` 会小于底图宽 →
+        //    `OverlayRenderer` 走"重采样铺满"分支，把 2160px 的超分底图压回 1650px，
+        //    超分的像素一个都进不了画面（2026-10 真机：「有记录、两态切换毫无变化」）。
+        //    抬到 baseScale 后 `outW == 底图宽` → 1:1 零重采样。
+        val scale = readerRenderScale(display, base?.scale ?: 1f)
+        if (base != null && scale > display) {
+            LogCollector.d(
+                TAG,
+                "上屏倍率按超分底图抬到 $scale（显示倍率 $display，" +
+                    "底图 ${base.bitmap.width}px / 页宽 ${original.width}px）page=$pageIndex",
+            )
+        }
+        return renderBubbles(
+            original = original, bubbles = bubbles, mode = mode, cfg = cfg,
+            base = base,
+            det = det,
+            renderScale = scale,
+        )
+    }
 
     /**
      * 渲染并预热译文图缓存，同时切到该态。最终结果写入后**丢弃半成品**，避免残留旧图。
