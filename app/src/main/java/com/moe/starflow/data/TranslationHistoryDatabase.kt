@@ -10,7 +10,7 @@ import androidx.sqlite.db.SupportSQLiteDatabase
 
 @Database(
     entities = [HistoryEntity::class, PageCacheEntity::class, TextTranslateRecord::class, ChatMessageEntity::class, ImportedPageTranslation::class, NovelParagraphTranslation::class, ImportedPageSr::class],
-    version = 20,
+    version = 22,
     exportSchema = false
 )
 abstract class TranslationHistoryDatabase : RoomDatabase() {
@@ -305,13 +305,54 @@ abstract class TranslationHistoryDatabase : RoomDatabase() {
             }
         }
 
+        /**
+         * v20 → v21：阅读器每页记录增加 **产出原文的 OCR 模型名**（`ocrModel`）。
+         *
+         * 只 OCR 的页 `translatorName` 是空的，而详情面板要能回答「这段识别文本是哪个模型认出来的」
+         * （用户口径 2026-10：详情里要有**时间、模型、识别文本**）。
+         *
+         * ⚠️ 与 [MIGRATION_18_19] 的「纯新增建表」不同，这是在**已有表上加列**：
+         * - 列必须**可空、且不带 DEFAULT**：Kotlin 侧 `ocrModel: String? = null` 只是语言层默认值，
+         *   Room 生成的建表语句里没有 DEFAULT 子句；多写一个默认值就会与 Entity schema 不符 →
+         *   升级用户一打开库即抛 `IllegalStateException: Migration didn't properly handle`。
+         * - 旧行填 NULL（当时的模型名已无从考证），**不能**用"当前设置"糊上去。
+         *   ⚠️ 之所以不用 `translatorName` 复用：它会被后续翻译覆盖成译者的名字，
+         *   "这一页当初是谁认的字"就永久丢失了。
+         * 守卫：`ImportedPageTranslationMigrationTest`（真建库跑迁移 + 逐列比对 schema）。
+         */
+        val MIGRATION_20_21 = object : Migration(20, 21) {
+            override fun migrate(db: SupportSQLiteDatabase) {
+                db.execSQL("ALTER TABLE imported_page_translation ADD COLUMN ocrModel TEXT")
+            }
+        }
+
+        /**
+         * v21 → v22：小说段落译文表增加 **图片翻译载荷**（`imagePayload`）。
+         *
+         * 小说阅读器现在会翻译 epub 里的插图（OCR → 翻译 → 画回图片）。图片段的一行里：
+         * `sourceText` / `translatedText` 存拼接后的原文与译文（导出、进度、三态都靠它们），
+         * `imagePayload` 存**文字块 + 矩形 + 原文 + 译文**的 JSON —— 没有它就没法把译文画回图上，
+         * 每次重排/重开阅读器都得重跑一次 OCR（几秒）与一次翻译请求（花钱）。
+         *
+         * ⚠️ 与 [MIGRATION_20_21] 同一条纪律：加列必须**可空且不带 DEFAULT**
+         * （Kotlin 侧 `imagePayload: String? = null` 只是语言层默认值，Room 生成的建表语句里
+         * 没有 DEFAULT 子句；多写一个就会 `Migration didn't properly handle`）。
+         * 旧行填 NULL —— 那时还没翻过图片，"补一个空载荷"与 NULL 同义。
+         * 守卫：`NovelParagraphTranslationMigrationTest`（真建库跑迁移 + 逐列比对 schema）。
+         */
+        val MIGRATION_21_22 = object : Migration(21, 22) {
+            override fun migrate(db: SupportSQLiteDatabase) {
+                db.execSQL("ALTER TABLE novel_paragraph_translation ADD COLUMN imagePayload TEXT")
+            }
+        }
+
         fun getInstance(context: Context): TranslationHistoryDatabase {
             return instance ?: synchronized(this) {
                 instance ?: Room.databaseBuilder(
                     context.applicationContext,
                     TranslationHistoryDatabase::class.java,
                     "translation_history.db"
-                ).addMigrations(MIGRATION_2_3, MIGRATION_3_4, MIGRATION_4_5, MIGRATION_5_6, MIGRATION_6_7, MIGRATION_7_8, MIGRATION_8_9, MIGRATION_9_10, MIGRATION_10_11, MIGRATION_11_12, MIGRATION_12_13, MIGRATION_13_14, MIGRATION_14_15, MIGRATION_15_16, MIGRATION_16_17, MIGRATION_17_18, MIGRATION_18_19, MIGRATION_19_20)
+                ).addMigrations(MIGRATION_2_3, MIGRATION_3_4, MIGRATION_4_5, MIGRATION_5_6, MIGRATION_6_7, MIGRATION_7_8, MIGRATION_8_9, MIGRATION_9_10, MIGRATION_10_11, MIGRATION_11_12, MIGRATION_12_13, MIGRATION_13_14, MIGRATION_14_15, MIGRATION_15_16, MIGRATION_16_17, MIGRATION_17_18, MIGRATION_18_19, MIGRATION_19_20, MIGRATION_20_21, MIGRATION_21_22)
                 .fallbackToDestructiveMigration()
                 .build().also { instance = it }
             }

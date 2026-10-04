@@ -87,13 +87,48 @@ object NovelBatchPlanner {
      * `filter(未翻).chunked(batchSize)`。两套算法各写一份迟早不一致，等价性用测试钉住。
      *
      * ⚠️ **只在本章内成批**（调用方按章调用）：批不跨章是既有约定。
+     *
+     * @param isImage 图片段判据（默认"没有图片段"，即与旧行为逐字一致）：
+     *   一张图 = 一个段 = 一次 OCR + 一次翻译请求，所以**图片段独占一批**（见 [splitImageUnits]）。
      */
     fun planBatches(
         chapterParaIndexes: List<Int>,
         translated: Set<Int>,
         batchSize: Int,
+        isImage: (Int) -> Boolean = { false },
     ): List<List<Int>> =
-        chapterParaIndexes.filter { it !in translated }.chunked(batchSize.coerceAtLeast(1))
+        chapterParaIndexes.filter { it !in translated }
+            .chunked(batchSize.coerceAtLeast(1))
+            .flatMap { splitImageUnits(it, isImage) }
+
+    /**
+     * 把一批段号切成「图片段各自独占一批、文本段保持原样」的若干批（顺序不变）。
+     *
+     * 队列与章任务都走它：调度侧拿 `first()` 当本轮要翻的单位，提交侧拿整个列表当 unit 计划。
+     * 各写一套的话，队列里图片会混进文本批（文本引擎把图片段滤掉 → 整批被标失败），
+     * 而章任务里又不会 —— 同一个功能两条路两个结果，排查起来极难。
+     *
+     * 例：`[1,2,3(图),4,5]` → `[[1,2],[3],[4,5]]`
+     */
+    fun splitImageUnits(batch: List<Int>, isImage: (Int) -> Boolean): List<List<Int>> {
+        if (batch.isEmpty()) return emptyList()
+        if (batch.none(isImage)) return listOf(batch)
+        val out = mutableListOf<List<Int>>()
+        var run = mutableListOf<Int>()
+        for (p in batch) {
+            if (isImage(p)) {
+                if (run.isNotEmpty()) {
+                    out += run
+                    run = mutableListOf()
+                }
+                out += listOf(p)
+            } else {
+                run += p
+            }
+        }
+        if (run.isNotEmpty()) out += run
+        return out
+    }
 }
 
 /**

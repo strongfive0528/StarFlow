@@ -40,6 +40,17 @@ data class NovelParagraphTranslation(
     val targetLang: String? = null,
     val splitVersion: Int = 0,
     val updatedAt: Long = 0L,
+    /**
+     * **图片段的翻译载荷**（JSON，见 `NovelImageTranslation`）；文本段恒为 null。
+     *
+     * 图片段（epub 插图）的译文不是"一段文字"，而是「若干个文字块 + 各自的矩形 + 原文 + 译文」——
+     * `translatedText` 只存拼接后的译文（导出、三态、进度都靠它），要**把译文画回图片上**
+     * 还得有矩形与原文。存一份载荷就不必每次重排/重开都重跑 OCR（一次 OCR 几秒 + 一次翻译请求）。
+     *
+     * ⚠️ 清译文（[NovelParagraphTranslationDao.resetToIdle]）时必须**一起清掉**：
+     * 留着载荷会让"已清除"的图片在下次渲染时又画出旧译文。
+     */
+    val imagePayload: String? = null,
 ) {
     companion object {
         const val STATE_IDLE = 0          // 未翻译
@@ -251,16 +262,18 @@ interface NovelParagraphTranslationDao {
     suspend fun deleteForNovelScoped(novelId: Long, novelKey: String)
 
     /**
-     * 把指定段**重置为未翻译**（长按多选 → 清除译文）。
+     * 把指定段**重置为未翻译**（长按多选 → 清除译文 / 图片右下角的「删除译文」）。
      *
      * ⚠️ 是"重置"而不是"删行"：这些行同时是本章**分母**（`COUNT(*)`）的来源，删掉会让分母少算；
      * 重置之后那几段立刻显示原文（读回只收 state==2），又能被重新翻译
      * （`markTranslatingRows` 只跳过 state==2 的行）。
      * 顺带清掉 `failCode`：清除就该把"为什么失败"一起清掉，否则章行还挂着旧报错。
+     * ⚠️ **`imagePayload` 也必须清**（2026-10 图片翻译）：它是"这张图已经翻过"的另一份凭据，
+     * 留着的话图片段会继续按老载荷画译文 —— 用户点了「删除译文」却什么都没变。
      */
     @Query(
         "UPDATE novel_paragraph_translation " +
-            "SET state = 0, translatedText = '', failCode = NULL, updatedAt = :now " +
+            "SET state = 0, translatedText = '', failCode = NULL, imagePayload = NULL, updatedAt = :now " +
             "WHERE novelId = :novelId AND novelKey = :novelKey AND chapterIndex = :chapterIndex " +
             "AND splitVersion = :splitVersion AND paraIndex IN (:paraIndexes)"
     )

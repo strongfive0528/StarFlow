@@ -91,6 +91,94 @@ class NovelChapterTranslatorTest {
         splitVersion: Int = SPLIT_VERSION,
     ) = NovelChapterTranslator(dao, NovelTranslationEngine(fake), splitVersion)
 
+    // ===== 图片段（epub 插图：一张图 = 一个段 = 一次 OCR + 一次翻译请求）=====
+
+    /** 含一张插图的段落表：段 1 是图。 */
+    private val withImage = listOf(
+        NovelParagraph(0, NovelParagraphType.TEXT, "第一段原文"),
+        NovelParagraph(1, NovelParagraphType.IMAGE, "📷 [图片]"),
+        NovelParagraph(2, NovelParagraphType.TEXT, "第二段原文"),
+    )
+
+    private fun payloadOf(blocks: Int = 2) = NovelImageTranslation(
+        sourceLang = "ja",
+        targetLang = "zh",
+        ocrEngine = "ppocrv6",
+        blocks = (0 until blocks).map {
+            NovelImageTextBlock(0, it * 50, 100, it * 50 + 40, "原文$it", "译文$it", vertical = false)
+        },
+    )
+
+    /**
+     * 开着「同时翻译图片」时：**图片段走宿主（OCR+翻译）并带载荷落库**，
+     * 而文本段依旧走文本引擎 —— 两条路各写各的字段。
+     */
+    @Test
+    fun `图片段走宿主并落载荷`() = runBlocking {
+        var hostCalls = 0
+        val fake = FakeTranslator()
+        val t = NovelChapterTranslator(
+            dao, NovelTranslationEngine(fake), SPLIT_VERSION,
+            imageHost = {
+                NovelImageHost(
+                    fileOf = { _, _, _ -> java.io.File("/tmp/1/cover.png") },
+                    translate = { _, _, _ ->
+                        hostCalls++
+                        NovelImageOutcome(payloadOf(), null)
+                    },
+                )
+            },
+        )
+
+        val result = t.translateBatch(book, 0, withImage, listOf(0, 1), "ja", "zh", "fake")
+
+        assertEquals("图片段也要算进结果（进度/「已翻」判据吃它）", setOf(0, 1), result.translations.keys)
+        assertEquals(1, hostCalls)
+        val rows = dao.forChapter(1, "5000", 0, SPLIT_VERSION).associateBy { it.paraIndex }
+        val imageRow = rows[1]!!
+        assertEquals(NovelParagraphTranslation.STATE_SUCCESS, imageRow.state)
+        assertEquals("原文0\n原文1", imageRow.sourceText)
+        assertEquals("译文0\n译文1", imageRow.translatedText)
+        val decoded = NovelImagePayloadCodec.decode(imageRow.imagePayload)!!
+        assertEquals(2, decoded.blocks.size)
+        // 载荷要能被读回（三态切换/重新渲染全靠它，不该重跑 OCR）
+        assertEquals(1, t.loadImageTranslations(book, 0).keys.single())
+        // 文本段那条路没被图片带偏
+        assertEquals("T:第一段原文", rows[0]!!.translatedText)
+    }
+
+    /** 关着开关（没有宿主）= **老行为**：图片段一个都不碰，也不写库。 */
+    @Test
+    fun `没有图片宿主时图片段照旧被跳过`() = runBlocking {
+        val fake = FakeTranslator()
+        val t = translatorFor(fake)
+        val result = t.translateBatch(book, 0, withImage, listOf(0, 1), "ja", "zh", "fake")
+        assertEquals(setOf(0), result.translations.keys)
+        assertEquals("只有文本段那一次请求（图片段没被送出去）", 1, fake.calls)
+        // ⚠️ 分母会把本章**所有**可翻译段建成 IDLE 行（段 0 与 2），所以这里只断言"图片段没有行"
+        val rows = dao.forChapter(1, "5000", 0, SPLIT_VERSION)
+        assertTrue("图片段不该有行", rows.none { it.paraIndex == 1 })
+    }
+
+    /** 图片翻译失败（OCR 没认到字 / 引擎忙）：**标失败带原始原因**，不能静默。 */
+    @Test
+    fun `图片翻译失败会写失败原因`() = runBlocking {
+        val t = NovelChapterTranslator(
+            dao, NovelTranslationEngine(FakeTranslator()), SPLIT_VERSION,
+            imageHost = {
+                NovelImageHost(
+                    fileOf = { _, _, _ -> java.io.File("/tmp/1/cover.png") },
+                    translate = { _, _, _ -> NovelImageOutcome(null, "这张图里没识别到文字") },
+                )
+            },
+        )
+        val result = t.translateBatch(book, 0, withImage, listOf(1), "ja", "zh", "fake")
+        assertTrue("失败就没有译文", result.isEmpty)
+        val row = dao.forChapter(1, "5000", 0, SPLIT_VERSION).single { it.paraIndex == 1 }
+        assertEquals(NovelParagraphTranslation.STATE_FAILED, row.state)
+        assertEquals("这张图里没识别到文字", row.failCode)
+    }
+
     @Before
     fun setUp() {
         val ctx: Context = RuntimeEnvironment.getApplication()

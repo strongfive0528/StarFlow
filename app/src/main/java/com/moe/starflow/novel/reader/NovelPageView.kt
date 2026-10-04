@@ -5,6 +5,9 @@ import android.graphics.Canvas
 import android.graphics.Paint
 import android.text.StaticLayout
 import android.view.View
+import com.moe.starflow.R
+import com.moe.starflow.novel.translate.NovelImageTranslation
+import com.moe.starflow.novel.translate.NovelImageVisual
 import com.moe.starflow.utils.LogCollector
 
 /**
@@ -34,6 +37,21 @@ class NovelPageView(context: Context) : View(context) {
 
     /** 「这一批翻失败了」的段（淡红高亮底；见 [NovelTextRenderer.COLOR_FAILED_BATCH]）。 */
     private var failedBatch: Set<Int> = emptySet()
+
+    /** 每张插图的显示态（`段号 -> 三态`）；表里没有 = 译文态。 */
+    private var imageVisuals: Map<Int, NovelImageVisual> = emptyMap()
+
+    /**
+     * 每张插图的译文载荷（`段号 -> 载荷`）。
+     *
+     * ⚠️ 由宿主经 [setImageState] 灌进来，**不从 `content` 读**：长按翻译一张图之后
+     * 宿主手里的载荷比适配器那份 `content` 更新（`submit` 会把阅读位置一起掀掉，
+     * 不值得为一张图重提整章内容）。
+     */
+    private var imageTranslations: Map<Int, NovelImageTranslation> = emptyMap()
+
+    /** 当前聚焦的那张插图（只有它画右下角那排按钮）。 */
+    private var focusedImage: Int? = null
 
     /**
      * 与 `page.segments` 对应的排版结果，**按段号索引**（空文本/未布局的段没有条目）。
@@ -122,6 +140,54 @@ class NovelPageView(context: Context) : View(context) {
         this.failedBatch = failedBatch
         applyTextColor()
         invalidate()
+    }
+
+    /**
+     * 插图的显示态 + 聚焦态 + 译文载荷（长按选中那张 / 宿主刚翻完一张）。
+     *
+     * ⚠️ **不置 [layoutsDirty]**：三态只换"画哪张位图"，插图占位高度由
+     * [NovelImageMetrics] 按图片自身尺寸算，与显示态、与有没有译文都无关 —— 重排是白花的。
+     */
+    fun setImageState(
+        visuals: Map<Int, NovelImageVisual>,
+        focused: Int?,
+        translations: Map<Int, NovelImageTranslation> = emptyMap(),
+    ) {
+        if (imageVisuals == visuals && focusedImage == focused && imageTranslations == translations) return
+        imageVisuals = visuals
+        focusedImage = focused
+        imageTranslations = translations
+        invalidate()
+    }
+
+    /** 某张图当前的显示态（表里没有 = 译文态）。 */
+    private fun visualOf(paraIndex: Int): NovelImageVisual =
+        imageVisuals[paraIndex] ?: NovelImageVisual.TRANSLATED
+
+    /**
+     * 插图按钮条的命中测试（**聚焦那张图**右下角的三颗按钮）。
+     *
+     * 走法与 [onDraw] 同一条（[NovelPageGeometry.walk] + 同一份 `fit`），所以
+     * "手指点到的按钮"与"屏幕上画的那个按钮"按定义一致。
+     */
+    fun imageControlAt(x: Float, y: Float): NovelImageButton? {
+        val p = page ?: return null
+        val c = content ?: return null
+        val focus = focusedImage ?: return null
+        ensureLayouts()
+        val cw = style.contentWidthPx(width)
+        var hit: NovelImageButton? = null
+        NovelPageGeometry.walk(p.segments, { lineHeights[it] }, style.paragraphSpacingPx, style.topPaddingPx) { seg, top, _ ->
+            if (hit != null || seg.paraIndex != focus) return@walk
+            val image = c.images[seg.paraIndex] ?: return@walk
+            val size = NovelImageMetrics.fit(image, cw, style.contentHeightPx(height)) ?: return@walk
+            val left = style.paddingPx + (cw - size.width) / 2f
+            val items = NovelImageControls.layout(
+                left + size.width, top + size.height, resources.displayMetrics.density,
+            )
+            hit = NovelImageControls.hit(items, x, y)
+        }
+        return hit
     }
 
     /**
@@ -258,7 +324,7 @@ class NovelPageView(context: Context) : View(context) {
             val layout = layouts[seg.paraIndex]
             if (layout == null) {
                 // 插图段：整段就是那张图（高度已经由 [NovelImageMetrics] 定好，与分页同一个数）
-                drawImageSegment(canvas, c.images[seg.paraIndex], top, bottom)
+                drawImageSegment(canvas, c, seg.paraIndex, top, bottom)
                 return@walk
             }
 
@@ -285,12 +351,15 @@ class NovelPageView(context: Context) : View(context) {
     /**
      * 画一张插图：正文列内**居中**，高度就是分页给它记的那一份（[bottom] - [top]）。
      *
+     * 有译文载荷时画**覆盖层**（译文/识别原文，见 [NovelImageOverlay]），没有就画原图；
+     * 三态里的"纯图"也走原图这条路。聚焦的那张再叠一排按钮。
+     *
      * ⚠️ 尺寸再算一次（而不是直接用 [bottom] - [top] 反推宽度）是为了**等比**：由高度反推宽度
      * 在四舍五入下会和 [NovelImageMetrics] 差半个像素，宽高比偶尔就被拉歪一点点。
      * 画不出来（文件被删 / 解码失败）就什么都不画 —— 页面高度已经记过了，不能在这里改。
      */
-    private fun drawImageSegment(canvas: Canvas, image: NovelImage?, top: Float, bottom: Float) {
-        if (image == null) return
+    private fun drawImageSegment(canvas: Canvas, c: ChapterContent, paraIndex: Int, top: Float, bottom: Float) {
+        val image = c.images[paraIndex] ?: return
         val cw = style.contentWidthPx(width)
         val size = NovelImageMetrics.fit(image, cw, style.contentHeightPx(height)) ?: return
         val left = style.paddingPx + (cw - size.width) / 2f
@@ -298,8 +367,44 @@ class NovelPageView(context: Context) : View(context) {
         // 万一哪天公式改了导致尺寸对不上，也只会少画几个像素，不会盖住下一段
         canvas.save()
         canvas.clipRect(0f, top, width.toFloat(), bottom)
-        NovelImageStore.draw(canvas, image, left, top, size)
+        val visual = visualOf(paraIndex)
+        val payload = imageTranslations[paraIndex]
+        val overlay = if (payload != null) {
+            NovelImageOverlay.of(context, image, payload, visual, size.width.toInt())
+        } else {
+            null
+        }
+        if (overlay != null) {
+            NovelImageStore.drawBitmap(canvas, overlay, left, top, size)
+        } else {
+            NovelImageStore.draw(canvas, image, left, top, size)
+        }
+        // 聚焦的那张：右下角三颗按钮（三态 / 重翻 / 删除），与命中测试同一份几何
+        if (paraIndex == focusedImage) {
+            val density = resources.displayMetrics.density
+            val items = NovelImageControls.layout(left + size.width, top + size.height, density)
+            NovelImageControls.drawBackdrop(canvas, items, density)
+            for (item in items) {
+                NovelImageControls.drawIcon(canvas, item, imageIconOf(item.button, visual), density)
+            }
+        }
         canvas.restore()
+    }
+
+    /** 按钮图标（矢量图，白色 tint：按钮底是深色药丸）。 */
+    private fun imageIconOf(button: NovelImageButton, visual: NovelImageVisual): android.graphics.drawable.Drawable? {
+        val res = when (button) {
+            NovelImageButton.TOGGLE -> when (visual) {
+                NovelImageVisual.TRANSLATED -> R.drawable.ic_display_translated
+                NovelImageVisual.ORIGINAL -> R.drawable.ic_display_original
+                NovelImageVisual.PLAIN -> R.drawable.ic_display_plain
+            }
+            NovelImageButton.RETRANSLATE -> R.drawable.ic_refresh
+            NovelImageButton.DELETE -> R.drawable.ic_action_delete
+        }
+        return context.getDrawable(res)?.mutate()?.apply {
+            setTint(android.graphics.Color.WHITE)
+        }
     }
 
     /**

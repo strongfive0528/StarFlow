@@ -1,0 +1,294 @@
+package com.moe.starflow.novel.translate
+
+import android.content.Context
+import android.graphics.Bitmap
+import android.graphics.BitmapFactory
+import androidx.preference.PreferenceManager
+import com.moe.starflow.data.TranslationCacheManager
+import com.moe.starflow.manga.OcrLock
+import com.moe.starflow.manga.TranslateUtils
+import com.moe.starflow.manga.TranslationCancelledException
+import com.moe.starflow.manga.config.MangaModeConfig
+import com.moe.starflow.manga.config.RtTextDirection
+import com.moe.starflow.manga.engine.DetectionBridge
+import com.moe.starflow.manga.types.BubbleRegion
+import com.moe.starflow.manga.types.TextDirection
+import com.moe.starflow.manga.types.TranslatedBubble
+import com.moe.starflow.mangaimport.translate.TranslationEngineInit
+import com.moe.starflow.translate.TranslationTextAPI
+import com.moe.starflow.translate.isLocalHeavyEngine
+import com.moe.starflow.utils.CustomPreference
+import com.moe.starflow.utils.LocalTranslationCoordinator
+import com.moe.starflow.utils.LogCollector
+import com.moe.starflow.utils.OcrEngineManager
+import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.Job
+import kotlinx.coroutines.currentCoroutineContext
+import kotlinx.coroutines.delay
+import kotlinx.coroutines.isActive
+import kotlinx.coroutines.launch
+import java.io.File
+
+/** 一次图片翻译的结果：[payload] 与 [error] 必有其一（都为空 = 调用方取消了）。 */
+class NovelImageOutcome(val payload: NovelImageTranslation?, val error: String?)
+
+/**
+ * **一张插图的「OCR → 翻译」流水线**（阅读器与整章任务共用这一份）。
+ *
+ * ### 与漫画那边的关系（用户口径「相关逻辑和漫画翻译那边一样」）
+ * 逐段对齐漫画阅读器的 OCR 链路（`ReaderTranslationController.ocrPhaseLocked` +
+ * `translatePlain`），只是把「漫画页」换成「小说插图」：
+ *
+ * ```
+ * OcrLock.beginOcrDemand() → OcrLock.acquire()（带等锁 + 5s 心跳）
+ *   → TranslationEngineInit.ensureReady(context)   ← 引擎组来自全局设置（默认 PP-OCRv6，免下载）
+ *   → DetectionBridge.runOCR(bitmap, srcLang, det, ocr, context, keepTextFree, rtDir)
+ *   → DetectionBridge.ocrToBubbleRegions(blocks, 方向)     → 文字块（矩形 + 原文）
+ * → **放 OCR 锁**（翻译阶段绝不持它：那把锁的语义是"OCR/超分引擎串行"）
+ * → TranslateUtils.translateBubbles(api, bubbles, src, tgt, prefs, isCancelled)
+ * ```
+ *
+ * 三态、渲染、缓存都不在这里（见 `NovelImageOverlay`）：这里只产出**载荷**。
+ *
+ * ### 两条硬纪律
+ * 1. **必须持 `OcrLock`**：PP-OCR / RT-DETR / manga-ocr 都是进程级单例 ONNX，
+ *    与截屏翻译 / 漫画阅读器 / 超分共用同一个 session —— 不持锁并发调用就是崩或出垃圾结果。
+ *    锁忙时**等**（最多 [LOCK_WAIT_TIMEOUT_MS]），拿到再干；等不到报"引擎忙"。
+ * 2. **本地文本引擎（NLLB / LlamaCpp）要串行**：`LocalTranslationCoordinator.mutex`
+ *    —— 与漫画 `translatePhase` 同一套（远端 API 不占）。
+ *
+ * ⚠️ 位图**不缓存**（与显示用的 `NovelImageStore` 分开）：OCR 要大一点的分辨率，
+ * 而它用完就 `recycle()` —— 一章十几张插图全留着就是几十 MB。
+ */
+class NovelImagePipeline(
+    context: Context,
+    /** 文本翻译引擎（**延迟取**：本地模型每造一次都要重载，不能在这儿常驻）。 */
+    private val api: () -> TranslationTextAPI?,
+) {
+
+    private companion object {
+        const val TAG = "NovelImage"
+
+        /** OCR 用的最大边长（原图更大就采样）：识别质量与内存的折中。 */
+        const val OCR_MAX_SIDE = 1600
+
+        /** 等 OCR 锁的轮询与超时（与漫画阅读器同量级：它等 60s）。 */
+        const val LOCK_POLL_MS = 200L
+        const val LOCK_WAIT_TIMEOUT_MS = 60_000L
+
+        /** 持锁期间的心跳间隔，必须远小于 `OcrLock.STALE_TIMEOUT_MS`(30s)。 */
+        const val LOCK_HEARTBEAT_MS = 5_000L
+    }
+
+    private val app: Context = context.applicationContext
+    private val appPrefs = PreferenceManager.getDefaultSharedPreferences(app)
+    private val customPrefs = CustomPreference.getInstance(app)
+
+    /**
+     * 翻一张插图。
+     *
+     * @param file 插图文件（epub 条目已经解出来落盘，见 `NovelChapterRepository.imagesOf`）
+     * @param isCancelled 取消检测（阅读器退出 / 用户切走）；返回 true 时尽早收手
+     */
+    suspend fun translate(
+        file: File,
+        sourceLang: String,
+        targetLang: String,
+        isCancelled: () -> Boolean = { false },
+    ): NovelImageOutcome {
+        if (!file.isFile) return NovelImageOutcome(null, "插图文件不存在")
+        val base = decodeForOcr(file) ?: return NovelImageOutcome(null, "插图读不出来（可能已损坏）")
+        try {
+            val bubbles = runCatching { ocrWithLock(base, sourceLang) }
+                .onFailure { LogCollector.e(TAG, "插图 OCR 失败: ${file.name}", it) }
+                .getOrElse { e ->
+                    return NovelImageOutcome(
+                        null,
+                        "${e.javaClass.simpleName}: ${e.message.orEmpty()}".ifBlank { "OCR 失败" },
+                    )
+                }
+            if (bubbles.isEmpty()) return NovelImageOutcome(null, "这张图里没识别到文字")
+            if (isCancelled()) return NovelImageOutcome(null, null)
+
+            val translated = translateBubbles(bubbles, sourceLang, targetLang, isCancelled)
+                ?: return NovelImageOutcome(null, null) // 取消
+            if (translated.isEmpty()) return NovelImageOutcome(null, "翻译没有返回结果")
+
+            return NovelImageOutcome(
+                NovelImageTranslation(
+                    sourceLang = sourceLang,
+                    targetLang = targetLang,
+                    ocrEngine = engineLabel(),
+                    blocks = toBlocks(translated),
+                ),
+                null,
+            )
+        } finally {
+            // renderOverlay 会自己 copy 出新的位图；OCR 用的这张用完就可以还给系统
+            if (!base.isRecycled) base.recycle()
+        }
+    }
+
+    // ===== OCR =====
+
+    /**
+     * OCR：**持 `OcrLock` 走漫画同一条链路**（引擎组来自全局设置，默认 PP-OCRv6 免下载）。
+     *
+     * 返回的文字块已经按阅读顺序排好、且带矩形 —— 与漫画的气泡级结果同一份类型
+     * （[BubbleRegion]），所以后面的翻译/渲染都能直接复用漫画的实现。
+     */
+    private suspend fun ocrWithLock(bitmap: Bitmap, sourceLang: String): List<BubbleRegion> {
+        OcrLock.beginOcrDemand()
+        var token = 0L
+        var heartbeat: Job? = null
+        try {
+            token = acquireLockWithWait()
+            if (token == 0L) throw IllegalStateException("OCR 引擎被占用（别的翻译/超分正在跑），稍后再试")
+            heartbeat = startHeartbeat(token)
+            val (det, ocr) = TranslationEngineInit.ensureReady(app)
+            OcrLock.heartbeat(token)
+            val rtDir = RtTextDirection.load(appPrefs)
+            val cfg = TranslationCacheManager(app).getOverlayConfig(appPrefs)
+            val blocks = DetectionBridge.runOCR(
+                bitmap = bitmap,
+                language = sourceLang,
+                detEngine = det.value,
+                ocrEngine = ocr.value,
+                context = app,
+                keepTextFree = appPrefs.getBoolean(MangaModeConfig.KEY_KEEP_TEXT_FREE, true),
+                rtDirection = rtDir,
+            )
+            OcrLock.heartbeat(token)
+            val bubbles = DetectionBridge.ocrToBubbleRegions(
+                blocks,
+                RtTextDirection.resolve(det, rtDir, cfg.textDirection),
+            )
+            LogCollector.d(TAG, "插图 OCR 完成：${blocks.size} 块 / ${bubbles.size} 气泡（${det.name}/${ocr.name}）")
+            return bubbles
+        } finally {
+            heartbeat?.cancel()
+            if (token != 0L) OcrLock.release(token)
+            OcrLock.endOcrDemand()
+        }
+    }
+
+    // ===== 翻译 =====
+
+    /**
+     * 逐气泡翻译（**复用漫画的 `TranslateUtils.translateBubbles`**：编号批量 + prefill +
+     * 空译文回退原文 + 取消看门狗都在里面）。
+     *
+     * 返回 null = 用户取消（不是失败）。
+     */
+    private suspend fun translateBubbles(
+        bubbles: List<BubbleRegion>,
+        sourceLang: String,
+        targetLang: String,
+        isCancelled: () -> Boolean,
+    ): List<TranslatedBubble>? {
+        val engine = api() ?: throw IllegalStateException("没有配置文本翻译引擎")
+        // 本地引擎（NLLB / LlamaCpp）全局串行：与漫画 translatePhase 同一把锁。
+        // 判据收敛在 `isLocalHeavyEngine()`（唯一来源），别自己 instanceof 两个类。
+        val local = engine.isLocalHeavyEngine()
+        if (local) LocalTranslationCoordinator.mutex.lock()
+        try {
+            return TranslateUtils.translateBubbles(
+                translator = engine,
+                bubbles = bubbles,
+                sourceLang = sourceLang,
+                targetLang = targetLang,
+                prefs = customPrefs,
+                isCancelled = isCancelled,
+            )
+        } catch (e: TranslationCancelledException) {
+            return null
+        } finally {
+            if (local) runCatching { LocalTranslationCoordinator.mutex.unlock() }
+        }
+    }
+
+    // ===== 收尾 =====
+
+    /** 气泡 → 载荷里的文字块（矩形用裸 int，见 [NovelImageTextBlock]）。 */
+    private fun toBlocks(bubbles: List<TranslatedBubble>): List<NovelImageTextBlock> =
+        bubbles.mapNotNull { b ->
+            val text = b.translatedText.ifBlank { b.originalText }
+            if (b.originalText.isBlank() && text.isBlank()) return@mapNotNull null
+            NovelImageTextBlock(
+                left = b.rect.left,
+                top = b.rect.top,
+                right = b.rect.right,
+                bottom = b.rect.bottom,
+                original = b.originalText,
+                translated = b.translatedText,
+                vertical = b.direction == TextDirection.VERTICAL_RL ||
+                    b.direction == TextDirection.VERTICAL_LR,
+                fontSize = b.fontSize,
+            )
+        }
+
+    /** OCR 引擎组标签（写进载荷，排查"这张图当初是谁认的字"）。 */
+    private fun engineLabel(): String = runCatching {
+        com.moe.starflow.utils.OcrEngineManager.getOcrEngineGroup(appPrefs).key
+    }.getOrDefault("")
+
+    // ===== 位图 / 锁 =====
+
+    /** 按 [OCR_MAX_SIDE] 采样解码（原图 4000 宽按 1/4 采样，内存与耗时都降一个量级）。 */
+    private fun decodeForOcr(file: File): Bitmap? = try {
+        val bounds = BitmapFactory.Options().apply { inJustDecodeBounds = true }
+        BitmapFactory.decodeFile(file.absolutePath, bounds)
+        if (bounds.outWidth <= 0 || bounds.outHeight <= 0) {
+            null
+        } else {
+            BitmapFactory.decodeFile(
+                file.absolutePath,
+                BitmapFactory.Options().apply {
+                    inSampleSize = sampleSizeFor(bounds.outWidth, bounds.outHeight)
+                },
+            )
+        }
+    } catch (e: OutOfMemoryError) {
+        null
+    } catch (e: Exception) {
+        LogCollector.w(TAG, "插图解码失败: ${file.name}", e)
+        null
+    }
+
+    private fun sampleSizeFor(width: Int, height: Int): Int {
+        var sample = 1
+        while (width / (sample * 2) >= OCR_MAX_SIDE || height / (sample * 2) >= OCR_MAX_SIDE) {
+            sample *= 2
+        }
+        return sample
+    }
+
+    /** 轮询等 `OcrLock`（它没有 await）；超时返回 0。 */
+    private suspend fun acquireLockWithWait(): Long {
+        var waited = 0L
+        while (true) {
+            OcrLock.acquire().let { if (it != 0L) return it }
+            if (waited >= LOCK_WAIT_TIMEOUT_MS) return 0L
+            delay(LOCK_POLL_MS)
+            waited += LOCK_POLL_MS
+        }
+    }
+
+    /**
+     * 持锁期间的心跳。
+     *
+     * ⚠️ 首次 `ensureReady` 可能要加载 ONNX 模型（秒级到十几秒），远超
+     * `OcrLock.STALE_TIMEOUT_MS`(30s) 的一半 —— 不打心跳会被自愈机制判成"持有者已死"而强制放锁，
+     * 于是另一个 OCR/超分任务同时进来用同一个引擎。
+     *
+     * ⚠️ 不能用 `coroutineScope { launch { … } }`：那会在**返回前等子协程结束**（心跳永远不返回）。
+     * 这里挂一个独立的 scope（父上下文被取消时它跟着取消，`finally` 里再 `cancel()`）。
+     */
+    private suspend fun startHeartbeat(token: Long): Job =
+        CoroutineScope(currentCoroutineContext()).launch {
+            while (isActive) {
+                OcrLock.heartbeat(token)
+                delay(LOCK_HEARTBEAT_MS)
+            }
+        }
+}

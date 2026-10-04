@@ -91,6 +91,51 @@ Robolectric 的文本引擎是**桩**：`Paint.breakText` 不按宽度换行、�
 - 守卫：`NovelImageExtractionTest`（抽地址 / 配对 / epub 相对路径 / 百分号转义 / SVG 包装 /
   `data:` / 路径穿越）、`NovelImageMetricsTest`（尺寸口径）、`NovelImagePaginationTest`（占位高度与换页）
 
+### ⚠️ 插图**翻译**（2026-10-04 加，改动前必读）
+
+用户口径：「长按图片翻译图片内容（OCR + 翻译 + overlay 渲染回去，图片右下角支持三态切换、
+重新翻译、删除等功能，**相关逻辑和漫画翻译那边一样**）」+「翻译面板多一个开关『同时翻译图片』」
++「**一张图片算一个文本段落**，队列里有多张图片时依次 OCR 翻译每张」。
+
+链路（每一段都能单独替换，别把它们揉在一起）：
+
+| 段 | 位置 | 说明 |
+|---|---|---|
+| OCR | `NovelImagePipeline.ocrWithLock` | 复用**漫画同一条链路**：`OcrLock`（`beginOcrDemand` + 带 5s 心跳的等锁）→ `TranslationEngineInit.ensureReady`（引擎组来自全局设置，默认 PP-OCRv6 免下载）→ `DetectionBridge.runOCR` → `ocrToBubbleRegions`。⚠️ **翻译前一定放锁**（那是 OCR/超分引擎锁，不是翻译锁） |
+| 翻译 | `TranslateUtils.translateBubbles` | 漫画那套编号批量 + prefill + 空译文回退原文 + 取消看门狗；本地引擎（NLLB/LlamaCpp）外面套 `LocalTranslationCoordinator.mutex`（判据 `isLocalHeavyEngine()`） |
+| 载荷 | `NovelImageTranslation` + `NovelImagePayloadCodec` | 一个块 = 矩形 + OCR 原文 + 译文 + 竖排 + 字号；存 `novel_paragraph_translation.imagePayload`（JSON）。**同一行的 `translatedText` 存拼接译文**（导出/进度/「已翻」判据直接复用），所以图片段在库里就是一条普通成功行 |
+| 渲染 | `NovelImageOverlay` | 三态 = 译文（`useOriginalText=false`）/ 识别原文（`true`）/ 纯图（**不调** `renderOverlay`）；按 `(图片路径, 态, 载荷 hashCode, 目标宽)` 缓存；`renderScale=1f`（会进 LRU）。"原文"是**把 OCR 原文画回原位**，不是裸原图 |
+| 交互 | `NovelImageControls` + `NovelPageView`/`NovelScrollAdapter` | 长按图片 → 立即翻（已翻过则只亮操作条）；图上右下角三颗按钮（三态 / 重翻 / 删除），**几何与命中同源**（各算一套就是"看着有按钮点不动"） |
+
+**硬约束与踩过的坑**：
+
+- ⚠️ **图片段独占一批**（`NovelBatchPlanner.splitImageUnits`，队列与章任务都走它）：混进文本批的话
+  文本引擎（`NovelTranslationEngine.asUnits` 只认 TEXT）会把图片段滤掉 → **整批被标失败**。
+- ⚠️ **图片单位串行**（`NovelTranslationQueue.imageBusy`）：OCR 是单例引擎，两批同时起飞只会在锁上
+  干等、还白占一个并发槽位。用户口径也是"依次 OCR 翻译每张"。
+- ⚠️ **`imagePayload` 必须在清译文时一起清**（`resetToIdleRows` 的 `imagePayload = NULL`）：
+  它是"这张图已经翻过"的**另一份凭据**，留着的话用户点了「删除译文」屏幕上什么都没变。
+- ⚠️ **DB v21 → v22**（`MIGRATION_21_22` 加列：可空、无 DEFAULT）。守卫
+  `NovelParagraphTranslationDaoTest` —— 那条"迁移建出的表与 Entity 逐列一致"的老守卫会**当场拦下**
+  忘记加迁移的情况（真值在 `TranslationHistoryDatabase` 的 `@Database(version=)`）。
+- ⚠️ **分母**：开关开着时 `NovelChapterRepository.paragraphCountOf(includeImages = true)` 才算上图片段，
+  否则会出现「已翻 6/5」（库里图片行算了成功数、分母里没有它们）。
+- ⚠️ **单段 ensure 不能记"分母已补齐"**（`markEnsured = false`，长按单张图那条路）：只拿到一段就宣布
+  补齐，后面整章翻译再也不补分母 → 章行显示「已翻 1/1」却还有几十段没翻。
+- **三态与聚焦是会话级内存态**（不落库，与漫画"翻页重置为译文"同一取舍）：落库会让下次打开仍停在
+  上次随手切的"原图"上，用户以为译文丢了。
+- **面板开关在折叠组之外、常显**（用户点名要的开关，藏进默认折叠的「批次处理」里等于没做）；
+  默认**关**（每张图 = 一次 OCR 几秒 + 一次翻译请求）。
+- **长按单张图不受开关限制**（那是用户对这张图的显式指令）；开关只管自动/增量/整章/手动一批
+  要不要把插图也带上。
+- 图片视图的载荷走 **`setImageState(visuals, focused, translations)` 单独灌**，不读适配器手里那份
+  `ChapterContent`：`submit` 会把阅读位置一起掀掉，不值得为一张图重提整章内容。
+- 守卫：`NovelImagePayloadCodecTest`（编解码/坏数据不抛）、`NovelImageControlsTest`（贴右下角/命中/窄图）、
+  `NovelBatchPlannerTest`（图片独占批 + 顺序不变）、`NovelChapterTranslatorTest`（图片走宿主 + 载荷落库 +
+  失败写原因 + 没宿主时照旧跳过）、`NovelPanelSyncTest`（开关回推）。
+- **未做**：`仅 OCR` 执行模式对插图不生效（插图始终 OCR + 翻译）；章任务的批行文案对图片单位仍显示
+  「第 x–y 段」（一张图时 x == y）。
+
 ### ⚠️ 当前状态（2026-09-27）
 
 **已完成**：导入（txt / epub / zip-html / 文件夹）、双阅读器（左右 / 上下 / 滚动）、四种翻页动画、

@@ -71,4 +71,7 @@ data class NovelPanelHostState(
 
     /** 单批预警阈值在 [NovelBatchWarning.tiers] 里的**档位下标**。 */
     val batchWarnIndex: Int = NovelBatchWarning.defaultIndex,
+
+    /** 同时翻译图片（epub 插图当"一个段落"一起翻；默认关）。 */
+    val translateImages: Boolean = false,
 )

@@ -6,6 +6,9 @@ import android.text.StaticLayout
 import android.view.View
 import android.view.ViewGroup
 import androidx.recyclerview.widget.RecyclerView
+import com.moe.starflow.R
+import com.moe.starflow.novel.translate.NovelImageTranslation
+import com.moe.starflow.novel.translate.NovelImageVisual
 
 /**
  * 连续滚动模式：**一段一个 item**。
@@ -33,8 +36,17 @@ class NovelScrollAdapter : RecyclerView.Adapter<NovelScrollAdapter.VH>() {
     /** 正在翻译 / 刚翻完的段（琥珀底色）。 */
     private var activeBatch: Set<Int> = emptySet()
 
-    /** 翻失败了的段（淡红底）。 */
+    /** 「翻失败了」的段（淡红底）。 */
     private var failedBatch: Set<Int> = emptySet()
+
+    /** 每张插图的显示态（`段号 -> 三态`）；表里没有 = 译文态。 */
+    private var imageVisuals: Map<Int, NovelImageVisual> = emptyMap()
+
+    /** 当前聚焦的那张插图（只有它画右下角那排按钮）。 */
+    private var focusedImage: Int? = null
+
+    /** 每张插图的译文载荷（宿主灌进来；见 `NovelPageView.setImageState` 的说明）。 */
+    private var imageTranslations: Map<Int, NovelImageTranslation> = emptyMap()
 
     class VH(val view: ParagraphView) : RecyclerView.ViewHolder(view)
 
@@ -80,6 +92,27 @@ class NovelScrollAdapter : RecyclerView.Adapter<NovelScrollAdapter.VH>() {
         notifyItemRangeChanged(0, itemCount)
     }
 
+    /** 插图显示态 + 聚焦态变化（只重画：插图高度与显示态无关）。 */
+    fun setImageState(
+        visuals: Map<Int, NovelImageVisual>,
+        focused: Int?,
+        translations: Map<Int, NovelImageTranslation> = emptyMap(),
+    ) {
+        if (imageVisuals == visuals && focusedImage == focused && imageTranslations == translations) return
+        imageVisuals = visuals
+        focusedImage = focused
+        imageTranslations = translations
+        notifyItemRangeChanged(0, itemCount)
+    }
+
+    /**
+     * 插图按钮条的命中测试（滚动模式：列表里那一条）。
+     *
+     * @param x/[y] 相对**条目根视图**的坐标（调用方减掉 `child.left/top`）
+     */
+    fun imageControlAt(holder: ParagraphView, x: Float, y: Float): NovelImageButton? =
+        holder.imageControlAt(x, y)
+
     /** item 下标 → 段号（选择模式命中用；越界返回 null）。 */
     fun paraIndexAt(position: Int): Int? =
         content?.let { NovelScrollMapping.paraIndexOf(it, position) }
@@ -103,6 +136,9 @@ class NovelScrollAdapter : RecyclerView.Adapter<NovelScrollAdapter.VH>() {
         holder.view.bind(
             c.displayOf(para.index), style, textColor, backgroundColor,
             image = c.images[para.index],
+            payload = imageTranslations[para.index],
+            visual = imageVisuals[para.index] ?: NovelImageVisual.TRANSLATED,
+            focused = focusedImage == para.index,
             selected = para.index in selected,
             active = para.index in activeBatch,
             failed = para.index in failedBatch,
@@ -127,6 +163,15 @@ class NovelScrollAdapter : RecyclerView.Adapter<NovelScrollAdapter.VH>() {
          * 一张整页插图就该按正文列宽铺开、有多高滚多高 —— 与分页模式不得不把它压进一页是两回事。
          */
         private var image: NovelImage? = null
+
+        /** 这一段的图片译文载荷（null = 这张图还没翻过，只画原图）。 */
+        private var payload: NovelImageTranslation? = null
+
+        /** 这一段的显示态（译文 / 识别原文 / 原图）。 */
+        private var visual: NovelImageVisual = NovelImageVisual.TRANSLATED
+
+        /** 这一段是不是**聚焦**的那张图（只有它画右下角那排按钮）。 */
+        private var focused: Boolean = false
 
         /** 已经真正设到底色上的颜色（切选中态/切背景都要比它，别比 [backgroundColor]）。 */
         private var appliedBg: Int = backgroundColor
@@ -182,24 +227,32 @@ class NovelScrollAdapter : RecyclerView.Adapter<NovelScrollAdapter.VH>() {
             textColor: Int,
             backgroundColor: Int,
             image: NovelImage? = null,
+            payload: NovelImageTranslation? = null,
+            visual: NovelImageVisual = NovelImageVisual.TRANSLATED,
+            focused: Boolean = false,
             selected: Boolean = false,
             active: Boolean = false,
             failed: Boolean = false,
         ) {
             if (this.text == text && this.style == style && this.textColor == textColor &&
                 this.backgroundColor == backgroundColor && this.image == image &&
+                this.payload == payload && this.visual == visual && this.focused == focused &&
                 this.selected == selected && this.active == active && this.failed == failed
             ) {
                 return
             }
             // ⚠️ 「要不要重新测量」必须在**赋值之前**判定：item 是 `WRAP_CONTENT`，
             // `requestLayout()` 必然带回一遍 `onMeasure`（那里要拿 layout / 图片的高度）。
+            // ⚠️ 三态 / 聚焦**不进**这里：它们只换画哪张位图，条目高度一点没变（插图高度按图片自身尺寸算）
             val remeasure = this.text != text || this.style != style || this.image != image
             this.text = text
             this.style = style
             this.textColor = textColor
             this.backgroundColor = backgroundColor
             this.image = image
+            this.payload = payload
+            this.visual = visual
+            this.focused = focused
             this.selected = selected
             this.active = active
             this.failed = failed
@@ -262,7 +315,20 @@ class NovelScrollAdapter : RecyclerView.Adapter<NovelScrollAdapter.VH>() {
                 val size = NovelImageMetrics.fit(img, contentWidth, 0f)
                 if (size != null) {
                     val left = style.paddingPx + (contentWidth - size.width) / 2f
-                    if (NovelImageStore.draw(canvas, img, left, 0f, size)) return
+                    // 有译文载荷 → 画覆盖层（译文 / 识别原文）；纯图态或没载荷 → 画原图
+                    val overlay = payload?.let {
+                        NovelImageOverlay.of(context, img, it, visual, size.width.toInt())
+                    }
+                    val drawn = if (overlay != null) {
+                        NovelImageStore.drawBitmap(canvas, overlay, left, 0f, size)
+                        true
+                    } else {
+                        NovelImageStore.draw(canvas, img, left, 0f, size)
+                    }
+                    if (drawn) {
+                        if (focused) drawImageControls(canvas, left + size.width, size.height)
+                        return
+                    }
                     // 画不出来（文件没了/解码失败）→ 落回下面的占位文本，别留一片空白
                 }
             }
@@ -276,6 +342,50 @@ class NovelScrollAdapter : RecyclerView.Adapter<NovelScrollAdapter.VH>() {
                 y = 0f,
                 color = textColor,
             )
+        }
+
+        /** 聚焦那张图右下角的三颗按钮（与 [imageControlAt] 同一份几何）。 */
+        private fun drawImageControls(canvas: Canvas, right: Float, bottom: Float) {
+            val density = resources.displayMetrics.density
+            val items = NovelImageControls.layout(right, bottom, density)
+            NovelImageControls.drawBackdrop(canvas, items, density)
+            for (item in items) {
+                NovelImageControls.drawIcon(canvas, item, imageIconOf(item.button), density)
+            }
+        }
+
+        /**
+         * 插图按钮条的命中测试（坐标相对本条目）。
+         *
+         * 走法与 [onDraw] 同一份几何（`fit` + 居中 + `NovelImageControls.layout`），
+         * 所以"点到的按钮"与"看到的按钮"必然一致。
+         */
+        fun imageControlAt(x: Float, y: Float): NovelImageButton? {
+            if (!focused) return null
+            val img = image ?: return null
+            val contentWidth = style.contentWidthPx(width)
+            val size = NovelImageMetrics.fit(img, contentWidth, 0f) ?: return null
+            val left = style.paddingPx + (contentWidth - size.width) / 2f
+            val items = NovelImageControls.layout(
+                left + size.width, size.height, resources.displayMetrics.density,
+            )
+            return NovelImageControls.hit(items, x, y)
+        }
+
+        /** 按钮图标（白色 tint：按钮底是深色药丸）。 */
+        private fun imageIconOf(button: NovelImageButton): android.graphics.drawable.Drawable? {
+            val res = when (button) {
+                NovelImageButton.TOGGLE -> when (visual) {
+                    NovelImageVisual.TRANSLATED -> R.drawable.ic_display_translated
+                    NovelImageVisual.ORIGINAL -> R.drawable.ic_display_original
+                    NovelImageVisual.PLAIN -> R.drawable.ic_display_plain
+                }
+                NovelImageButton.RETRANSLATE -> R.drawable.ic_refresh
+                NovelImageButton.DELETE -> R.drawable.ic_action_delete
+            }
+            return context.getDrawable(res)?.mutate()?.apply {
+                setTint(android.graphics.Color.WHITE)
+            }
         }
     }
 }

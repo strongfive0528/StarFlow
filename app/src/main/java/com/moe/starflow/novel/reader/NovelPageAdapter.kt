@@ -4,6 +4,8 @@ import android.view.ViewGroup
 import android.widget.FrameLayout
 import androidx.recyclerview.widget.RecyclerView
 import com.moe.starflow.mangaimport.reader.CurlPageView
+import com.moe.starflow.novel.translate.NovelImageTranslation
+import com.moe.starflow.novel.translate.NovelImageVisual
 
 /**
  * 分页模式：一页一个 item。
@@ -47,6 +49,15 @@ class NovelPageAdapter : RecyclerView.Adapter<NovelPageAdapter.VH>() {
 
     /** 翻失败了的段（淡红高亮底）。 */
     private var failedBatch: Set<Int> = emptySet()
+
+    /** 每张插图的显示态（`段号 -> 三态`）；表里没有 = 译文态。 */
+    private var imageVisuals: Map<Int, NovelImageVisual> = emptyMap()
+
+    /** 当前聚焦的那张插图（只有它画右下角那排按钮）。 */
+    private var focusedImage: Int? = null
+
+    /** 每张插图的译文载荷（宿主灌进来；见 `NovelPageView.setImageState` 的说明）。 */
+    private var imageTranslations: Map<Int, NovelImageTranslation> = emptyMap()
 
     class VH(val curl: CurlPageView, val page: NovelPageView) : RecyclerView.ViewHolder(curl)
 
@@ -92,6 +103,19 @@ class NovelPageAdapter : RecyclerView.Adapter<NovelPageAdapter.VH>() {
         notifyItemRangeChanged(0, itemCount)
     }
 
+    /** 插图显示态 + 聚焦态变化（只重画：插图高度与显示态无关，不需要重排）。 */
+    fun setImageState(
+        visuals: Map<Int, NovelImageVisual>,
+        focused: Int?,
+        translations: Map<Int, NovelImageTranslation> = emptyMap(),
+    ) {
+        if (imageVisuals == visuals && focusedImage == focused && imageTranslations == translations) return
+        imageVisuals = visuals
+        focusedImage = focused
+        imageTranslations = translations
+        notifyItemRangeChanged(0, itemCount)
+    }
+
     override fun onCreateViewHolder(parent: ViewGroup, viewType: Int): VH {
         val curl = CurlPageView(parent.context)
         // ViewPager2 的页面就用 RecyclerView.LayoutParams（它的 LayoutParams 未公开）
@@ -126,6 +150,8 @@ class NovelPageAdapter : RecyclerView.Adapter<NovelPageAdapter.VH>() {
         val c = content ?: return
         val page = c.pages.getOrNull(position) ?: return
         holder.page.bind(c, page, style, textColor, selected, activeBatch, failedBatch)
+        // 插图显示态/聚焦态/载荷是**宿主灌进来的状态**（不在 bind 的参数里：三态只重画不重排）
+        holder.page.setImageState(imageVisuals, focusedImage, imageTranslations)
     }
 
     companion object {

@@ -67,6 +67,23 @@ internal object NovelImageStore {
     private val rect = android.graphics.RectF()
 
     /**
+     * 把**已经把译文画上去的那张位图**按 [size] 画到 ([x], [y])（插图覆盖层用）。
+     *
+     * 与 [draw] 的区别：这里画的是**已经渲染好的覆盖层**（`NovelImageOverlay` 的产物），
+     * 不再经过解码缓存 —— 它本身就是缓存出来的成品。
+     */
+    fun drawBitmap(
+        canvas: android.graphics.Canvas,
+        bmp: Bitmap,
+        x: Float,
+        y: Float,
+        size: NovelImageMetrics.Size,
+    ) {
+        rect.set(x, y, x + size.width, y + size.height)
+        canvas.drawBitmap(bmp, null, rect, paint)
+    }
+
+    /**
      * 在 ([x], [y]) 处按 [size] 画一张插图；解不出来（文件没了 / 损坏）返回 false。
      *
      * 两种模式共用（分页的 [NovelPageView] 与滚动的 [NovelScrollAdapter]）：宽度统一由

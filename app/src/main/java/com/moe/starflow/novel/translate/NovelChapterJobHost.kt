@@ -5,9 +5,12 @@ import android.content.SharedPreferences
 import androidx.preference.PreferenceManager
 import com.moe.starflow.data.TranslationHistoryDatabase
 import com.moe.starflow.novel.data.ImportedNovel
+import com.moe.starflow.novel.data.NovelStorageDir
 import com.moe.starflow.novel.reader.NovelChapterRepository
 import com.moe.starflow.novel.reader.NovelPanelStyle
 import com.moe.starflow.novel.reader.isTranslatable
+import com.moe.starflow.novel.translate.NovelImageHost
+import com.moe.starflow.novel.translate.NovelParagraphType
 import com.moe.starflow.translate.batch.ActiveChapterJob
 import com.moe.starflow.translate.batch.ChapterJob
 import com.moe.starflow.translate.batch.ChapterJobRunner
@@ -142,8 +145,42 @@ class NovelChapterJobHost(
                 threshold = { NovelPanelStyle.batchWarnThreshold(readerPrefs) },
                 confirm = { estimate, threshold -> oversize.confirm(estimate, threshold) },
             ),
+            // 图片段：整章任务也要能翻插图（开关关着时返回 null = 老行为）
+            imageHost = { imageHostOrNull() },
         ).also { translatorCache = it }
     }
+
+    /**
+     * 图片翻译宿主（**面板开关关着时返回 null** —— 那时整章任务照旧只翻文字）。
+     *
+     * ⚠️ 每次现读 prefs：开关随时会变，而这份 translator 是按值缓存的。
+     * 整章任务在**阅读器已关**时也能跑，所以这里不能依赖任何 UI。
+     */
+    private fun imageHostOrNull(): NovelImageHost? {
+        if (!NovelPanelStyle.translateImages(readerPrefs)) return null
+        val pipeline = imagePipeline ?: NovelImagePipeline(app) {
+            runCatching { TranslatorFactory.createForText(app, CustomPreference.getInstance(app)) }.getOrNull()
+        }.also { imagePipeline = it }
+        return NovelImageHost(
+            fileOf = { b, ch, para -> imageFileOf(b, ch, para) },
+            translate = { file, src, tgt -> pipeline.translate(file, src, tgt) },
+        )
+    }
+
+    /** 某段插图落盘后的文件（整章任务自己一份仓库：它可能在阅读器关掉之后跑）。 */
+    private suspend fun imageFileOf(book: ImportedNovel, chapterIndex: Int, paraIndex: Int): java.io.File? =
+        runCatching { imagesRepository.imagesOf(book, chapterIndex)[paraIndex]?.file }.getOrNull()
+
+    /**
+     * 插图仓库（**带 `imagesRoot`**：没有它 `imagesOf` 恒返回空表，整章任务就翻不了图）。
+     * 与 [repository]（只要段落、不解图）分开，免得每次排批都去碰压缩包。
+     */
+    private val imagesRepository by lazy {
+        NovelChapterRepository(imagesRoot = NovelStorageDir.root(app))
+    }
+
+    @Volatile
+    private var imagePipeline: NovelImagePipeline? = null
 
     /** 模型 / 引擎配置变了 → 丢掉缓存的那份（下次用到时按新配置重建）。 */
     fun invalidateTranslator() {
@@ -231,7 +268,16 @@ class NovelChapterJobHost(
         scope.launch {
             val paragraphs = runCatching { repository.paragraphsOf(b, chapterIndex) }
                 .getOrDefault(emptyList())
-            val paras = paragraphs.filter { it.isTranslatable() }.map { it.index }
+            // 「同时翻译图片」开着时，插图段也算一个可翻单位（一张图 = 一个段 = 一次 OCR + 一次请求）
+            val includeImages = NovelPanelStyle.translateImages(readerPrefs)
+            val paras = paragraphs
+                .filter { it.isTranslatable() || (includeImages && it.type == NovelParagraphType.IMAGE) }
+                .map { it.index }
+            val imageParas = if (includeImages) {
+                paragraphs.filter { it.type == NovelParagraphType.IMAGE }.map { it.index }.toSet()
+            } else {
+                emptySet()
+            }
             val done = if (retranslateAll) {
                 emptySet()
             } else {
@@ -245,6 +291,8 @@ class NovelChapterJobHost(
                 chapterParaIndexes = paras,
                 translated = done,
                 batchSize = NovelPanelStyle.batchSize(readerPrefs),
+                // ⚠️ 图片段独占一批：OCR 单例、必须依次跑（见 NovelBatchPlanner.splitImageUnits）
+                isImage = { it in imageParas },
             )
             if (plan.isEmpty()) {
                 LogCollector.i(TAG, "第 $chapterIndex 章没有待翻的段落")

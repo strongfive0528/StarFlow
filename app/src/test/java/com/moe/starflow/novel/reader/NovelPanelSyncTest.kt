@@ -17,6 +17,7 @@ import com.moe.starflow.translate.batch.ChapterJob
 import com.moe.starflow.translate.batch.ChapterJobState
 import com.moe.starflow.utils.TranslationConcurrency
 import org.junit.Assert.assertEquals
+import org.junit.Assert.assertFalse
 import org.junit.Assert.assertTrue
 import org.junit.Test
 import org.junit.runner.RunWith
@@ -58,6 +59,7 @@ class NovelPanelSyncTest {
         waiting: Map<Int, List<NovelWaitingBatch>> = emptyMap(),
         concurrency: Int = TranslationConcurrency.NOVEL_DEFAULT,
         warnIndex: Int = NovelBatchWarning.defaultIndex,
+        translateImages: Boolean = false,
     ) = NovelPanelHostState(
         chapterIndex = chapter,
         chapterStats = stats,
@@ -79,6 +81,7 @@ class NovelPanelSyncTest {
         waitingBatches = waiting,
         concurrency = concurrency,
         batchWarnIndex = warnIndex,
+        translateImages = translateImages,
     )
 
     /**
@@ -412,6 +415,26 @@ class NovelPanelSyncTest {
             "${NovelBatchWarning.thresholdAt(3)}",
             v.findViewById<TextView>(R.id.tv_batch_warn_value).text,
         )
+    }
+
+    /**
+     * **「同时翻译图片」开关跟着宿主状态变**（用户口径 2026-10：文本阅读器翻译面板要多一个开关）。
+     *
+     * ⚠️ 这条是 `NovelPanelHostState` 的契约：宿主改了值必须显式回推，否则那处 UI
+     * 永远停在打开面板那一刻。
+     */
+    @Test
+    fun `同时翻译图片开关跟着宿主状态变`() {
+        val (sheet, v) = attach()
+        val sw = v.findViewById<android.widget.Switch>(R.id.sw_translate_images)
+        assertTrue("控件必须存在（放在折叠组之外、常显）", sw != null)
+        assertFalse("默认关（每张图要跑一次 OCR + 一次翻译请求）", sw.isChecked)
+
+        sheet.renderHostState(state(translateImages = true))
+        assertTrue("宿主回推 true 后开关必须亮", sw.isChecked)
+
+        sheet.renderHostState(state(translateImages = false))
+        assertFalse("回推 false 后必须灭", sw.isChecked)
     }
 
     /** 旧的两个**全局**按钮必须已经不在面板里了（用户要求整体删掉，能力都挪到章卡片上）。 */

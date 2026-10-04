@@ -375,6 +375,23 @@ object NovelPanelStyle {
     private const val KEY_BATCH = "novel_translate_batch"
 
     /**
+     * **同时翻译图片**：开着时，自动 / 增量 / 整章 / 手动一批都会把 epub 插图当成"一个段落"来翻
+     * （OCR → 翻译 → 画回图上）。默认**关**。
+     *
+     * ⚠️ 为什么默认关：它是唯一会**真跑 OCR**（几秒/张，抢全局 OCR 引擎锁）的文本阅读器功能，
+     * 而且每张图都要发一次翻译请求。用户明确要的是"一个开关"，那就得让他在明白代价之后自己开。
+     *
+     * ⚠️ 长按单张插图翻译**不受这个开关限制**（那是用户对这张图的显式指令）。
+     */
+    private const val KEY_TRANSLATE_IMAGES = "novel_translate_images"
+
+    fun translateImages(prefs: SharedPreferences): Boolean =
+        prefs.getBoolean(KEY_TRANSLATE_IMAGES, false)
+
+    fun setTranslateImages(prefs: SharedPreferences, v: Boolean) =
+        prefs.edit().putBoolean(KEY_TRANSLATE_IMAGES, v).apply()
+
+    /**
      * 翻译模式。**底层仍存 0/1/2 的 int**（键没变，老用户的「自动」不会被读成手动，
      * 也不会因为 `getString` 读 int 键而抛 ClassCastException），对外只暴露枚举。
      */

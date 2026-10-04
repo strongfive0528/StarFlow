@@ -5,6 +5,7 @@ import com.moe.starflow.novel.data.ImportedNovel
 import com.moe.starflow.novel.model.NovelChapterMeta
 import com.moe.starflow.novel.parser.ChapterSource
 import com.moe.starflow.novel.parser.NovelParsers
+import com.moe.starflow.novel.translate.NovelImageTranslation
 import com.moe.starflow.novel.translate.NovelParagraph
 import com.moe.starflow.novel.translate.NovelParagraphSplitter
 import com.moe.starflow.novel.translate.NovelParagraphType
@@ -41,6 +42,13 @@ data class ChapterContent(
      * ⚠️ 分页（[NovelPaginator]）与两种绘制路径都从这里取，别再各传一份参数。
      */
     val images: Map<Int, NovelImage> = emptyMap(),
+    /**
+     * 本章**图片段的译文载荷**（`段号 -> 载荷`）；表里没有 = 那张图还没翻过。
+     *
+     * ⚠️ 与 [images] 是两件事：前者是"图能不能显示"，后者是"这张图翻过没有"。
+     * 一张解出来的插图完全可以没有译文（用户没开「同时翻译图片」、也没长按它）。
+     */
+    val imageTranslations: Map<Int, NovelImageTranslation> = emptyMap(),
 ) {
     /**
      * 非 SKIP 的段（滚动列表就是按这个顺序排的）。
@@ -156,14 +164,18 @@ class NovelChapterRepository(
      * 同理，分母也不能用「数据库里这一章有几行」（那是按批惰性写的）—— 见
      * `NovelChapterTranslator.ensureChapterRows`。
      *
-     * ⚠️ 未翻译的章在数据库里**没有任何行**，`chapterStats` 里也就没有它 —— 这正是
-     * 「只有翻过的章显示段数」那个 bug 的根因。所以分母必须自己解析出来：懒解析 + 缓存，
-     * 章行一次只显示几行，不必预先解析整本（上千章的书会卡死）。
+     * @param includeImages 「同时翻译图片」开着时传 true：插图段也算一个可翻单位
+     *   （用户口径「一张图片算一个文本段落」）。传 false（默认）= 与旧行为逐字一致。
      */
-    suspend fun paragraphCountOf(book: ImportedNovel, chapterIndex: Int): Int {
-        val key = chapterKey(book, chapterIndex)
+    suspend fun paragraphCountOf(
+        book: ImportedNovel,
+        chapterIndex: Int,
+        includeImages: Boolean = false,
+    ): Int {
+        val key = chapterKey(book, chapterIndex) + if (includeImages) ":img" else ""
         paraCounts[key]?.let { return it }
-        val n = paragraphsOf(book, chapterIndex).count { it.isTranslatable() }
+        val n = paragraphsOf(book, chapterIndex)
+            .count { it.isTranslatable() || (includeImages && it.type == NovelParagraphType.IMAGE) }
         paraCounts[key] = n
         return n
     }
@@ -290,6 +302,11 @@ class NovelChapterRepository(
         widthPx: Int,
         heightPx: Int,
         anchor: NovelAnchor? = null,
+        /**
+         * 本章图片段的译文载荷（`段号 -> 载荷`）。**必须进缓存键**：重新翻译一张图会换掉
+         * 矩形与文字，不进键就会命中旧页表/旧渲染，用户点了「重新翻译」却看不出变化。
+         */
+        imageTranslations: Map<Int, NovelImageTranslation> = emptyMap(),
     ): ChapterContent = withContext(Dispatchers.IO) {
         val title = chaptersOf(book).getOrNull(chapterIndex)?.title.orEmpty()
         val paras = paragraphsOf(book, chapterIndex)
@@ -311,7 +328,9 @@ class NovelChapterRepository(
             // 不进键就会命中旧页表、开关看起来"没生效"
             "${style.keepParagraphsWhole}:$widthPx:$heightPx:" +
             // ⚠️ 锚点也要进键：同一个锚点在不同阅读位置会切出不同的页表（页首那刀）
-            "${anchor?.paraIndex}:${anchor?.fraction}"
+            "${anchor?.paraIndex}:${anchor?.fraction}:" +
+            // ⚠️ 图片译文载荷也要进键：重翻一张图会换掉矩形与文字
+            revisionOfImages(imageTranslations)
 
         // ⚠️ 先查缓存再算显示文本：`displayParas` 是 O(段数) 的对象分配，双语模式下每段还要
         // 拼一次字符串，而 `loadChapter` 每次改排版 / 切显示模式 / 切背景 / 译文到达都会调到这里。
@@ -333,7 +352,18 @@ class NovelChapterRepository(
             pages = NovelPaginator.paginate(displayParas, style, widthPx, heightPx, anchor, layoutCache, images),
             translatableIndexes = visible.filter { it.isTranslatable() }.mapTo(HashSet()) { it.index },
             images = images,
+            imageTranslations = imageTranslations,
         ).also { content.put(key, it) }
+    }
+
+    /**
+     * 图片译文载荷的版本号（进缓存键）。用「条数 + 每张载荷的 hashCode」——
+     * 载荷是 data class（矩形/原文/译文都参与 equals），重翻一次键就变。
+     */
+    private fun revisionOfImages(images: Map<Int, NovelImageTranslation>): Int {
+        var h = images.size
+        for ((k, v) in images) h = h * 31 + k * 31 + v.hashCode()
+        return h
     }
 
     /**

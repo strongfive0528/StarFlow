@@ -235,6 +235,26 @@
                         android:textSize="11sp" android:textColor="#888888"/>
                 </LinearLayout>
 
+                <!-- ===== 同时翻译图片（用户口径 2026-10）=====
+                     开着时 epub 插图当"一个段落"一起翻（OCR → 翻译 → 画回图上）；默认关。
+                     ⚠️ 放在**折叠组之外、常显**：这是用户点名要的开关，
+                     藏进默认折叠的「批次处理」里等于"没做"。
+                     长按单张插图翻译不受这个开关限制。 -->
+                <LinearLayout android:id="@+id/row_translate_images" android:layout_width="match_parent"
+                    android:layout_height="wrap_content" android:orientation="vertical" android:layout_marginTop="8dp">
+                    <LinearLayout android:layout_width="match_parent" android:layout_height="wrap_content"
+                        android:orientation="horizontal" android:gravity="center_vertical">
+                        <TextView android:id="@+id/tv_translate_images_label" android:layout_width="0dp"
+                            android:layout_weight="1" android:layout_height="wrap_content"
+                            android:text="@string/novel_translate_images" android:textSize="14sp" android:textColor="#333333"/>
+                        <Switch android:id="@+id/sw_translate_images" android:layout_width="wrap_content"
+                            android:layout_height="wrap_content"/>
+                    </LinearLayout>
+                    <TextView android:id="@+id/tv_translate_images_hint" android:layout_width="match_parent"
+                        android:layout_height="wrap_content" android:text="@string/novel_translate_images_hint"
+                        android:textSize="11sp" android:textColor="#888888"/>
+                </LinearLayout>
+
                 <!-- ===== 批次处理（可折叠组）=====
                      用户口径（2026-09-27）：除了「启动延迟」之外的四个批次相关参数**收进这一组折叠起来**，
                      组名「批次处理」，组内第一项是「启动增量翻译向后」。默认折叠（记在 prefs 里）。 -->

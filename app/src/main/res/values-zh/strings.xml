@@ -1678,6 +1678,20 @@
     <string name="novel_next_chapter">下一章</string>
     <string name="novel_translate_batch">每批段数</string>
     <string name="novel_translate_batch_hint">一次请求翻多少段（批 = 连续的这几段，不跨章）。调大请求数更少但单次更长，也更容易触发下面的超长预警。</string>
+    <string name="novel_translate_images">同时翻译图片</string>
+    <string name="novel_translate_images_hint">把书里的每张插图当成一个段落：先认出图上的文字，翻译后画回图上。默认关闭——每张图要跑一次 OCR（几秒）并发一次翻译请求。长按单张图片翻译不受这个开关限制。</string>
+    <string name="novel_image_translating">正在翻译图片…</string>
+    <string name="novel_image_translated">图片翻译完成（%1$d 处文字）</string>
+    <string name="novel_image_failed">图片翻译失败：%1$s</string>
+    <string name="novel_image_no_text">这张图里没识别到文字</string>
+    <string name="novel_image_toggle">切换显示</string>
+    <string name="novel_image_retranslate">重新翻译图片</string>
+    <string name="novel_image_delete">删除图片译文</string>
+    <string name="novel_image_deleted">已删除这张图的译文</string>
+    <string name="novel_image_visual_translated">译文</string>
+    <string name="novel_image_visual_original">识别原文</string>
+    <string name="novel_image_visual_plain">原图</string>
+    <string name="novel_image_need_config">请先配置翻译引擎</string>
     <!-- ===== 单批超长预警（一批合并文本估算超过阈值 → 弹窗问「继续 / 取消这次翻译」） ===== -->
     <string name="novel_translate_warn">单批预警阈值</string>
     <string name="novel_translate_warn_hint">一批的原文估算超过这个长度时先问一次「是否继续」（同一轮只问一次）。设大一点可以少打扰，但单次请求太长时模型容易漏译或截断。</string>

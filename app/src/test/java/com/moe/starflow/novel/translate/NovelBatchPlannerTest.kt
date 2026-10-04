@@ -7,6 +7,51 @@ import org.junit.Test
 
 class NovelBatchPlannerTest {
 
+    // ===== 图片段成批（用户口径 2026-10：一张图片算一个文本段落，多张依次 OCR）=====
+
+    /**
+     * **图片段独占一批**：一张图 = 一次 OCR + 一次翻译请求，所以它不能和文本段拼在一批里
+     * （文本引擎会把图片段滤掉 → 整批被标失败，用户看到"翻了个寂寞 + 失败"）。
+     */
+    @Test
+    fun `图片段在整章计划里各自独占一批`() {
+        val chapter = listOf(0, 1, 2, 3, 4, 5)
+        val images = setOf(2, 4)
+        val plan = NovelBatchPlanner.planBatches(
+            chapterParaIndexes = chapter,
+            translated = emptySet(),
+            batchSize = 3,
+            isImage = { it in images },
+        )
+        // 0,1 是文本 → 一批；2 是图 → 独占；3 是文本 → 一批；4 是图 → 独占；5 → 一批
+        assertEquals(listOf(listOf(0, 1), listOf(2), listOf(3), listOf(4), listOf(5)), plan)
+        // 顺序必须完全不变（否则译文会与段号错位）
+        assertEquals(chapter, plan.flatten())
+    }
+
+    /** 没有图片时与旧行为**逐字一致**（等价性守卫的补充）。 */
+    @Test
+    fun `没有图片段时计划与旧算法完全一致`() {
+        val chapter = (0..9).toList()
+        val translated = setOf(0, 1)
+        assertEquals(
+            chapter.filter { it !in translated }.chunked(3),
+            NovelBatchPlanner.planBatches(chapter, translated, 3) { false },
+        )
+    }
+
+    @Test
+    fun `连续多张图片各自成一批`() {
+        val batch = listOf(1, 2, 3, 4)
+        assertEquals(
+            listOf(listOf(1), listOf(2), listOf(3), listOf(4)),
+            NovelBatchPlanner.splitImageUnits(batch) { true },
+        )
+        // 空批 / 纯文本批原样返回
+        assertEquals(emptyList<List<Int>>(), NovelBatchPlanner.splitImageUnits(emptyList()) { true })
+        assertEquals(listOf(batch), NovelBatchPlanner.splitImageUnits(batch) { false })
+    }
+
     // 章内段落号 0..9；「当前页」是第 3~5 段
     private val chapter = (0..9).toList()
     private val page = listOf(3, 4, 5)
