@@ -60,13 +60,23 @@ internal object NovelImageOverlay {
         val key = "${image.file.absolutePath}|${visual.name}|${payload.hashCode()}|$targetWidth"
         cache.get(key)?.let { if (!it.isRecycled) return it }
         val base = NovelImageStore.bitmapOf(image, targetWidth) ?: return null
+        // ⚠️ 载荷的坐标是**原图像素**（OCR 时已换算回原图坐标系），而底图是按显示宽度
+        // **采样解码**出来的（原图 2000 宽、这里只有 900）—— 矩形与字号都要按同一个倍率缩回去，
+        // 否则译文会整体偏向图的右下、大半画在图外（`NovelImageOverlayTest` 的缩放假守卫卡这条）。
+        val scale = base.width.toFloat() / image.width.coerceAtLeast(1)
         val rendered = try {
             val cfg = TranslationCacheManager(context).getOverlayConfig(
                 PreferenceManager.getDefaultSharedPreferences(context),
             )
             OverlayRenderer.renderOverlay(
                 original = base,
-                regions = bubblesOf(payload, useOriginal = visual == NovelImageVisual.ORIGINAL),
+                regions = bubblesOf(
+                    payload,
+                    useOriginal = visual == NovelImageVisual.ORIGINAL,
+                    scale = scale,
+                    boundsW = base.width,
+                    boundsH = base.height,
+                ),
                 fontSize = cfg.fontSize,
                 autoFit = cfg.autoFit,
                 textColor = cfg.textColor,
@@ -96,18 +106,37 @@ internal object NovelImageOverlay {
     /**
      * 载荷 → 漫画那套 `TranslatedBubble`（渲染器的输入）。
      *
+     * ⚠️ **必须按底图倍率缩放**：载荷里的矩形/字号是**原图像素**，而底图通常是采样解码的
+     * （`NovelImageStore.bitmapOf(image, 显示宽度)`）—— 不缩就是"译文整体偏移 + 大半在图外"。
+     *
+     * ⚠️ **坐标要夹进底图内**（`boundsW/H`）：越界矩形会让 `OverlayRenderer` 的排版内核
+     * 算出荒唐的白块尺寸而抛异常（真机上是"这张图永远不显示覆盖层"）。载荷来自历史数据/手改过，
+     * 不能假设它一定合法；夹完仍是空矩形（或退化）的直接丢掉。
+     *
      * ⚠️ **竖排只认载荷里的 `vertical`**（OCR 时判定的），不读设置里的"竖排方向"：
      * 那个设置管的是**列序**（右→左 / 左→右），小说插图里没有"整页竖排阅读顺序"这回事，
      * 硬套会把本来横排的插图文字按列画。列序统一按日漫惯例（右→左）。
      */
-    internal fun bubblesOf(payload: NovelImageTranslation, useOriginal: Boolean): List<TranslatedBubble> =
-        payload.blocks.map { b ->
+    internal fun bubblesOf(
+        payload: NovelImageTranslation,
+        useOriginal: Boolean,
+        /** 原图 → 底图 的倍率（1f = 底图就是原图尺寸）。 */
+        scale: Float = 1f,
+        boundsW: Int = Int.MAX_VALUE,
+        boundsH: Int = Int.MAX_VALUE,
+    ): List<TranslatedBubble> =
+        payload.blocks.mapNotNull { b ->
+            val left = (b.left * scale).toInt().coerceIn(0, (boundsW - 1).coerceAtLeast(0))
+            val top = (b.top * scale).toInt().coerceIn(0, (boundsH - 1).coerceAtLeast(0))
+            val right = (b.right * scale).toInt().coerceIn(left + 1, boundsW.coerceAtLeast(left + 1))
+            val bottom = (b.bottom * scale).toInt().coerceIn(top + 1, boundsH.coerceAtLeast(top + 1))
+            if (right <= left || bottom <= top) return@mapNotNull null
             TranslatedBubble(
-                rect = Rect(b.left, b.top, b.right, b.bottom),
+                rect = Rect(left, top, right, bottom),
                 originalText = b.original,
                 translatedText = if (useOriginal) b.original else b.translated,
                 backgroundColor = Color.argb(200, 255, 255, 255),
-                fontSize = b.fontSize,
+                fontSize = (b.fontSize * scale).coerceAtLeast(1f),
                 direction = if (b.vertical) TextDirection.VERTICAL_RL else TextDirection.HORIZONTAL,
             )
         }

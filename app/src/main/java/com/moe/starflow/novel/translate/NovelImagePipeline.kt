@@ -114,7 +114,8 @@ class NovelImagePipeline(
         isCancelled: () -> Boolean,
     ): NovelImageOutcome {
         if (!file.isFile) return NovelImageOutcome(null, "插图文件不存在")
-        val base = decodeForOcr(file) ?: return NovelImageOutcome(null, "插图读不出来（可能已损坏）")
+        val decoded = decodeForOcr(file) ?: return NovelImageOutcome(null, "插图读不出来（可能已损坏）")
+        val base = decoded.bitmap
         try {
             val bubbles = runCatching { ocrWithLock(base, sourceLang) }
                 .onFailure { LogCollector.e(TAG, "插图 OCR 失败: ${file.name}", it) }
@@ -131,12 +132,17 @@ class NovelImagePipeline(
                 ?: return NovelImageOutcome(null, null) // 取消
             if (translated.isEmpty()) return NovelImageOutcome(null, "翻译没有返回结果")
 
+            // ⚠️ **矩形必须换回原图坐标系**：OCR 跑在**采样后**的位图上（[OCR_MAX_SIDE]），
+            // 而载荷的坐标要有一个"与解码尺寸无关"的基准 —— 否则渲染时按显示尺寸再解一次码，
+            // 矩形就会整体偏移（原图 2000 宽的图：矩形会跑到右边一半之外，译文全画在图外）。
+            // 基准统一取 **原图像素**（`NovelImage.width/height` 也是它）。
+            val toOriginal = decoded.originalWidth.toFloat() / base.width
             return NovelImageOutcome(
                 NovelImageTranslation(
                     sourceLang = sourceLang,
                     targetLang = targetLang,
                     ocrEngine = engineLabel(),
-                    blocks = toBlocks(translated),
+                    blocks = toBlocks(translated, toOriginal),
                 ),
                 null,
             )
@@ -226,21 +232,26 @@ class NovelImagePipeline(
 
     // ===== 收尾 =====
 
-    /** 气泡 → 载荷里的文字块（矩形用裸 int，见 [NovelImageTextBlock]）。 */
-    private fun toBlocks(bubbles: List<TranslatedBubble>): List<NovelImageTextBlock> =
+    /**
+     * 气泡 → 载荷里的文字块。
+     *
+     * @param scaleToOriginal OCR 位图 → **原图像素**的倍率（原图被采样过就 > 1）：
+     *   矩形与字号都要乘上它，载荷的坐标系才是"原图"（与 `NovelImage.width/height` 同一个基准）。
+     */
+    private fun toBlocks(bubbles: List<TranslatedBubble>, scaleToOriginal: Float): List<NovelImageTextBlock> =
         bubbles.mapNotNull { b ->
             val text = b.translatedText.ifBlank { b.originalText }
             if (b.originalText.isBlank() && text.isBlank()) return@mapNotNull null
             NovelImageTextBlock(
-                left = b.rect.left,
-                top = b.rect.top,
-                right = b.rect.right,
-                bottom = b.rect.bottom,
+                left = (b.rect.left * scaleToOriginal).toInt(),
+                top = (b.rect.top * scaleToOriginal).toInt(),
+                right = (b.rect.right * scaleToOriginal).toInt(),
+                bottom = (b.rect.bottom * scaleToOriginal).toInt(),
                 original = b.originalText,
                 translated = b.translatedText,
                 vertical = b.direction == TextDirection.VERTICAL_RL ||
                     b.direction == TextDirection.VERTICAL_LR,
-                fontSize = b.fontSize,
+                fontSize = b.fontSize * scaleToOriginal,
             )
         }
 
@@ -251,8 +262,11 @@ class NovelImagePipeline(
 
     // ===== 位图 / 锁 =====
 
+    /** 采样解码的结果：位图本身 + **原图**像素尺寸（载荷坐标系的基准）。 */
+    private class Decoded(val bitmap: Bitmap, val originalWidth: Int, val originalHeight: Int)
+
     /** 按 [OCR_MAX_SIDE] 采样解码（原图 4000 宽按 1/4 采样，内存与耗时都降一个量级）。 */
-    private fun decodeForOcr(file: File): Bitmap? = try {
+    private fun decodeForOcr(file: File): Decoded? = try {
         val bounds = BitmapFactory.Options().apply { inJustDecodeBounds = true }
         BitmapFactory.decodeFile(file.absolutePath, bounds)
         if (bounds.outWidth <= 0 || bounds.outHeight <= 0) {
@@ -263,7 +277,7 @@ class NovelImagePipeline(
                 BitmapFactory.Options().apply {
                     inSampleSize = sampleSizeFor(bounds.outWidth, bounds.outHeight)
                 },
-            )
+            )?.let { Decoded(it, bounds.outWidth, bounds.outHeight) }
         }
     } catch (e: OutOfMemoryError) {
         null
