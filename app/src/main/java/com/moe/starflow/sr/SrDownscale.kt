@@ -47,7 +47,15 @@ object SrDownscale {
 
     private const val TAG = "SrDownscale"
 
-    /** 短边目标：1080p（用户口径）。 */
+    /**
+     * 短边目标：**已废弃，保留常量只为文档与历史对照**（见下面 [plan] 的说明）。
+     *
+     * ⚠️ 2026-10 真机第二轮反馈后**不再使用**：用户导入的 Asterix PDF 页 raster 是 1646×2146，
+     * 屏幕宽 1220 —— 按这条规则把输入压到短边 1080（**比屏幕还小**）再 2×，
+     * 产物里真实信息只有 1080px，整页显示时**比原图（1646px）更软** ⇒ 用户看到的
+     * 「超分完全没效果 / 始终是原图」。分辨率只要低于显示密度，超分就白做。
+     */
+    @Deprecated("短边 1080 会让'原图本来就比屏幕清晰'的页变得更糊，已不再使用；只受引擎上限约束")
     const val SHORT_SIDE_TARGET = 1080
 
     /**
@@ -61,7 +69,22 @@ object SrDownscale {
     data class Plan(val width: Int, val height: Int)
 
     /**
-     * 算出压缩目标。**两个约束都要满足**；本来就不用缩 → null（调用方走原路）。
+     * 算出压缩目标。**只受引擎输入上限约束**（能按原尺寸喂就按原尺寸）；本来就不用缩 → null。
+     *
+     * ## ⚠️ 「短边一律对齐 1080」这条规则已废（2026-10，真机反馈驱动）
+     * 用户口径最初是「短边压缩对齐到 1080p 再超分……减轻超分模型的压力」。但真机上它**必然看不出效果**：
+     *
+     * ```
+     * 页 raster 1646×2146，屏幕宽 1220
+     *   旧规则：输入压到短边 1080 → 2× 产物 2160×2816，但真实信息只有 1080px 宽
+     *           → 整页显示时屏幕只能给 1220px，而产物内部信息(1080) < 原图(1646)
+     *           → 超分图**比原图更软** → 用户："超分完全没效果，始终是原图"
+     *   新规则：只压到引擎吃得下（2.5MP）→ 输入 1386×1807 → 产物 2772×3614（信息 1386px）
+     *           → 不比原图差，放大看明显更锐
+     * ```
+     *
+     * 判据很简单：**输入的分辨率只要低于显示密度，超分就是白做甚至倒退**。
+     * 代价是单页推理时间随像素线性增加（本例 1.5MP → 2.5MP，约 1.6×）——用户要的是"看得见效果"。
      *
      * ⚠️ 返回的尺寸**恒小于入参**（`k < 1`）—— 这是"压缩图不超过原图像素"的构造性保证。
      *
@@ -72,17 +95,14 @@ object SrDownscale {
         if (srcW <= 0 || srcH <= 0) return null
         val cap = if (maxFeedPixels > 0) maxFeedPixels else DEFAULT_MAX_FEED_PIXELS
 
-        // ① 短边对齐到 1080（用户口径）——短边本来就 ≤ 1080 时不动
-        val short = minOf(srcW, srcH)
-        var k = if (short > SHORT_SIDE_TARGET) SHORT_SIDE_TARGET.toDouble() / short else 1.0
+        // ① 原尺寸就吃得下 → 不缩（普通漫画页 / 已经很大的页都走这条）
+        val pixels = srcW.toDouble() * srcH
+        var k = if (pixels > cap) sqrt(cap / pixels) else 1.0
 
         // ② 再保证喂进引擎的像素数不超上限（否则引擎直接判「图太大」，超分永远出不来）
-        val pixels = srcW.toDouble() * srcH * k * k
-        if (pixels > cap) k *= sqrt(cap / pixels)
-
         if (k >= 1.0) return null
-        // ⚠️ 取整必须**向下**再兜一层：`roundToInt` 会把 1020.6 抬成 1021，对 1080x2592 这种
-        //    正好卡在上限边缘的尺寸就是"压完还差 429 像素"→ 引擎照样判「图太大」，白压一场。
+        // ⚠️ 取整必须**向下**再兜一层：`roundToInt` 会把 1020.6 抬成 1021，对正好卡在
+        //    上限边缘的尺寸就是"压完还差几百像素"→ 引擎照样判「图太大」，白压一场。
         //    上限是引擎的硬契约（`>` 即拒绝），所以这里必须**保证 ≤**，不能"大约"。
         var w = max(1, kotlin.math.floor(srcW * k).toInt())
         var h = max(1, kotlin.math.floor(srcH * k).toInt())
