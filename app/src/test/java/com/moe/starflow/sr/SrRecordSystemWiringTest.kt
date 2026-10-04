@@ -71,7 +71,11 @@ class SrRecordSystemWiringTest {
 
     @Test
     fun theNewTableHasBothAnEntityAndAMigration() {
-        assertTrue("DB 要升到 19", db.contains("version = 19"))
+        // ⚠️ **不要再写死 `version = 19`**：那行字面量在 DB 升到 20/21/22 之后就永远匹配不上，
+        // 这条守卫于是静默失效（它本该拦的是"加了实体忘了迁移"）。改成解析出版本号再比下限。
+        val version = Regex("""version\s*=\s*(\d+)""").find(db)?.groupValues?.get(1)?.toIntOrNull()
+        assertTrue("DB 版本号必须解析得到（真值只有一个：@Database(version=...)）", version != null)
+        assertTrue("DB 要升到 19 以上（超分记录表是 v19 引进的），实际 $version", version!! >= 19)
         assertTrue("要注册新实体", db.contains("ImportedPageSr::class"))
         assertTrue("必须有 18→19 迁移（漏写 = 升级用户整库被删）", db.contains("MIGRATION_18_19"))
         assertTrue("迁移要挂进 addMigrations", db.contains("MIGRATION_17_18, MIGRATION_18_19"))
@@ -214,9 +218,12 @@ class SrRecordSystemWiringTest {
             Regex("srRuns = computeTranslatedRuns\\(srPages, total\\)").containsMatchIn(bar),
         )
         // 宿主接线 + 数据源口径
+        // ⚠️ 别把变量名写死（曾写 `translationController?.srPages()`，而宿主后来把变量简化成 `c`）
+        // —— 写死之后这条守卫就永远匹配不上，等于没有守卫。这里只断言"宿主把控制器的
+        // `srPages()` 喂进了 `setSrPages`"这个语义。
         assertTrue(
             "宿主要把「已成功的超分页」喂给进度条",
-            activity.contains("setSrPages(translationController?.srPages()"),
+            Regex("""setSrPages\([^)]*\.srPages\(\)""").containsMatchIn(activity),
         )
         assertTrue(
             "数据源只算 STATE_SUCCESS（RUNNING/FAILED 不该在进度条上留痕，否则失败后紫条不退）",
