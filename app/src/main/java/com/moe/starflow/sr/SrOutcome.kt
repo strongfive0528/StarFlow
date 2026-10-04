@@ -61,14 +61,14 @@ enum class SrFailReason(@StringRes val messageRes: Int) {
     SOURCE_TOO_LARGE(R.string.sr_fail_source_too_large),
 
     /**
-     * 源图超过**用户设定的处理分辨率上限**（`SrSettings.KEY_MAX_LONG_SIDE`，0 = 不限制）。
+     * 源图超过**用户设定的跳过阈值**（`SrOptions.skipMaxWidth/Height`，0 = 不限制）。
      *
      * 与 [SOURCE_TOO_LARGE] 的区别：那条是**引擎吃不下**（必须换模型或放弃）；
-     * 这条是**用户自己划的线**（对齐 TachiyomiX 的 `maxProcessingResolution`）——
+     * 这条是**用户自己划的线**（对齐 mihon_img_upscale 的 `skip_max_size_*`）——
      * 大页跑超分本来就没有收益（产物不会比原图清晰），提前跳过省掉几秒推理。
      * 文案要引导他"要么调高阈值、要么这本就别开超分"。
      */
-    OVER_MAX_LONG_SIDE(R.string.sr_fail_over_max_long_side),
+    OVER_SKIP_LIMIT(R.string.sr_fail_over_skip_limit),
 
     /** Anime4K 初始化失败（GLES3 不可用 / 着色器编译失败） */
     ANIME4K_INIT_FAILED(R.string.sr_fail_anime4k_init),

@@ -36,14 +36,15 @@ class NcnnSrEngine(
     override val scale: Int,
     private val noise: Int,
     private val prepadding: Int,
-    /** ≤0 = 交给原生侧按显存自动选（与 nihui 各工具 main.cpp 一致） */
+    /** ≤0 = 交给原生侧按显存自动选（对齐他们的 `realCuganTileSize` 时由 [SrOptions] 传 128 起步） */
     private val tileSize: Int = 0,
     /**
      * 算力精度：true = 设备支持时用 FP16 算术（移动 GPU 上明显更快），false = FP32。
-     * 逐模型来自 `downloadinfo.json` 的 `fp16Arithmetic`（默认 true，对齐 TachiyomiX 的模型包默认）。
-     * ⚠️ 只在 **建实例**时生效（ncnn 的 opt 在 load 时固化），切档要重建实例。
+     * 由 **清单的 `fp16Arithmetic`（逐模型）&& [SrOptions.fp16Arithmetic]（用户开关）** 共同决定 ——
+     * 默认**关**，对齐 `mihon_img_upscale` 的 `pref_realcugan_fp16_arithmetic` 默认值。
+     * ⚠️ 只在 **建实例**时生效（ncnn 的 opt 在 load 时固化），切档/改选项要重建实例。
      */
-    private val fp16Arithmetic: Boolean = true,
+    private val fp16Arithmetic: Boolean = false,
 ) : SuperResolutionEngine {
 
     /**

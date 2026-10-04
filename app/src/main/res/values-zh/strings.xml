@@ -1100,7 +1100,7 @@
     <string name="sr_fail_model_missing">模型文件不存在：%1$s\n可能没下载完、或者文件已被删掉 —— 请回模型管理页重新下载</string>
     <string name="sr_fail_engine_init">模型加载失败：%1$s\n可以到模型管理页把这个模型重新下载一次</string>
     <string name="sr_fail_source_too_large">本页分辨率太大，超分跳过了：本页 %1$d×%2$d（%3$.1f 百万像素）超过该模型的 %4$.1f 百万像素上限\n请换一个更小的模型，或对分辨率更低的图源使用超分</string>
-    <string name="sr_fail_over_max_long_side">本页长边 %1$d 像素，超过你设定的处理上限 %2$d，已按设置跳过超分（这页跑了也不会有收益）\n要么在超分设置里把上限调大，要么这本就别开超分</string>
+    <string name="sr_fail_over_skip_limit">本页 %1$d×%2$d 超过你设定的跳过阈值 %3$d×%4$d，已按设置跳过超分（这页跑了也不会有收益）\n要么在超分设置里把阈值调大，要么这本就别开超分</string>
     <string name="sr_fail_anime4k_init">Anime4K 初始化失败（当前设备不支持 GLES3，或着色器编译失败）</string>
     <string name="sr_fail_anime4k_too_large">本页分辨率太大，Anime4K 跳过了：本页 %1$d×%2$d（%3$.1f 百万像素）超过 %4$.1f 百万像素上限\n想放大这种页面请改用「超分模型」（Anime4K 只做同分辨率线条修复）</string>
     <string name="sr_fail_inference">超分推理失败，引擎原文如下（点这条可以复制）</string>

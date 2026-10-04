@@ -104,7 +104,12 @@ object SuperResolutionEngines {
 
     private const val TAG = "SuperResolution"
 
-    @Volatile private var cachedKey: ModelKey? = null
+    /**
+     * 引擎缓存的键 = **模型 key + 引擎级选项指纹**（tile / 精度 / fp16 算术）。
+     * ⚠️ 不能只存 `ModelKey`：那些选项是 ncnn net 级的、`load()` 时固化，
+     * 只按模型缓存会让"改了选项但引擎没重建"＝ 设置看起来不生效（对齐他们的 `currentConfigHash`）。
+     */
+    @Volatile private var cachedKey: String? = null
     @Volatile private var cachedEngine: SuperResolutionEngine? = null
     @Volatile private var cachedAnime4kMode: Anime4kMode? = null
     @Volatile private var cachedAnime4k: SuperResolutionEngine? = null
@@ -154,7 +159,7 @@ object SuperResolutionEngines {
         val detail: String? = null,
     )
 
-    /** 按当前选择取超分模型引擎（同一模型复用，切模型重建）。 */
+    /** 按当前选择取超分模型引擎（同一模型 + 同一引擎选项复用，任一变化都重建）。 */
     @Synchronized
     fun obtain(context: Context, prefs: SharedPreferences): EnginePick {
         val key = SrModelManager.getActiveKey(prefs)
@@ -171,18 +176,23 @@ object SuperResolutionEngines {
             )
         }
 
-        cachedEngine?.let { if (cachedKey == key) return EnginePick(it) }
+        // ⚠️ 引擎缓存键必须带上**选项指纹**（tile / 精度 / fp16 算术）：
+        //    这些是 ncnn net 级别的设置、在 `load()` 时固化 —— 只按 key 缓存会让
+        //    「改了 tile/精度但引擎没重建」＝ 设置看起来不生效（对齐他们的 currentConfigHash）。
+        val options = SrOptions.from(prefs)
+        val cacheKey = key.name + "#" + options.engineKey()
+        cachedEngine?.let { if (cachedKey == cacheKey) return EnginePick(it) }
         releaseSrModel()
 
-        // 走 createEngine(context, key)：ncnn 路线需要 context + 清单里的 family/scale/noise/prepad
-        val engine = createEngine(context, key)
+        // 走 createEngine(context, key, options)：ncnn 路线需要 context + 清单参数 + 选项
+        val engine = createEngine(context, key, options)
             ?: return EnginePick(
                 null, SrFailReason.ENGINE_INIT_FAILED,
                 detail = "${key.name} (${name ?: "?"})",
             )
-        cachedKey = key
+        cachedKey = cacheKey
         cachedEngine = engine
-        LogCollector.i(TAG, "超分引擎就绪: $key ($name)")
+        LogCollector.i(TAG, "超分引擎就绪: $key ($name) opts=${options.engineKey()}")
         return EnginePick(engine)
     }
 
@@ -196,11 +206,11 @@ object SuperResolutionEngines {
      * ⚠️ 参数（scale/noise/prepad）**只从清单读**，不在这里写 `when(key)`：
      * 同一个 key 换个档位就要改代码，必然漏改。
      */
-    private fun createEngine(context: Context, key: ModelKey): SuperResolutionEngine? = try {
+    private fun createEngine(context: Context, key: ModelKey, options: SrOptions): SuperResolutionEngine? = try {
         val info = ModelDownloadRepository.getInstance(context).getModelInfo(key)
         val family = info?.srFamily
         if (family == null) createOnnxEngine(context, key)
-        else createNcnnEngine(context, key, family, info)
+        else createNcnnEngine(context, key, family, info, options)
     } catch (e: Throwable) {
         LogCollector.e(TAG, "超分引擎创建异常: $key", e)
         null
@@ -221,12 +231,13 @@ object SuperResolutionEngines {
         return engine
     }
 
-    /** ncnn 路线（Vulkan GPU）。参数**全部来自清单**，不在这里写 `when(key)` */
+    /** ncnn 路线（Vulkan GPU）。模型参数**全部来自清单**，运行选项来自 [SrOptions] */
     private fun createNcnnEngine(
         context: Context,
         key: ModelKey,
         family: String,
-        info: ModelInfo
+        info: ModelInfo,
+        options: SrOptions
     ): SuperResolutionEngine? {
         val fam = when (family) {
             "waifu2x" -> SrNcnnNative.FAMILY_WAIFU2X
@@ -250,8 +261,10 @@ object SuperResolutionEngines {
             scale = info.srScale.takeIf { it > 0 } ?: 2,
             noise = info.srNoise,
             prepadding = info.srPrepad,
-            tileSize = 0,   // 0 = 原生侧按显存自动选（与上游各工具一致）
-            fp16Arithmetic = info.srFp16Arithmetic,
+            tileSize = options.tileSize.coerceAtLeast(SrOptions.MIN_TILE_SIZE),
+            // ⚠️ 两处开关必须**同时**允许才用 FP16 算术：清单（逐模型，默认 true）&& 用户选项（默认 false，
+            //    对齐 mihon_img_upscale 的 `pref_realcugan_fp16_arithmetic` 默认值）。
+            fp16Arithmetic = info.srFp16Arithmetic && options.fp16Arithmetic,
         )
         if (!engine.initialize()) {
             LogCollector.e(TAG, "ncnn 超分引擎初始化失败: $key")

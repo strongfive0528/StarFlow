@@ -87,21 +87,44 @@ class SrEngineOptionsWiringTest {
     fun skipThresholdIsReadFromOnePlaceAndAppliedBeforeTheLock() {
         val proc = read("src/main/java/com/moe/starflow/sr/SrProcessor.kt") ?: return
         assertTrue(
-            "执行器必须用 SrSettings + SrSkipPolicy（判据不许在调用点各写一份）",
-            proc.contains("SrSettings.maxLongSideForSkip(prefs)") && proc.contains("SrSkipPolicy.shouldSkip("),
+            "执行器必须从 SrOptions 读选项（唯一的读入口；判据不许在调用点各写一份）",
+            proc.contains("SrOptions.from(prefs)"),
         )
-        assertTrue("跳过要报具体原因枚举，不能默默返回 null", proc.contains("SrFailReason.OVER_MAX_LONG_SIDE"))
+        assertTrue(
+            "跳过判据必须走 SrSkipPolicy.shouldSkip(逐轴两阈值)，与参照项目同形",
+            proc.contains("SrSkipPolicy.shouldSkip(src.width, src.height, options.skipMaxWidth, options.skipMaxHeight)"),
+        )
+        assertTrue("跳过要报具体原因枚举，不能默默返回 null", proc.contains("SrFailReason.OVER_SKIP_LIMIT"))
         // 顺序：跳过判定必须在等 OcrLock 之前 —— 跳过的页一秒都不该花、也不该占着锁让 OCR 排队
         val skipAt = proc.indexOf("SrSkipPolicy.shouldSkip(")
         val lockAt = proc.indexOf("while (OcrLock.isRunning || OcrLock.hasOcrDemand())")
         assertTrue("找不到等锁循环（改名了？）", lockAt > 0)
         assertTrue("跳过判定必须放在等 OcrLock 之前", skipAt in 1 until lockAt)
-        val settings = read("src/main/java/com/moe/starflow/sr/SrSettings.kt") ?: return
+        val options = read("src/main/java/com/moe/starflow/sr/SrOptions.kt") ?: return
         assertEquals(
-            "默认必须是不跳过（0）—— 默认跳过会让用户看到「超分没反应」",
-            SrSkipPolicy.DISABLED,
-            SrSettings.DEFAULT_MAX_LONG_SIDE,
+            "跳过阈值默认必须是 0（不跳过）—— 默认跳过会让用户看到「超分没反应」",
+            0,
+            SrOptions.DEFAULT_SKIP_MAX,
         )
-        assertTrue("阈值存在 prefs（要能改）", settings.contains("KEY_MAX_LONG_SIDE"))
+        assertTrue("选项要能落到 prefs（否则设置页存不下来）", options.contains("fun write(prefs: SharedPreferences"))
+    }
+
+    @Test
+    fun engineLevelOptionsRebuildTheEngineAndReachTheNativeLayer() {
+        val facade = read("src/main/java/com/moe/starflow/sr/SuperResolutionEngine.kt") ?: return
+        assertTrue(
+            "引擎缓存键必须带选项指纹（tile/精度/fp16 是 net 级、load 时固化，只按模型缓存＝设置不生效）",
+            facade.contains("val cacheKey = key.name + \"#\" + options.engineKey()"),
+        )
+        assertTrue(
+            "引擎级选项必须真的传进 NcnnSrEngine",
+            facade.contains("tileSize = options.tileSize.coerceAtLeast(SrOptions.MIN_TILE_SIZE)"),
+        )
+        assertTrue(
+            "fp16 算术要「清单 && 用户开关」同时允许（默认关，对齐参照项目）",
+            facade.contains("fp16Arithmetic = info.srFp16Arithmetic && options.fp16Arithmetic"),
+        )
+        val engine = read("src/main/java/com/moe/starflow/sr/NcnnSrEngine.kt") ?: return
+        assertTrue("NcnnSrEngine 的 fp16 默认值必须也是 false", engine.contains("private val fp16Arithmetic: Boolean = false"))
     }
 }
