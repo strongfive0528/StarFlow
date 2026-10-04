@@ -35,6 +35,21 @@ import java.io.File
 class NovelImageOutcome(val payload: NovelImageTranslation?, val error: String?)
 
 /**
+ * 源语言是不是**这个 OCR 引擎组不支持**（纯函数，顶层 → 单测直接调）。
+ *
+ * 比的是**主语言子标签**（`zh-TW` 与 `zh` 视为同一门语言）：引擎组给的是具体代码
+ * （`OcrEngineGroup.sourceLangs`，如 `zh-TW`），而用户设的可能是 `zh` 或反过来 ——
+ * 精确比较会把"其实能用"的情况判成不支持，反而把用户拦在正确的路上。
+ *
+ * 组列表为空（取不到设置）时一律**放行**：宁可让 OCR 自己给结果，也不要因为读不到设置就拒绝。
+ */
+internal fun languageUnsupportedByOcr(sourceLang: String, supported: Set<String>): Boolean {
+    if (sourceLang.isBlank() || supported.isEmpty()) return false
+    val want = sourceLang.substringBefore('-').lowercase()
+    return supported.none { it.substringBefore('-').lowercase() == want }
+}
+
+/**
  * **一张插图的「OCR → 翻译」流水线**（阅读器与整章任务共用这一份）。
  *
  * ### 与漫画那边的关系（用户口径「相关逻辑和漫画翻译那边一样」）
@@ -114,6 +129,18 @@ class NovelImagePipeline(
         isCancelled: () -> Boolean,
     ): NovelImageOutcome {
         if (!file.isFile) return NovelImageOutcome(null, "插图文件不存在")
+        // ⚠️ **先校验语言与 OCR 引擎组是否兼容**：`DetectionBridge.runOCR` 在语言不受支持时
+        // **静默返回空列表**（PP-OCRv5 的 ko/ru 没下 rec 模型时就是这样，manga-ocr 只认日文），
+        // 直接去 OCR 的话用户看到的是"这张图里没识别到文字"—— 一个完全误导的错误。
+        val groupLangs = runCatching {
+            com.moe.starflow.utils.OcrEngineManager.getOcrEngineGroup(appPrefs).sourceLangs
+        }.getOrNull().orEmpty()
+        if (languageUnsupportedByOcr(sourceLang, groupLangs)) {
+            return NovelImageOutcome(
+                null,
+                "当前 OCR 引擎不支持「$sourceLang」（模型管理页里换一组引擎，或把源语言改成支持的语言）",
+            )
+        }
         val decoded = decodeForOcr(file) ?: return NovelImageOutcome(null, "插图读不出来（可能已损坏）")
         val base = decoded.bitmap
         try {

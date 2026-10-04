@@ -1,7 +1,9 @@
 package com.moe.starflow.novel.translate
 
 import org.junit.Assert.assertEquals
+import org.junit.Assert.assertFalse
 import org.junit.Assert.assertNull
+import org.junit.Assert.assertTrue
 import org.junit.Test
 import org.junit.runner.RunWith
 import org.robolectric.RobolectricTestRunner
@@ -73,5 +75,23 @@ class NovelImagePayloadCodecTest {
         assertEquals(NovelImageVisual.ORIGINAL, NovelImageVisual.TRANSLATED.next())
         assertEquals(NovelImageVisual.PLAIN, NovelImageVisual.ORIGINAL.next())
         assertEquals(NovelImageVisual.TRANSLATED, NovelImageVisual.PLAIN.next())
+    }
+
+    /**
+     * **源语言与 OCR 引擎组不兼容时要提前报错**：`runOCR` 在语言不受支持时**静默返回空**
+     * （PP-OCRv5 的 ko/ru 没下模型时、manga-ocr 只认日文时都是），不提前拦的话用户看到的是
+     * 「这张图里没识别到文字」—— 一个把人引到错误方向的提示。
+     *
+     * ⚠️ 比的是**主语言子标签**（`zh-TW` 与 `zh` 是同一门语言）：引擎组里给的是具体代码，
+     * 用户设的可能是另一种写法。
+     */
+    @Test
+    fun `语言兼容判据按主语言子标签比`() {
+        val ppocr = setOf("zh", "zh-TW", "en", "ja")
+        assertFalse(languageUnsupportedByOcr("zh", ppocr))
+        assertFalse("zh-TW 与 zh 是同一门语言", languageUnsupportedByOcr("zh-TW", ppocr))
+        assertFalse(languageUnsupportedByOcr("en", ppocr))
+        assertTrue("日语组里选韩语要提前拦下", languageUnsupportedByOcr("ko", setOf("ja")))
+        assertFalse("取不到引擎组列表时一律放行", languageUnsupportedByOcr("ko", emptySet()))
     }
 }
