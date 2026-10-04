@@ -133,8 +133,9 @@ Robolectric 的文本引擎是**桩**：`Paint.breakText` 不按宽度换行、�
 - 守卫：`NovelImagePayloadCodecTest`（编解码/坏数据不抛）、`NovelImageControlsTest`（贴右下角/命中/窄图）、
   `NovelBatchPlannerTest`（图片独占批 + 顺序不变）、`NovelChapterTranslatorTest`（图片走宿主 + 载荷落库 +
   失败写原因 + 没宿主时照旧跳过）、`NovelPanelSyncTest`（开关回推）。
-- **未做**：`仅 OCR` 执行模式对插图不生效（插图始终 OCR + 翻译）；章任务的批行文案对图片单位仍显示
-  「第 x–y 段」（一张图时 x == y）。
+- **未做**：`仅 OCR` 执行模式对插图不生效（插图始终 OCR + 翻译）—— 注意**整个小说阅读器都不看这个开关**
+  （文本那条路也没接 `TranslationExecutionMode`，grep 全包无引用），所以这不是插图独有的缺口；
+  章任务的批行文案对图片单位仍显示「第 x–y 段」（一张图时 x == y）。
 
 ### ⚠️ 当前状态（2026-09-27）
 
