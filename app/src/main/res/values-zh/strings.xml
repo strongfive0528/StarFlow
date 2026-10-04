@@ -1718,6 +1718,7 @@
     <string name="novel_chapter_waiting_batches">等待 %1$d 批</string>
     <!-- ===== 记录列表里「排队中（还没开始翻）的批」那一行 ===== -->
     <string name="novel_translate_batch_row">第 %1$d 批 · 段 %2$d-%3$d</string>
+    <string name="novel_translate_batch_row_image">第 %1$d 批 · 一张插图</string>
     <!-- 退出阅读器时暂停翻译（**不回退模式**，回来按原模式继续） -->
     <string name="novel_translate_paused_background">已暂停翻译，返回阅读器后继续</string>
     <string name="novel_style_hint">改动会立即重新排版</string>

@@ -1717,6 +1717,7 @@
     <string name="novel_chapter_waiting_batches">%1$d batches waiting</string>
     <!-- ===== 记录列表里「排队中（还没开始翻）的批」那一行 ===== -->
     <string name="novel_translate_batch_row">Batch %1$d · paragraphs %2$d-%3$d</string>
+    <string name="novel_translate_batch_row_image">Batch %1$d · one illustration</string>
     <!-- 退出阅读器时暂停翻译（**不回退模式**，回来按原模式继续） -->
     <string name="novel_translate_paused_background">Translation paused. It continues when you come back.</string>
     <string name="novel_style_hint">Layout is rebuilt immediately</string>

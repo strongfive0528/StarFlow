@@ -38,11 +38,15 @@ import java.util.concurrent.atomic.AtomicInteger
  *
  * @param ordinal 该批在本章里的序号（0 起，用于「第 N 批」文案）
  * @param paraIndexes 这一批要翻的段号（连续、不跨章、已滤掉有译文的段）
+ * @param isImageUnit 这一批是**一张插图**（「同时翻译图片」开着时，一张图 = 一个段 = 一个单位）。
+ *   面板那行要显示「第 N 张图」而不是「第 x–y 段」—— 后者在图片单位上只是**同一个数字写两遍**
+ *   （x == y），用户看不出这是一张图。
  */
 data class NovelWaitingBatch(
     val chapterIndex: Int,
     val ordinal: Int,
     val paraIndexes: List<Int>,
+    val isImageUnit: Boolean = false,
 ) {
     val firstPara: Int get() = paraIndexes.firstOrNull() ?: 0
     val lastPara: Int get() = paraIndexes.lastOrNull() ?: firstPara
@@ -308,7 +312,11 @@ class NovelChapterJobHost(
                 chapterUnits.remove(chapterIndex)?.forEach { units.remove(it) }
                 plan.forEachIndexed { ordinal, batch ->
                     val id = nextUnit.incrementAndGet()
-                    units[id] = NovelWaitingBatch(chapterIndex, ordinal, batch)
+                    // 一个单位的"是不是图片"由成批规则保证（图片独占一批）：整批都是图 = 图片单位
+                    units[id] = NovelWaitingBatch(
+                        chapterIndex, ordinal, batch,
+                        isImageUnit = batch.size == 1 && batch.first() in imageParas,
+                    )
                     ids += id
                 }
                 chapterUnits[chapterIndex] = ids

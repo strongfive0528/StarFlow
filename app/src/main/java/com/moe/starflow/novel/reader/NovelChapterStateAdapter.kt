@@ -545,12 +545,18 @@ class NovelChapterStateAdapter(
             dark,
         )
         item.findViewById<TextView>(R.id.tv_page_label).apply {
-            text = item.context.getString(
-                R.string.novel_translate_batch_row,
-                batch.ordinal + 1,
-                batch.firstPara + 1,
-                batch.lastPara + 1,
-            )
+            // 图片单位（一张图 = 一个段）显示「第 N 张图」：写成「第 x–y 段」时 x == y，
+            // 用户只看到同一个数字写两遍，看不出这是一张插图
+            text = if (batch.isImageUnit) {
+                item.context.getString(R.string.novel_translate_batch_row_image, batch.ordinal + 1)
+            } else {
+                item.context.getString(
+                    R.string.novel_translate_batch_row,
+                    batch.ordinal + 1,
+                    batch.firstPara + 1,
+                    batch.lastPara + 1,
+                )
+            }
             setTextColor(labelColor)
             maxLines = 1
             ellipsize = android.text.TextUtils.TruncateAt.END
