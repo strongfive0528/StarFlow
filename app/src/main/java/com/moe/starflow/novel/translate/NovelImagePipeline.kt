@@ -22,11 +22,13 @@ import com.moe.starflow.utils.LocalTranslationCoordinator
 import com.moe.starflow.utils.LogCollector
 import com.moe.starflow.utils.OcrEngineManager
 import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.currentCoroutineContext
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.isActive
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.withContext
 import java.io.File
 
 /** 一次图片翻译的结果：[payload] 与 [error] 必有其一（都为空 = 调用方取消了）。 */
@@ -95,6 +97,21 @@ class NovelImagePipeline(
         sourceLang: String,
         targetLang: String,
         isCancelled: () -> Boolean = { false },
+    ): NovelImageOutcome = withContext(Dispatchers.IO) {
+        translateOnIo(file, sourceLang, targetLang, isCancelled)
+    }
+
+    /**
+     * ⚠️ **必须在 IO 线程上跑**（上面那个 `withContext(Dispatchers.IO)` 不是摆设）：
+     * 解码插图、ONNX 推理、请求翻译都是阻塞活，而小说侧的调用方可能是
+     * `lifecycleScope`（**主线程派发器**）—— 漫画阅读器那边整个控制器都建在 IO scope 上，
+     * 所以同样的调用在那里没问题，搬过来就会卡主线程。
+     */
+    private suspend fun translateOnIo(
+        file: File,
+        sourceLang: String,
+        targetLang: String,
+        isCancelled: () -> Boolean,
     ): NovelImageOutcome {
         if (!file.isFile) return NovelImageOutcome(null, "插图文件不存在")
         val base = decodeForOcr(file) ?: return NovelImageOutcome(null, "插图读不出来（可能已损坏）")
