@@ -200,34 +200,42 @@ class SrDisplayBaseTest {
     // ---------- isUsableBase：超分产物能不能当"比原图更大"的底图 ----------
 
     /**
-     * **这就是 2026-10 真机反馈「超分显示完成但没作用」的那个算式**（纯算术，无需设备）。
+     * **「输入分辨率不能低于显示密度」这条账**（2026-10 两轮真机反馈的算式）。
      *
-     * 链路：`SrDownscale` 把喂给模型的图压到短边 1080 → 引擎 2× → 产物宽度 = 2×feed。
-     * 只要原图宽 > 2160px，产物就**不比原图宽** → 显示侧丢弃 → 画面不变。
-     * 300 DPI 的 PDF 页正好落在这里（A4 = 2480px 宽）。
+     * 链路：`SrDownscale` 决定喂给模型的尺寸 → 引擎 2× → 产物宽度 = 2×feed。
+     * 显示侧要求产物比原图宽（`isUsableBase`），否则整页显示时反而更软。
+     *
+     * ⚠️ 2026-10 修订：**旧的「短边一律压到 1080」已被废**（它让 A4/高分辨率页必然"没效果"）——
+     * 现在只受引擎输入上限约束，所以 A4 也能产出**可用**底图（1.07×）。
+     * 仍然立不住的是"原图远比上限大"的页：缩到 2.5MP 后 2× 仍不及原图宽 → 那条守卫照旧生效。
      */
     @Test
-    fun a4SizedPageCannotProduceAUsableBase_whileA5Can() {
-        // A4 @300dpi（PDF 栅格化的常见页）：2480×3508
+    fun baseUsabilityFollowsTheFeedSizeArithmetic() {
+        // A4 @300dpi（PDF 栅格化的常见页）：2480×3508 = 8.7MP > 2.5MP 上限
         val a4 = SrDownscale.plan(2480, 3508, SrDownscale.DEFAULT_MAX_FEED_PIXELS)
         assertNotEquals("A4 页必须走压缩路径（否则引擎吃不下）", null, a4)
-        assertEquals("短边对齐 1080 → 宽 1080", 1080, a4!!.width)
+        assertEquals("只缩到引擎吃得下（不再是短边 1080）", 1329, a4!!.width)
         assertTrue(
-            "2× 产物 2160px ≤ 原图 2480px → 不可用（这正是「记录完成但画面没变」的根因）",
-            !SrDisplayBase.isUsableBase(a4.width * 2, 2480),
+            "2× 产物 2658px > 原图 2480px → 可用（旧 1080 规则下只有 2072px，必然被丢弃）",
+            SrDisplayBase.isUsableBase(a4.width * 2, 2480),
         )
 
-        // A5 @300dpi（本项目 PDF 的另一个常见页）：1746×2479
-        val a5 = SrDownscale.plan(1746, 2479, SrDownscale.DEFAULT_MAX_FEED_PIXELS)
-        assertEquals(1080, a5!!.width)
-        assertTrue(
-            "2× 产物 2160px > 原图 1746px → 可用（虽然只有 1.24×）",
-            SrDisplayBase.isUsableBase(a5.width * 2, 1746),
-        )
+        // A5 @300dpi：1746×2479 = 4.3MP > 2.5MP
+        val a5 = SrDownscale.plan(1746, 2479, SrDownscale.DEFAULT_MAX_FEED_PIXELS)!!
+        assertEquals(1326, a5.width)
+        assertTrue("2× 产物 2652px > 原图 1746px → 可用", SrDisplayBase.isUsableBase(a5.width * 2, 1746))
 
-        // 低分辨率扫描页（超分真正要服务的对象）：800×1200 → 不需要压缩
-        assertEquals("短边 ≤1080 时不压缩", null, SrDownscale.plan(800, 1200, SrDownscale.DEFAULT_MAX_FEED_PIXELS))
+        // 低分辨率扫描页（超分真正要服务的对象）：800×1200 → 不需要压缩，2× 实打实
+        assertEquals("短边小、像素也小 → 不压缩", null, SrDownscale.plan(800, 1200))
         assertTrue("2× 产物 1600px > 原图 800px → 可用", SrDisplayBase.isUsableBase(800 * 2, 800))
+
+        // 仍然立不住的形态：原图宽 3000px（12.6MP）→ 缩到 2.5MP 后 2× 只有 2672px ≤ 3000px
+        val huge = SrDownscale.plan(3000, 4200, SrDownscale.DEFAULT_MAX_FEED_PIXELS)!!
+        assertEquals(1336, huge.width)
+        assertTrue(
+            "2× 产物 2672px ≤ 原图 3000px → 不可用（产出侧必须拦住，别造出假的『完成』）",
+            !SrDisplayBase.isUsableBase(huge.width * 2, 3000),
+        )
     }
 
     @Test
