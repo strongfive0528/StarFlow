@@ -5,6 +5,8 @@
   ⚠️ 底必须是**不透明黑**：这是"看全图"，任何底色露出一点都会让别人以为看到了图的一部分。
   ⚠️ 图片用漫画那套 `ZoomableImageView`（双指缩放 / 双击缩放 / 拖动平移）——
   与漫画阅读器的看图手势**同一份实现**，不另写一套（两套迟早手感不一样）。
+  ⚠️ 文字提示放**左上角**、按钮条放**右下角**：两者都在底部时，窄屏上会挤到一起
+  （提示约 200dp + 三颗按钮约 150dp 就已经贴上了）。
   ⚠️ 右下角三颗按钮与图上那排**同一套语义**（`NovelImageControls.buttonsFor`）：
   没译文时只显示「翻译」，有译文才出现「切换 / 删除」。按钮显隐由 `NovelImageViewer` 按状态显式赋值
   （行/弹窗复用后每个状态都必须显式设，漏一处就是"上一次的状态残留"）。
@@ -25,7 +27,7 @@
         android:id="@+id/tv_novel_image_hint"
         android:layout_width="wrap_content"
         android:layout_height="wrap_content"
-        android:layout_gravity="bottom|start"
+        android:layout_gravity="top|start"
         android:layout_margin="16dp"
         android:text="@string/novel_image_viewer_hint"
         android:textColor="#B3FFFFFF"
