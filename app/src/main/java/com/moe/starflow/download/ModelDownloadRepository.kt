@@ -370,7 +370,10 @@ class ModelDownloadRepository private constructor(private val context: Context) 
                 srFamily = modelObj.optString("family", "").ifEmpty { null },
                 srScale = modelObj.optInt("scale", 0),
                 srNoise = modelObj.optInt("noise", 0),
-                srPrepad = modelObj.optInt("prepad", 0)
+                srPrepad = modelObj.optInt("prepad", 0),
+                // 默认 true（对齐 TachiyomiX 模型包的 fp16Arithmetic 默认）：缺字段 = 用 FP16 算术。
+                // 只有在模型/机型上实测出画质问题才逐条写 false。
+                srFp16Arithmetic = modelObj.optBoolean("fp16Arithmetic", true)
             ))
         }
         modelListCached.value = models

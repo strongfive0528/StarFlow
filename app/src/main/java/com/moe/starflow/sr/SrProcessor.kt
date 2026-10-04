@@ -77,6 +77,21 @@ object SrProcessor {
             return@withContext SrOutcome.fail(SrFailReason.PAGE_LOAD_FAILED, "bitmap ${src.width}x${src.height}")
         }
 
+        // ⚠️ **用户设定的处理上限**（对齐 TachiyomiX 模型包的 maxProcessingResolution）：超了直接不跑。
+        //    放在这里（抢锁之前、登记 inFlight 之前）是刻意的 —— 跳过的页**一秒都不花**，
+        //    也不会占着 OcrLock 让 OCR 排队。判据只看 prefs + 尺寸，所以三处调用点天然同源。
+        val skipLimit = SrSettings.maxLongSideForSkip(prefs)
+        if (SrSkipPolicy.shouldSkip(src.width, src.height, skipLimit)) {
+            LogCollector.d(
+                TAG,
+                "超分按设置跳过（长边上限 $skipLimit）: ${SrSkipPolicy.detail(src.width, src.height, skipLimit)}"
+            )
+            return@withContext SrOutcome.fail(
+                SrFailReason.OVER_MAX_LONG_SIDE,
+                SrSkipPolicy.detail(src.width, src.height, skipLimit)
+            )
+        }
+
         val k = keyOf(mangaId, page)
         if (inFlight.putIfAbsent(k, true) != null) {
             LogCollector.d(TAG, "该页已有超分任务在跑，跳过重复触发: $k")

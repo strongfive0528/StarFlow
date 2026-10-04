@@ -24,7 +24,14 @@ data class ModelInfo(
     /** 降噪档：waifu2x 是 -1~3；SRMD 是 -1~10；其余族忽略 */
     val srNoise: Int = 0,
     /** 边框补偿（prepadding）：cunet/Real-CUGAN 18、upconv_7 7、SRMD 12、Real-ESRGAN 10 */
-    val srPrepad: Int = 0
+    val srPrepad: Int = 0,
+    /**
+     * 算力精度开关（清单的 `fp16Arithmetic`，默认 true = 设备支持时用 FP16 算术）。
+     *
+     * 与 TachiyomiX 模型包同名字段同语义：只开 `use_fp16_storage` 省的是显存，
+     * **真正影响速度的是算术精度**。设备不支持 FP16 算术时原生侧自动退回 FP32。
+     */
+    val srFp16Arithmetic: Boolean = true
 )
 
 /**

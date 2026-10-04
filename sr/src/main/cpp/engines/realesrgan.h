@@ -30,6 +30,13 @@ public:
     int tilesize;
     int prepadding;
 
+    /**
+     * 算力精度开关（逐模型来自 `downloadinfo.json` 的 `fp16Arithmetic`，默认关 = 保持旧行为）。
+     * ⚠️ 必须在 `load()` **之前**设置：ncnn 的 `opt` 是 net 级、load 时就固化进管线。
+     * ⚠️ 只开 `use_fp16_storage` 只省显存；**开了本项才是真的用 FP16 算**（移动 GPU 上明显更快）。
+     */
+    bool fp16_arithmetic = false;
+
 private:
     ncnn::Net net;
     ncnn::Pipeline* realesrgan_preproc;

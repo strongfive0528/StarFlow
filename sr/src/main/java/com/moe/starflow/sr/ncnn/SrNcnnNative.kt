@@ -19,7 +19,7 @@ import java.nio.ByteBuffer
  *
  * ## 生命周期
  * ```
- * val handle = SrNcnnNative.create(family, paramPath, binPath, gpuId, numThreads)  // 0 = 失败
+ * val handle = SrNcnnNative.create(family, paramPath, binPath, gpuId, numThreads, fp16Arithmetic)  // 0 = 失败
  * ...      SrNcnnNative.process(handle, in, out, w, h, scale, noise, prepad, tile)
  * finally  SrNcnnNative.release(handle)
  * ```
@@ -51,6 +51,10 @@ object SrNcnnNative {
      *   ⚠️ 只有 Waifu2x / RealCUGAN 有 CPU 路径：SRMD 与 Real-ESRGAN 是纯 Vulkan，
      *   设备无 Vulkan 时对这两族直接返回 0（否则原生侧空 vkdev 解引用 → SIGSEGV）。
      * @param numThreads 推理线程数（Kotlin 侧 `SrThreads` = 核数-2 夹 2..8）。≤0 = 原生侧按 2 兜底。
+     * @param fp16Arithmetic **算力精度**：true = 设备支持时用 FP16 算术（明显更快），
+     *   false = FP32 算术。逐模型来自 `downloadinfo.json` 的 `fp16Arithmetic`（默认 true）。
+     *   ⚠️ 它必须在 **create** 时给定：ncnn 的 `opt` 是 net 级、在 `load()` 里固化进管线，
+     *   process 阶段改不动。设备不支持 FP16 算术时原生侧会自动退回 FP32。
      * @return handle；**0 表示失败**（调用方必须当作"超分不可用"处理，不要重试轰炸）。
      *   ⚠️ 原生侧会先校验 `param` 有 ncnn 魔数、`bin` 非空 —— vendored 引擎的 `load()`
      *   返回值不可用（恒定 `return 0`），不这样查的话这里永远不会拿到 0。
@@ -60,7 +64,8 @@ object SrNcnnNative {
         paramPath: String,
         binPath: String,
         gpuId: Int,
-        numThreads: Int
+        numThreads: Int,
+        fp16Arithmetic: Boolean
     ): Long
 
     /**

@@ -242,7 +242,7 @@ extern "C" {
 JNIEXPORT jlong JNICALL
 Java_com_moe_starflow_sr_ncnn_SrNcnnNative_create(
         JNIEnv* env, jclass, jint family, jstring paramPath, jstring binPath,
-        jint gpuId, jint numThreads) {
+        jint gpuId, jint numThreads, jboolean fp16Arithmetic) {
     ensureGpu();
     const std::string param = jstr(env, paramPath);
     const std::string bin = jstr(env, binPath);
@@ -278,24 +278,28 @@ Java_com_moe_starflow_sr_ncnn_SrNcnnNative_create(
     switch (family) {
         case kFamilyWaifu2x: {
             auto* e = new Waifu2x(gpuid, /*tta*/ false, numThreads);
+            e->fp16_arithmetic = fp16Arithmetic != 0;   // ⚠️ 必须在 load() 之前（opt 在 load 时固化）
             e->load(param, bin);
             h->w2x = e;
             break;
         }
         case kFamilySrmd: {
             auto* e = new SRMD(gpuid, /*tta*/ false, numThreads);
+            e->fp16_arithmetic = fp16Arithmetic != 0;
             e->load(param, bin);
             h->srmd = e;
             break;
         }
         case kFamilyRealCugan: {
             auto* e = new RealCUGAN(gpuid, /*tta*/ false, numThreads);
+            e->fp16_arithmetic = fp16Arithmetic != 0;
             e->load(param, bin);
             h->cugan = e;
             break;
         }
         case kFamilyRealEsrgan: {
             auto* e = new RealESRGAN(gpuid, /*tta*/ false, numThreads);
+            e->fp16_arithmetic = fp16Arithmetic != 0;
             e->load(param, bin);
             h->esrgan = e;
             break;
@@ -313,8 +317,8 @@ Java_com_moe_starflow_sr_ncnn_SrNcnnNative_create(
         id = ++g_nextHandleId;
         g_live[id] = h;
     }
-    LOGI("engine ready family=%d gpu=%d heap=%dMB id=%lld (%s)",
-         family, gpuid, g_heapMb, (long long)id, param.c_str());
+    LOGI("engine ready family=%d gpu=%d heap=%dMB fp16arith=%d id=%lld (%s)",
+         family, gpuid, g_heapMb, (int)(fp16Arithmetic != 0), (long long)id, param.c_str());
     return id;
 }
 

@@ -251,6 +251,7 @@ object SuperResolutionEngines {
             noise = info.srNoise,
             prepadding = info.srPrepad,
             tileSize = 0,   // 0 = 原生侧按显存自动选（与上游各工具一致）
+            fp16Arithmetic = info.srFp16Arithmetic,
         )
         if (!engine.initialize()) {
             LogCollector.e(TAG, "ncnn 超分引擎初始化失败: $key")

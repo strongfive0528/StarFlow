@@ -35,6 +35,19 @@ object SrSettings {
      */
     const val KEY_AUTO = "sr_reader_auto"
 
+    /**
+     * **「超过这个长边就不超分」**（0 = 关闭；默认关闭）—— 对齐 TachiyomiX 模型包的
+     * `maxProcessingResolution`（他们默认 1600）。
+     *
+     * 用途：大尺寸页（A4@300dpi=2480、B5@300dpi=2150）本来就不该跑 —— 产物不会比原图更清晰
+     * （[SrDisplayBase.isUsableBase] 已能判出来，但那是**跑完之后**才判），
+     * 在这里提前跳过能省掉 2~6 秒/页的推理。判据收在 [SrSkipPolicy]。
+     */
+    const val KEY_MAX_LONG_SIDE = "sr_max_long_side"
+
+    /** 默认 **关**（0）：默认跳过会让用户看到"超分没反应"，必须他显式选阈值 */
+    const val DEFAULT_MAX_LONG_SIDE = SrSkipPolicy.DISABLED
+
     /** 默认 **关**：超分只对真正低分辨率的图源有意义，且更耗电更慢，必须用户显式开启 */
     const val DEFAULT_READER_ENABLED = false
 
@@ -55,5 +68,16 @@ object SrSettings {
 
     fun setAutoEnabled(prefs: SharedPreferences, enabled: Boolean) {
         prefs.edit().putBoolean(KEY_AUTO, enabled).apply()
+    }
+
+    /**
+     * 跳过阈值（长边像素；0 = 不跳过）。**只从 prefs 读，判据不在调用点各写一份** ——
+     * 三处调用点（单页 / 章节批量 / 阅读器预热）必须同源，否则又会出现"有的路径跳、有的不跳"。
+     */
+    fun maxLongSideForSkip(prefs: SharedPreferences): Int =
+        prefs.getInt(KEY_MAX_LONG_SIDE, DEFAULT_MAX_LONG_SIDE).coerceAtLeast(SrSkipPolicy.DISABLED)
+
+    fun setMaxLongSideForSkip(prefs: SharedPreferences, longSide: Int) {
+        prefs.edit().putInt(KEY_MAX_LONG_SIDE, longSide.coerceAtLeast(SrSkipPolicy.DISABLED)).apply()
     }
 }

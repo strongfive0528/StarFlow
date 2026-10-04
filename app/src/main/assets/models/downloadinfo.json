@@ -212,6 +212,7 @@
       "scale": 2,
       "noise": -1,
       "prepad": 7,
+      "fp16Arithmetic": true,
       "files": [
         {
           "file_name": "w2x_up7_anime_m1.param",
@@ -234,6 +235,7 @@
       "scale": 2,
       "noise": 2,
       "prepad": 7,
+      "fp16Arithmetic": true,
       "files": [
         {
           "file_name": "w2x_up7_anime_n2.param",
@@ -256,6 +258,7 @@
       "scale": 2,
       "noise": -1,
       "prepad": 7,
+      "fp16Arithmetic": true,
       "files": [
         {
           "file_name": "w2x_up7_photo_m1.param",
@@ -278,6 +281,7 @@
       "scale": 2,
       "noise": 2,
       "prepad": 7,
+      "fp16Arithmetic": true,
       "files": [
         {
           "file_name": "w2x_up7_photo_n2.param",
@@ -300,6 +304,7 @@
       "scale": 2,
       "noise": -1,
       "prepad": 18,
+      "fp16Arithmetic": true,
       "files": [
         {
           "file_name": "w2x_cunet_m1.param",
@@ -322,6 +327,7 @@
       "scale": 2,
       "noise": 1,
       "prepad": 18,
+      "fp16Arithmetic": true,
       "files": [
         {
           "file_name": "w2x_cunet_n1.param",
@@ -344,6 +350,7 @@
       "scale": 2,
       "noise": 2,
       "prepad": 18,
+      "fp16Arithmetic": true,
       "files": [
         {
           "file_name": "w2x_cunet_n2.param",
@@ -366,6 +373,7 @@
       "scale": 2,
       "noise": 3,
       "prepad": 12,
+      "fp16Arithmetic": true,
       "files": [
         {
           "file_name": "srmd_x2.param",
@@ -388,6 +396,7 @@
       "scale": 2,
       "noise": -1,
       "prepad": 12,
+      "fp16Arithmetic": true,
       "files": [
         {
           "file_name": "srmd_nf_x2.param",
@@ -410,6 +419,7 @@
       "scale": 2,
       "noise": -1,
       "prepad": 18,
+      "fp16Arithmetic": true,
       "files": [
         {
           "file_name": "up2x_no_denoise.param",
@@ -432,6 +442,7 @@
       "scale": 2,
       "noise": 0,
       "prepad": 18,
+      "fp16Arithmetic": true,
       "files": [
         {
           "file_name": "up2x_conservative.param",
@@ -454,6 +465,7 @@
       "scale": 2,
       "noise": 3,
       "prepad": 18,
+      "fp16Arithmetic": true,
       "files": [
         {
           "file_name": "up2x_denoise3x.param",
@@ -476,6 +488,7 @@
       "scale": 2,
       "noise": -1,
       "prepad": 18,
+      "fp16Arithmetic": true,
       "files": [
         {
           "file_name": "up2x_pro_no_denoise.param",
@@ -498,6 +511,7 @@
       "scale": 2,
       "noise": 0,
       "prepad": 18,
+      "fp16Arithmetic": true,
       "files": [
         {
           "file_name": "up2x_pro_conservative.param",
@@ -520,6 +534,7 @@
       "scale": 2,
       "noise": 3,
       "prepad": 18,
+      "fp16Arithmetic": true,
       "files": [
         {
           "file_name": "up2x_pro_denoise3x.param",
@@ -542,6 +557,7 @@
       "scale": 4,
       "noise": -1,
       "prepad": 10,
+      "fp16Arithmetic": true,
       "files": [
         {
           "file_name": "realesrgan_anime6b_x4.param",

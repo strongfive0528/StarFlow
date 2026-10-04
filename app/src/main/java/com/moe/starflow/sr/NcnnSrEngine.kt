@@ -38,6 +38,12 @@ class NcnnSrEngine(
     private val prepadding: Int,
     /** ≤0 = 交给原生侧按显存自动选（与 nihui 各工具 main.cpp 一致） */
     private val tileSize: Int = 0,
+    /**
+     * 算力精度：true = 设备支持时用 FP16 算术（移动 GPU 上明显更快），false = FP32。
+     * 逐模型来自 `downloadinfo.json` 的 `fp16Arithmetic`（默认 true，对齐 TachiyomiX 的模型包默认）。
+     * ⚠️ 只在 **建实例**时生效（ncnn 的 opt 在 load 时固化），切档要重建实例。
+     */
+    private val fp16Arithmetic: Boolean = true,
 ) : SuperResolutionEngine {
 
     /**
@@ -80,7 +86,8 @@ class NcnnSrEngine(
         if (handle != 0L) return true
         return try {
             val h = SrNcnnNative.create(
-                family, paramFile.absolutePath, binFile.absolutePath, GPU_ID, srThreads()
+                family, paramFile.absolutePath, binFile.absolutePath, GPU_ID, srThreads(),
+                fp16Arithmetic
             )
             if (h == 0L) {
                 LogCollector.e(TAG, "原生引擎创建失败: ${paramFile.name} (family=$family)")
@@ -90,7 +97,8 @@ class NcnnSrEngine(
                 LogCollector.i(
                     TAG,
                     "ncnn 超分就绪: ${paramFile.name} family=$family scale=$scale noise=$noise " +
-                        "prepad=$prepadding gpu=${runCatching { SrNcnnNative.gpuName() }.getOrDefault("?")}"
+                        "prepad=$prepadding fp16arith=$fp16Arithmetic " +
+                        "gpu=${runCatching { SrNcnnNative.gpuName() }.getOrDefault("?")}"
                 )
                 true
             }

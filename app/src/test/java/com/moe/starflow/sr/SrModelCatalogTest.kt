@@ -85,6 +85,13 @@ class SrModelCatalogTest {
             assertTrue("$key 缺 scale", entry.optInt("scale", 0) in setOf(2, 3, 4))
             assertTrue("$key 缺 prepad", entry.optInt("prepad", 0) > 0)
             assertTrue("$key 缺 browser_url", entry.optString("browser_url", "").startsWith("https://"))
+            // P1（TachiyomiX 同款选项）：算力精度必须逐条写明，缺字段虽然解析时默认 true，
+            // 但"清单里看不见"就等于没人知道这档跑的是 FP16 还是 FP32 —— 显式声明。
+            assertTrue("$key 缺 fp16Arithmetic（清单必须显式声明算力精度）", entry.has("fp16Arithmetic"))
+            assertTrue(
+                "$key 的 fp16Arithmetic 必须是布尔（写成 \"true\" 字符串会在解析时静默变默认值）",
+                entry.get("fp16Arithmetic") is Boolean,
+            )
 
             val files = entry.getJSONArray("files")
             assertEquals("$key 必须是 .param + .bin 两个文件", 2, files.length())
