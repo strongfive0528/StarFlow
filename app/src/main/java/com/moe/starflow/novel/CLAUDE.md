@@ -130,6 +130,16 @@ Robolectric 的文本引擎是**桩**：`Paint.breakText` 不按宽度换行、�
   要不要把插图也带上。
 - 图片视图的载荷走 **`setImageState(visuals, focused, translations)` 单独灌**，不读适配器手里那份
   `ChapterContent`：`submit` 会把阅读位置一起掀掉，不值得为一张图重提整章内容。
+- ⚠️ **覆盖层坐标的基准是「原图像素」**（两处缩放必须成对，别再各写一套）：
+  OCR 跑在**采样后**的位图上（`NovelImagePipeline.OCR_MAX_SIDE = 1600`），渲染又按**显示宽度**
+  再采样解码一次 —— 所以 `toBlocks(bubbles, scaleToOriginal)` 要把矩形/字号乘回原图坐标系，
+  而 `NovelImageOverlay.bubblesOf(..., scale = 底图宽/原图宽, boundsW, boundsH)` 再缩回底图坐标系
+  **并夹进底图内**（越界矩形会让排版内核算出荒唐白块而抛异常 → 被 catch 吞掉 → 表现成"这张图永远
+  不显示覆盖层"）。守卫：`NovelPageViewImageTest.载荷坐标按底图倍率缩放且夹在底图内`。
+- ⚠️ **首次渲染在主线程**（`onDraw` → `NovelImageOverlay.of`，解码 + `renderOverlay`）：
+  一页一张全宽插图约几十到一百多毫秒，靠 48MB 的 LRU 保证**每张图每个态只付一次**。
+  真要消掉这一下，得在 `loadChapter` 的 IO 阶段按 `NovelImageMetrics.fit` 的宽度预渲染进缓存
+  （注意缓存键含宽度，预渲染必须用**同一个宽度**）—— 目前没做，先记为已知取舍。
 - 守卫：`NovelImagePayloadCodecTest`（编解码/坏数据不抛）、`NovelImageControlsTest`（贴右下角/命中/窄图）、
   `NovelBatchPlannerTest`（图片独占批 + 顺序不变）、`NovelChapterTranslatorTest`（图片走宿主 + 载荷落库 +
   失败写原因 + 没宿主时照旧跳过）、`NovelPanelSyncTest`（开关回推）。
