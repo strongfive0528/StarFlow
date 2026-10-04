@@ -90,6 +90,18 @@ enum class ModelKey(val stableId: Int) {
     SR_REALCUGAN_CONSERVATIVE(3070),
     /** 降噪 3x */
     SR_REALCUGAN_DENOISE3X(3073),
+
+    // ── Real-CUGAN **Pro**（`models-pro`；与 SE 同族同接口，只是换一套权重文件）──
+    // 2026-10：PC 端实测（Asterix 300dpi 彩页 + 89338.zip 黑白页）Pro 全面优于 SE：
+    // 同页 PSNR +1.5~2.5 dB、**锐度反而更低**（= 更少乱改线条）。
+    // ⚠️ 文件名必须与 SE 的三档区分（否则同一 files/sr/ 目录下互相覆盖）。
+    /** Pro · 不降噪 */
+    SR_REALCUGAN_PRO_NODENOISE(3075),
+    /** Pro · 保守 */
+    SR_REALCUGAN_PRO_CONSERVATIVE(3071),
+    /** Pro · 降噪 3x */
+    SR_REALCUGAN_PRO_DENOISE3X(3076),
+
     /** 4 倍放大 */
     SR_REALESRGAN_ANIME6B(3080);
 

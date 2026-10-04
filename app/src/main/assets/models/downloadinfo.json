@@ -470,6 +470,72 @@
       ]
     },
     {
+      "model_key": "SR_REALCUGAN_PRO_NODENOISE",
+      "browser_url": "https://github.com/nihui/realcugan-ncnn-vulkan",
+      "family": "realcugan",
+      "scale": 2,
+      "noise": -1,
+      "prepad": 18,
+      "files": [
+        {
+          "file_name": "up2x_pro_no_denoise.param",
+          "download_url": "https://raw.githubusercontent.com/nihui/realcugan-ncnn-vulkan/master/models/models-pro/up2x-no-denoise.param",
+          "file_size": 4765,
+          "checksum": "5c17892838c3b4a1e484c278694a4c2a"
+        },
+        {
+          "file_name": "up2x_pro_no_denoise.bin",
+          "download_url": "https://raw.githubusercontent.com/nihui/realcugan-ncnn-vulkan/master/models/models-pro/up2x-no-denoise.bin",
+          "file_size": 2573648,
+          "checksum": "04ce2955f98775e57e664e06c2b4d773"
+        }
+      ]
+    },
+    {
+      "model_key": "SR_REALCUGAN_PRO_CONSERVATIVE",
+      "browser_url": "https://github.com/nihui/realcugan-ncnn-vulkan",
+      "family": "realcugan",
+      "scale": 2,
+      "noise": 0,
+      "prepad": 18,
+      "files": [
+        {
+          "file_name": "up2x_pro_conservative.param",
+          "download_url": "https://raw.githubusercontent.com/nihui/realcugan-ncnn-vulkan/master/models/models-pro/up2x-conservative.param",
+          "file_size": 4765,
+          "checksum": "5c17892838c3b4a1e484c278694a4c2a"
+        },
+        {
+          "file_name": "up2x_pro_conservative.bin",
+          "download_url": "https://raw.githubusercontent.com/nihui/realcugan-ncnn-vulkan/master/models/models-pro/up2x-conservative.bin",
+          "file_size": 2573648,
+          "checksum": "1f6824820c04bd61a8ddc9c0b4ef4f68"
+        }
+      ]
+    },
+    {
+      "model_key": "SR_REALCUGAN_PRO_DENOISE3X",
+      "browser_url": "https://github.com/nihui/realcugan-ncnn-vulkan",
+      "family": "realcugan",
+      "scale": 2,
+      "noise": 3,
+      "prepad": 18,
+      "files": [
+        {
+          "file_name": "up2x_pro_denoise3x.param",
+          "download_url": "https://raw.githubusercontent.com/nihui/realcugan-ncnn-vulkan/master/models/models-pro/up2x-denoise3x.param",
+          "file_size": 4765,
+          "checksum": "5c17892838c3b4a1e484c278694a4c2a"
+        },
+        {
+          "file_name": "up2x_pro_denoise3x.bin",
+          "download_url": "https://raw.githubusercontent.com/nihui/realcugan-ncnn-vulkan/master/models/models-pro/up2x-denoise3x.bin",
+          "file_size": 2573648,
+          "checksum": "de65a912b80fca965f7f33656e49b41b"
+        }
+      ]
+    },
+    {
       "model_key": "SR_REALESRGAN_ANIME6B",
       "browser_url": "https://huggingface.co/HNoise7676/RealESRGAN_x4plus_anime_6B_NCNN",
       "family": "realesrgan",

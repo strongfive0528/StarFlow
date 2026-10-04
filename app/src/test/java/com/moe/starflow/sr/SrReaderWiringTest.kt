@@ -176,7 +176,8 @@ class SrReaderWiringTest {
         for (base in listOf(
             "sr_w2x_anime_m1", "sr_w2x_anime_n2", "sr_w2x_photo_m1", "sr_w2x_photo_n2", "sr_cunet_m1",
             "sr_cunet_n1", "sr_cunet_n2", "sr_srmd_x2", "sr_srmd_nf_x2", "sr_cugan_dn",
-            "sr_cugan_cons", "sr_cugan_d3", "sr_rsrgan_a6b"
+            "sr_cugan_cons", "sr_cugan_d3", "sr_cugan_pro_dn", "sr_cugan_pro_cons",
+            "sr_cugan_pro_d3", "sr_rsrgan_a6b"
         )) {
             val wrapper = layout.indexOf("android:id=\"@+id/${base}_row\"")
             val radio = layout.indexOf("android:id=\"@+id/${base}_radio\"")

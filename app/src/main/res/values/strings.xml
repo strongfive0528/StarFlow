@@ -711,9 +711,12 @@
     <string name="sr_model_w2x_cunet_n2">waifu2x cunet · Strong denoise</string>
     <string name="sr_model_srmd_x2">SRMD · 2x with denoise</string>
     <string name="sr_model_srmd_nf_x2">SRMD · 2x no denoise</string>
-    <string name="sr_model_cugan_cons">Real-CUGAN · 2x Conservative</string>
-    <string name="sr_model_cugan_d3">Real-CUGAN · 2x Denoise 3x</string>
-    <string name="sr_model_cugan_dn">Real-CUGAN · 2x No denoise</string>
+    <string name="sr_model_cugan_cons">Real-CUGAN SE · 2x Conservative</string>
+    <string name="sr_model_cugan_d3">Real-CUGAN SE · 2x Denoise 3x</string>
+    <string name="sr_model_cugan_dn">Real-CUGAN SE · 2x No denoise</string>
+    <string name="sr_model_cugan_pro_cons">Real-CUGAN Pro · 2x Conservative</string>
+    <string name="sr_model_cugan_pro_d3">Real-CUGAN Pro · 2x Denoise 3x</string>
+    <string name="sr_model_cugan_pro_dn">Real-CUGAN Pro · 2x No denoise</string>
     <string name="sr_model_rsrgan_a6b">Real-ESRGAN · Anime 6B (4x)</string>
 
     <string name="sr_low_res_tip">💡 Super resolution can only help genuinely low-resolution sources. Pages already 1000px+ wide barely change, and heavy screentone may be re-drawn. Keep it off unless the source is small.</string>
@@ -722,7 +725,7 @@
     <string name="sr_srmd_group">SRMD (2x)</string>
     <string name="sr_srmd_group_desc">A single model that handles several degradations at once (blur, noise, rescaling). Two levels: with denoise / without denoise.</string>
     <string name="sr_cugan_group">Real-CUGAN (2x)</string>
-    <string name="sr_cugan_group_desc">Anime super-resolution model open-sourced by Bilibili. Three denoise strengths: no denoise, conservative, and denoise 3x.</string>
+    <string name="sr_cugan_group_desc">Anime super-resolution model open-sourced by Bilibili, in two weight sets: SE (standard) and Pro (better fidelity, less redrawing). Each set has three denoise strengths: no denoise, conservative, and denoise 3x.</string>
     <string name="sr_rsrgan_group">Real-ESRGAN anime 6B (4x)</string>
     <string name="sr_rsrgan_group_desc">Real-ESRGAN\'s 6B weights, optimised for anime images with a much smaller size than the general model. Outputs at 4x.</string>
     <string name="sr_w2x_group">waifu2x upconv_7</string>

@@ -35,7 +35,7 @@
 - **四个下载按钮必须「每个状态都显式赋值」**，不能只写「要显示的那个」——复用会把上一轮的可见性留下来（典型症状：下载完成后 [暂停][取消] 仍挂在卡片上；重新 inflate 的实现天然不会暴露这个问题）。判定收在纯函数 `rowButtonsFor(state, missing)` 里，由 `LlamaCppRowButtonsTest` 钉死，改回「只写 VISIBLE」即红。
 - 卡片间距取自**行模板的 `layout_marginBottom`**，最后一张置 0（区块间距交给下一段标题的 marginTop）；原值记在行根 View 的 `RowTag` 上，复用后据此还原。⚠️ `id` 列表比较**不要拼分隔符字符串**（导入模型的文件名可能带空格），直接比 `List<String>`。
 
-### 超分（SR）模型（2026-10 新增，2026-10 底定为 5 族 13 档）
+### 超分（SR）模型（2026-10 新增，2026-10 底定为 5 族 16 档）
 
 **全部走下载，不打进 APK**（用户硬要求）。清单在 `assets/models/downloadinfo.json`，落盘统一在
 `getExternalFilesDir("sr")`，文件名取自清单（代码里不硬编码文件名）。
@@ -45,8 +45,17 @@
 | **waifu2x upconv_7**（**动漫 + 照片两套权重，各两档 = 4 档**） | 动漫 不降噪 M1 / 强力降噪 N2；照片 不降噪 M1 / 强力降噪 N2 | ~1.1MB | `SR_W2X_UP7_{ANIME,PHOTO}_{M1,N2}` |
 | **waifu2x cunet** | 不降噪 M1 / 中度降噪 N1 / 强力降噪 N2 | ~2.7MB | `SR_W2X_CUNET_{M1,N1,N2}` |
 | **SRMD** | 带降噪 X2 / 不降噪 NF_X2 | ~2.9MB | `SR_SRMD_{X2,NF_X2}` |
-| **Real-CUGAN** | 不降噪 / 保守 / 降噪 3x | ~2.5MB | `SR_REALCUGAN_{NODENOISE,CONSERVATIVE,DENOISE3X}` |
+| **Real-CUGAN SE** | 不降噪 / 保守 / 降噪 3x | ~2.5MB | `SR_REALCUGAN_{NODENOISE,CONSERVATIVE,DENOISE3X}` |
+| **Real-CUGAN Pro**（2026-10 新增，`models-pro`） | 不降噪 / 保守 / 降噪 3x | ~2.5MB | `SR_REALCUGAN_PRO_{NODENOISE,CONSERVATIVE,DENOISE3X}` |
 | **Real-ESRGAN** | 动漫 6B（**4x**，全场唯一 4 倍） | ~17MB | `SR_REALESRGAN_ANIME6B` |
+
+- ⚠️ **SE 与 Pro 的 `up2x-*.param` 上游同名**（连 MD5 都相同：三档共用同一个架构文件
+  `5c178928…`），只有 `.bin` 不同 —— 所以清单里 Pro 必须改名成 `up2x_pro_*.param/.bin`，
+  否则会把 SE 的文件覆盖掉。守卫：`SrModelCatalogTest.superResolutionFileNamesAreUnique`
+  （**所有** SR 条目的 `file_name` 在同一个 `files/sr/` 目录里必须互不重名）。
+- Pro 的引入依据是 PC 端实测（Asterix 300dpi 彩页 + 89338.zip 黑白页，ncnn 官方 CLI）：
+  同页 PSNR 比 SE **+1.5~2.5 dB**、锐度反而更低（更少乱改线条）。三档 `.bin` 的 MD5 已钉在
+  `SrModelCatalogTest.realCuganProTiersAreRealAndDistinctFromSe`。
 
 - ⚠️ **照片族一度被误删，2026-10 底补回**（用户口径：「upconv 的照片放大模型丢了，需要加到
   upconv 的那个组里面，一共 **4** 个才对」）。删的时候 `LEGACY_KEY_MAP` 里留了

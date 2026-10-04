@@ -645,9 +645,12 @@
     <string name="sr_model_w2x_cunet_n2">waifu2x cunet · 强力降噪</string>
     <string name="sr_model_srmd_x2">SRMD · 2x 带降噪</string>
     <string name="sr_model_srmd_nf_x2">SRMD · 2x 不降噪</string>
-    <string name="sr_model_cugan_cons">Real-CUGAN · 2x 保守</string>
-    <string name="sr_model_cugan_d3">Real-CUGAN · 2x 降噪3x</string>
-    <string name="sr_model_cugan_dn">Real-CUGAN · 2x 不降噪</string>
+    <string name="sr_model_cugan_cons">Real-CUGAN SE · 2x 保守</string>
+    <string name="sr_model_cugan_d3">Real-CUGAN SE · 2x 降噪3x</string>
+    <string name="sr_model_cugan_dn">Real-CUGAN SE · 2x 不降噪</string>
+    <string name="sr_model_cugan_pro_cons">Real-CUGAN Pro · 2x 保守</string>
+    <string name="sr_model_cugan_pro_d3">Real-CUGAN Pro · 2x 降噪3x</string>
+    <string name="sr_model_cugan_pro_dn">Real-CUGAN Pro · 2x 不降噪</string>
     <string name="sr_model_rsrgan_a6b">Real-ESRGAN · 动漫 6B（4x）</string>
 
     <string name="sr_low_res_tip">💡 超分只对真正低分辨率的图源有明显效果。宽度 1000px 以上的页面几乎看不出变化，网点重的页还可能被重新绘制。图源不小就别开。</string>
@@ -656,7 +659,7 @@
     <string name="sr_srmd_group">SRMD（2x）</string>
     <string name="sr_srmd_group_desc">用单个模型应对多种退化（模糊、噪点、缩放），分「带降噪 / 不降噪」两档。</string>
     <string name="sr_cugan_group">Real-CUGAN（2x）</string>
-    <string name="sr_cugan_group_desc">哔哩哔哩开源的动漫图像超分模型，提供「不降噪 / 保守 / 降噪 3x」三档降噪强度。</string>
+    <string name="sr_cugan_group_desc">哔哩哔哩开源的动漫图像超分模型，分 SE（标准）与 Pro（同尺寸画质更好、更少乱改线条）两套权重，每套都有「不降噪 / 保守 / 降噪 3x」三档。</string>
     <string name="sr_rsrgan_group">Real-ESRGAN 动漫 6B（4x）</string>
     <string name="sr_rsrgan_group_desc">Real-ESRGAN 为动漫图像优化的 6B 权重，体积比通用模型小得多，按 4 倍放大输出。</string>
     <string name="sr_w2x_group">waifu2x upconv_7</string>

@@ -320,7 +320,7 @@ A4@300dpi(2480) ✗ / B5@300dpi(2150) 临界 / A5@300dpi(1746) ✓ 只能到 1.2
 - ⚠️ **无 Vulkan 设备时 SRMD / Real-ESRGAN 必须判「不可用」**：只有 Waifu2x / RealCUGAN 有 CPU 路径
   （`gpuid = -1`）；另两族的 `vkdev` 会是空指针（srmd.cpp:180 / realesrgan.cpp:191），
   `process()` 直接 SIGSEGV 且 Kotlin 层捕获不到。`sr_jni.cpp` 的 `create()` 按 `familyHasCpuPath()`
-  分流 —— 别再无条件 `gpuid = -1`（11 档里有 3 档属这两族）。
+  分流 —— 别再无条件 `gpuid = -1`（清单里 **SRMD 2 档 + Real-ESRGAN 1 档**属这两族，其余各族都有 CPU 路径）。
 - ⚠️ **`create()` 里那道"模型文件健全性检查"不是多余的**：vendored 四个引擎的 `load()` 都忽略 ncnn
   的返回值、恒定 `return 0` → `if (e->load(...) != 0)` 是**死代码**，不查文件的话 `create()` 永远不
   返回 0，「0 表示失败」的契约形同虚设（模型损坏时每页白跑一遍 Vulkan 初始化再报错）。
@@ -328,7 +328,7 @@ A4@300dpi(2480) ✗ / B5@300dpi(2150) 临界 / A5@300dpi(1746) ✓ 只能到 1.2
   夹在 `[1f, MAX_RENDER_SCALE]`），**不要写死 2f**：输出是 `页宽 × renderScale`，×2 就是 4 倍像素，
   而多数漫画页本来就比屏幕宽（倍率会夹到 1）。**导出与 Webtoon 预热恒传 1f**
   （导出不上屏；Webtoon 源图已按屏宽采样解码）。
-- ⚠️ **超分模型目前只有 ncnn 一条路可达**：11 个目录模型在 `downloadinfo.json` 里全带 `family`，
+- ⚠️ **超分模型目前只有 ncnn 一条路可达**：清单里 16 个目录模型（5 族）全带 `family`，
   `SuperResolutionEngines.createEngine` 必走 `createNcnnEngine` —— `createOnnxEngine` /
   `AnimeJaNaiEngine` 是**当前不可达**的（要加回不带 `family` 的 AnimeJaNai 档才会启用）。
   所以那边的 ONNX session UAF、`halfToFloat` 次正规数换算等问题属**潜伏项**，不是线上 bug。
@@ -378,13 +378,21 @@ A4@300dpi(2480) ✗ / B5@300dpi(2150) 临界 / A5@300dpi(1746) ✓ 只能到 1.2
    曾把 `SR_W2X_UP7_PHOTO_M1` 在其一里写了两遍、看着像"少了一档"。
 6. 若是新引擎类型，在 `SuperResolutionEngines.createEngine` 加分支
 
-⚠️ **改完务必跑接入一致性自检**（它会交叉校验上面 6 处 + 布局 id + 字符串，一次抓出漏改）：
+⚠️ **改完务必跑接入一致性自检**（交叉校验上面 6 处 + 布局 id + 字符串，一次抓出漏改）：
 ```bash
+# 首选（脚本在本检出里可能不存在，见下）：
 python tools/sr-research/verify_sr_wiring.py
+# 兜底且始终可用（Rosetta：读 assets 里的清单 + 枚举/allKeys 双向对账 + 文件名唯一性）：
+.\gradlew.bat --no-daemon :app:testDebugUnitTest --tests 'com.moe.starflow.sr.SrModelCatalogTest'
 ```
+⚠️ `tools/sr-research/` 是 **gitignore 的本地工具目录**，**别的检出里可能根本没有这个脚本**
+（2026-10 在本检出就缺失）。所以 SR 清单那几条最要命的不变式已经改由
+`SrModelCatalogTest`（Robolectric，读真清单）钉死：
+枚举 == JSON == allKeys 双向、**所有 SR 条目的 file_name 在同一个 `files/sr/` 里互不重名**、
+每个条目都是完整的 `.param`+`.bin` 且 checksum 是 32 位十六进制、Real-CUGAN Pro 三档真实存在且与 SE 不共文件。
 （同一份清单在**枚举 / JSON / allKeys / nameResOf / 布局 / Fragment / 两个 baseDirFor / displayName /
 srExpectedSize / 中英字符串**里各有一份副本，靠人眼对是必错的。）
-⚠️ 脚本里**不许写死档数**（曾经写 `== 28`，模型精简到 13 档后 4 项假失败 → "全绿"变"永远红"，
+⚠️ 自检里**不许写死档数**（曾经写 `== 28`，模型精简到 13 档后 4 项假失败 → "全绿"变"永远红"，
 下一轮就会当噪声忽略）。真正的不变式是**跨来源一致**：枚举 == JSON == allKeys == 布局行 ==
 两个 baseDirFor == nameResOf == srExpectedSize。
 

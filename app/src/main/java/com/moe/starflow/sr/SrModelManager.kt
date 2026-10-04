@@ -47,6 +47,9 @@ object SrModelManager {
         ModelKey.SR_REALCUGAN_NODENOISE,
         ModelKey.SR_REALCUGAN_CONSERVATIVE,
         ModelKey.SR_REALCUGAN_DENOISE3X,
+        ModelKey.SR_REALCUGAN_PRO_NODENOISE,
+        ModelKey.SR_REALCUGAN_PRO_CONSERVATIVE,
+        ModelKey.SR_REALCUGAN_PRO_DENOISE3X,
         ModelKey.SR_REALESRGAN_ANIME6B,
     )
 
@@ -89,6 +92,9 @@ object SrModelManager {
         ModelKey.SR_REALCUGAN_NODENOISE -> R.string.sr_model_cugan_dn
         ModelKey.SR_REALCUGAN_CONSERVATIVE -> R.string.sr_model_cugan_cons
         ModelKey.SR_REALCUGAN_DENOISE3X -> R.string.sr_model_cugan_d3
+        ModelKey.SR_REALCUGAN_PRO_NODENOISE -> R.string.sr_model_cugan_pro_dn
+        ModelKey.SR_REALCUGAN_PRO_CONSERVATIVE -> R.string.sr_model_cugan_pro_cons
+        ModelKey.SR_REALCUGAN_PRO_DENOISE3X -> R.string.sr_model_cugan_pro_d3
         ModelKey.SR_REALESRGAN_ANIME6B -> R.string.sr_model_rsrgan_a6b
         else -> 0
     }

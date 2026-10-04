@@ -176,6 +176,10 @@ class ModelManagementFragment : Fragment() {
             SrRow(ModelKey.SR_REALCUGAN_NODENOISE, R.id.sr_cugan_dn_row, R.id.sr_cugan_dn_radio, R.id.sr_cugan_dn_title),
             SrRow(ModelKey.SR_REALCUGAN_CONSERVATIVE, R.id.sr_cugan_cons_row, R.id.sr_cugan_cons_radio, R.id.sr_cugan_cons_title),
             SrRow(ModelKey.SR_REALCUGAN_DENOISE3X, R.id.sr_cugan_d3_row, R.id.sr_cugan_d3_radio, R.id.sr_cugan_d3_title),
+            // Real-CUGAN Pro：同族、只换权重（PC 实测优于 SE；见 ModelKey 注释）
+            SrRow(ModelKey.SR_REALCUGAN_PRO_NODENOISE, R.id.sr_cugan_pro_dn_row, R.id.sr_cugan_pro_dn_radio, R.id.sr_cugan_pro_dn_title),
+            SrRow(ModelKey.SR_REALCUGAN_PRO_CONSERVATIVE, R.id.sr_cugan_pro_cons_row, R.id.sr_cugan_pro_cons_radio, R.id.sr_cugan_pro_cons_title),
+            SrRow(ModelKey.SR_REALCUGAN_PRO_DENOISE3X, R.id.sr_cugan_pro_d3_row, R.id.sr_cugan_pro_d3_radio, R.id.sr_cugan_pro_d3_title),
         )),
         SrFamily(R.id.sr_rsrgan_group_title, R.id.sr_rsrgan_group_selected, listOf(
             SrRow(ModelKey.SR_REALESRGAN_ANIME6B, R.id.sr_rsrgan_a6b_row, R.id.sr_rsrgan_a6b_radio, R.id.sr_rsrgan_a6b_title),
@@ -199,6 +203,9 @@ class ModelManagementFragment : Fragment() {
         ModelKey.SR_REALCUGAN_NODENOISE -> "~2.5MB"
         ModelKey.SR_REALCUGAN_CONSERVATIVE -> "~2.5MB"
         ModelKey.SR_REALCUGAN_DENOISE3X -> "~2.5MB"
+        ModelKey.SR_REALCUGAN_PRO_NODENOISE -> "~2.5MB"
+        ModelKey.SR_REALCUGAN_PRO_CONSERVATIVE -> "~2.5MB"
+        ModelKey.SR_REALCUGAN_PRO_DENOISE3X -> "~2.5MB"
         ModelKey.SR_REALESRGAN_ANIME6B -> "~17.1MB"
         else -> ""
     }
