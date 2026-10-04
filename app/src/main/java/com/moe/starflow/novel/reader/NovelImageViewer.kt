@@ -109,24 +109,35 @@ class NovelImageViewer(
     /**
      * 把当前三态要画的那张位图放进 `ImageView`。
      *
-     * ⚠️ 目标宽取**屏幕宽**（不是正文列宽）：这里要的就是"全图"，宽度不同时
-     * `NovelImageOverlay` / `NovelImageStore` 的缓存键会各存一份，别拿正文那份凑合。
+     * ⚠️ 目标宽取**这张图在查看器里实际能占的宽度**（`fitCenter` 之后），不是"屏幕宽"：
+     * 竖长图在横屏/宽屏上占不到整屏宽，按屏幕宽渲染纯属白占内存（覆盖层会进 LRU）。
+     * ⚠️ 也**不是**正文列宽 —— 这里要的就是"全图"。
      */
     private fun renderBitmap(b: DialogNovelImageBinding) {
         val image = host.imageOf(paraIndex) ?: return
         val payload = host.payloadOf(paraIndex)
         val visual = host.visualOf(paraIndex)
-        val target = activity.resources.displayMetrics.widthPixels.coerceAtLeast(1)
+        val dm = activity.resources.displayMetrics
+        val fitW = fittedWidth(image, dm.widthPixels, dm.heightPixels)
         val bmp: Bitmap? = if (payload != null) {
-            NovelImageOverlay.of(activity, image, payload, visual, target)
-                ?: NovelImageStore.bitmapOf(image, target)
+            NovelImageOverlay.of(activity, image, payload, visual, fitW)
+                ?: NovelImageStore.bitmapOf(image, fitW)
         } else {
-            NovelImageStore.bitmapOf(image, target)
+            NovelImageStore.bitmapOf(image, fitW)
         }
         b.ivNovelImage.setImageDrawable(bmp?.let { BitmapDrawable(activity.resources, it) })
         // ⚠️ 不调 `resetZoom()`：`setImageDrawable` 已经把 `isInitialized` 复位，下一次布局会
         // `fitCenter()` 重新算矩阵（`applyFit` 里顺手把 `currentScale` 归 1）——
         // 再叠一个缩放动画反而会和这次重排打架。
+    }
+
+    /** `fitCenter` 之后这张图占多宽（纯算术；尺寸异常时退回屏幕宽）。 */
+    private fun fittedWidth(image: NovelImage, screenW: Int, screenH: Int): Int {
+        val iw = image.width
+        val ih = image.height
+        if (iw <= 0 || ih <= 0) return screenW.coerceAtLeast(1)
+        val byHeight = screenH.toFloat() * iw / ih
+        return minOf(screenW.toFloat(), byHeight).toInt().coerceAtLeast(1)
     }
 
     /** 关掉（幂等）：真正的收尾在 `onDismiss` 里（见 [show]）。 */

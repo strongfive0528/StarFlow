@@ -105,7 +105,7 @@ Robolectric 的文本引擎是**桩**：`Paint.breakText` 不按宽度换行、�
 | OCR | `NovelImagePipeline.ocrWithLock` | 复用**漫画同一条链路**：`OcrLock`（`beginOcrDemand` + 带 5s 心跳的等锁）→ `TranslationEngineInit.ensureReady`（引擎组来自全局设置，默认 PP-OCRv6 免下载）→ `DetectionBridge.runOCR` → `ocrToBubbleRegions`。⚠️ **翻译前一定放锁**（那是 OCR/超分引擎锁，不是翻译锁） |
 | 翻译 | `TranslateUtils.translateBubbles` | 漫画那套编号批量 + prefill + 空译文回退原文 + 取消看门狗；本地引擎（NLLB/LlamaCpp）外面套 `LocalTranslationCoordinator.mutex`（判据 `isLocalHeavyEngine()`） |
 | 载荷 | `NovelImageTranslation` + `NovelImagePayloadCodec` | 一个块 = 矩形 + OCR 原文 + 译文 + 竖排 + 字号；存 `novel_paragraph_translation.imagePayload`（JSON）。**同一行的 `translatedText` 存拼接译文**（导出/进度/「已翻」判据直接复用），所以图片段在库里就是一条普通成功行 |
-| 渲染 | `NovelImageOverlay` | 三态 = 译文（`useOriginalText=false`）/ 识别原文（`true`）/ 纯图（**不调** `renderOverlay`）；按 `(图片路径, 态, 载荷 hashCode, 目标宽)` 缓存；`renderScale=1f`（会进 LRU）。"原文"是**把 OCR 原文画回原位**，不是裸原图 |
+| 渲染 | `NovelImageOverlay` | 三态 = 译文（`useOriginalText=false`）/ 识别原文（`true`）/ 纯图（**不调** `renderOverlay`）；按 `(图片路径, 态, 载荷 hashCode, 目标宽, 渲染倍率)` 缓存；`renderScale` 按"这张图最终画多大"给（**不再是 1f**，见下面「⑤ 覆盖层按最终画多大光栅化」）。"原文"是**把 OCR 原文画回原位**，不是裸原图 |
 | 交互 | `NovelImageControls` + `NovelPageView`/`NovelScrollAdapter` | **长按只进"编辑模式"**（按钮亮出来，**不自动开翻**）→ 点右下角「翻译」按钮才 OCR+翻译；按钮**画在图上**（贴图片绘制矩形右下角内侧），**画与命中同源**（`controlsOf()` 一份几何） |
 
 **硬约束与踩过的坑**：
@@ -277,12 +277,48 @@ Robolectric 的文本引擎是**桩**：`Paint.breakText` 不按宽度换行、�
   （`translateImageNow` / `cycleImageVisual` / `deleteImageTranslation`）—— 在途去重、落库、上屏、
   提示都只有一份。⚠️ 显示的是 `NovelImageOverlay` 渲染出来的那一份（按当前三态），
   不是裸原图 —— 否则"放大看全图"会把译文藏起来。
-- ⚠️ **`handleTap` 里"点图开查看器"必须排在九宫格翻页判定之前**（整页插图时用户点它是想看
-  图不是想翻页；守卫 `NovelImageEditWiringTest.点插图打开全屏查看器` 卡这条顺序）。
-- ⚠️ **Dialog 必须在 `onStop`/`onDestroy` 收掉**（持 window token，留着即泄漏）；收尾只挂在
-  `setOnDismissListener` **一处**（点图关 / 返回键关 / 宿主关三条路都会走到它）。
+- ⚠️ **`handleTap` 的分区判定顺序 = 优先级**（2026-10-04 真机反馈后重排，**别再改回去**）：
+  ① 编辑模式按钮 → ② `chromeHidden` 时**任何点击先唤回 UI** → ③ 菜单按钮那一小块 →
+  ④ **点插图（整张图）** → ⑤ 九宫格（中格显隐 UI / 上下左右半屏翻页）。
+  - **④ 必须在 ⑤ 之前**：中格是屏幕正中 1/9，会把落在里面的插图**整个吃掉** ——
+    整张图正好在中格时**一个点都点不到**，边缘的图也只能点到露在中格外的上下两条。
+    用户口径 2026-10-04：「**触发范围应该都是整张图片**才对，有的图片打不开，必须在很刁钻的
+    位置才能打开」（滚动模式最明显，因为中格在屏幕正中、图会滚过去）。守卫：
+    `NovelImageEditWiringTest.插图优先于九宫格中格`。
+  - **③ 不是"右上角一大片"**：老实现是 `y < h*0.22f && x > w*0.72f`（按钮的十倍以上），
+    在按钮**下方老远**点一下也弹面板（用户口径：「点击屏幕右上角（菜单按钮的下方很大一片区域）
+    都可以打开底部菜单」）。现在 `inMenuZone` 按 `btn_menu` 的**真实屏幕矩形 + 6dp** 算，
+    chrome 隐藏（按钮 GONE）时直接不认。守卫：`NovelImageEditWiringTest.菜单角贴着菜单按钮算`。
+  - **② 是"点图开查看器"必然带来的口子**：整章都是插图时，用户把 UI 藏起来后就再也调不出
+    面板/返回键了。所以隐藏态下**任何一次点击先唤回 UI**（Koto 式"点一下唤出 UI"），
+    代价是"藏起 UI 后开查看器要多点一次"。守卫：`NovelImageEditWiringTest.UI 隐藏时先唤回 UI`。
+- ⚠️ **漫画阅读器里是同一份老分区**（`MangaReaderActivity.consumeChromeOrMenuTap` 的
+  0.22/0.72 + 中格）：那边没被反馈过、也没有"插图段落"这回事，**本分支没动它**；
+  要统一时两边一起改（改了记得同步两边文档）。
 - 与「同时翻译图片」开关**无关**：那开关管批量翻译要不要带上插图，而"点开看大图、对这张图下指令"
   是用户的显式动作（与长按同一口径）。
+
+**⑤ 覆盖层按"最终画多大"光栅化（2026-10-04 真机反馈：小图译文糊）**
+
+用户口径：「**渲染回图片的译文非常不清晰，图片尺寸小，但是你的翻译文本没必要也为了贴合原图
+搞得那么模糊**」。根因与漫画那条**逐字同源**（见 `manga/CLAUDE.md`「低分辨率漫画译文模糊」）：
+
+- 插图**允许放大到 3×**（`NovelImageMetrics.MAX_UPSCALE`）：一张 400px 宽的小图会被拉到 ~1000px 显示；
+- 而覆盖层原先恒按底图分辨率光栅化（`renderScale = 1f`）→ **拉上去的字形是插值出来的像素** → 糊。
+
+修法（一个字都不改排版、也不用超分）：`NovelImageOverlay.renderScaleFor(drawnWidth, baseWidth)`
+= `drawnWidth / baseWidth` **夹到 `[1, 2]`**，交给 `OverlayRenderer.renderOverlay(renderScale=…)` ——
+字形的清晰度由**落笔时的 CTM** 决定，在"已被放大的坐标系"里画就天然清晰。
+
+- `drawnWidth <= baseWidth`（底图够大、画的时候是缩小）→ **1f**，老行为零内存增量；
+- 只有"小图被放大显示"才超采样，且封顶 2×（×2 = 4 倍像素，输出还进 48MB 的 LRU）；
+- 调用方传的 `targetWidth` **必须是这张图在屏幕上的实际绘制宽度**：分页/滚动传 `size.width`，
+  查看器传 `fitCenter` 之后的宽度（竖长图在宽屏上占不到整屏宽，按屏幕宽渲染纯属白占内存）；
+- 缓存键补上了 `renderScale`（底图宽取决于采样率，而解码缓存按文件路径存，可能被别的目标宽解过）。
+
+守卫：`NovelImageOverlayTest`（够大不超采样 / 小图按比例 / 封顶 2× / 底图宽为 0 兜底）。
+⚠️ **"文字变清晰"本身只能在真机上看**：Robolectric 的 Canvas 既不兑现 `canvas.scale()` 也不兑现
+`drawBitmap` 的目标矩形（漫画那边实测过），所以单测锁的是**倍率取值**，清晰度由构造保证。
 
 **④ 「刚翻完」的高亮（`NovelTextRenderer.COLOR_LAST_TRANSLATED` = 淡绿底）**
 

@@ -107,6 +107,47 @@ class NovelImageEditWiringTest {
         assertTrue("开查看器要在翻页判定之前", openAt in 0 until turnAt)
     }
 
+    /**
+     * **插图的触发范围 = 整张图**（真机反馈 2026-10-04：「滚动模式下图片点击打开的位置有问题，
+     * 触发范围应该都是整张图片才对；有的图片打不开，必须在很刁钻的位置才能打开」）。
+     *
+     * 根因是九宫格**中格**（显隐 UI，占屏幕正中 1/9）抢在插图前面：整张图正好落在中格时
+     * 一个点都点不到。所以插图判定必须在 `inChromeToggleZone` 之前。
+     */
+    @Test
+    fun `插图优先于九宫格中格`() {
+        val body = bodyOf("private fun handleTap(")
+        val imgAt = body.indexOf("val tapped = paragraphAt(")
+        val chromeAt = body.indexOf("inChromeToggleZone(")
+        assertTrue("两项都要在", imgAt >= 0 && chromeAt > 0)
+        assertTrue("点插图必须排在「中格显隐 UI」之前，否则中格会把图吃掉", imgAt < chromeAt)
+    }
+
+    /**
+     * **菜单角不许再用屏幕百分比**（真机反馈 2026-10-04：「点击屏幕右上角（菜单按钮的下方很大一片
+     * 区域）都可以打开底部菜单」）：改成贴着菜单按钮算（[inMenuZone]）。
+     */
+    @Test
+    fun `菜单角贴着菜单按钮算`() {
+        assertTrue("菜单补充区必须看真实按钮", activity.contains("private fun inMenuZone("))
+        assertTrue("要用 btnMenu 的屏幕矩形", activity.contains("v.getLocationOnScreen(vLoc)"))
+        assertFalse("不许再出现 22% 的右上角大区", activity.contains("h * 0.22f"))
+        assertFalse("不许再出现 72% 的右边界", activity.contains("w * 0.72f"))
+    }
+
+    /**
+     * **chrome 隐藏时任何一次点击先把 UI 唤回来**：整页都是插图的章里，如果点图一律开查看器，
+     * 用户把 UI 藏起来之后就再也调不出面板/返回键了。
+     */
+    @Test
+    fun `UI 隐藏时先唤回 UI`() {
+        val body = bodyOf("private fun handleTap(")
+        val hiddenAt = body.indexOf("if (chromeHidden) {")
+        val imgAt = body.indexOf("val tapped = paragraphAt(")
+        assertTrue("要有 chrome 隐藏的兜底分支", hiddenAt >= 0)
+        assertTrue("兜底分支要排在插图之前（否则调不回 UI）", hiddenAt < imgAt)
+    }
+
     /** 查看器的三颗按钮**复用**图上那排的实现（在途去重/落库/上屏只有一份）。 */
     @Test
     fun `查看器按钮走同一条实现`() {

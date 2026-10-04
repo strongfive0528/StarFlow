@@ -118,6 +118,14 @@ class NovelReaderActivity : AppCompatActivity() {
         /** 滚动模式按比例跳转时最多补齐几次（估算值会漂、一次 scrollBy 未必吃到目标，见 [seekScrollTo]）。 */
         private const val MAX_SEEK_PASSES = 60
 
+        /**
+         * 菜单按钮补充点击区向外扩多少 dp（见 [inMenuZone]）。
+         *
+         * ⚠️ **这是替代「右上角 28%×22%」那套屏幕百分比的**：那块区域十倍于按钮本身，
+         * 用户在按钮下方老远点一下也会弹出面板（用户口径 2026-10-04）。
+         */
+        private const val MENU_ZONE_PAD_DP = 6f
+
         private const val KEY_ROTATE = "reader_rotate_mode"
         private const val KEY_AUTO_TURN = "reader_auto_turn"
         private const val KEY_INTERVAL = "reader_auto_turn_interval"
@@ -1044,7 +1052,14 @@ class NovelReaderActivity : AppCompatActivity() {
         applyChromeVisibility()
     }
 
-    // ===== 点击分区（与漫画同一套九宫格） =====
+    // ===== 点击分区 =====
+    //
+    // ⚠️ **与漫画那套"右上角 28%×22% = 菜单 + 正中一格 = 显隐 UI"已经刻意分叉**（2026-10-04 真机反馈）：
+    // ① 菜单角改成**贴着菜单按钮**算（[inMenuZone]）—— 屏幕百分比那块是按钮的十倍以上，
+    //    在按钮下方老远点一下也弹面板，还吃掉本该翻页/点插图的点击；
+    // ② **插图优先于中格** —— 中格会把落在里面的插图整个吃掉（整张图正好在中格时永远打不开，
+    //    边缘的图也只能点到露出来的两条），用户口径是"整张图片都该能点开"。
+    // 漫画那边没被反馈过、且是另一套内容（位图页没有"插图段落"），暂不动；要统一时两边一起改。
 
     private fun handleTap(x: Float, y: Float) {
         val target: View = if (isScrollMode()) binding.novelScroll else binding.novelPager
@@ -1068,9 +1083,13 @@ class NovelReaderActivity : AppCompatActivity() {
             }
             return
         }
-        if (consumeChromeOrMenuTap(x, y, w, h)) return
-        // 编辑模式里那张图的按钮条：**优先于九宫格翻页**（它们画在图上，
-        // 按九宫格判会变成"翻页"）
+        // ── 分区判定的**顺序就是优先级**（2026-10-04 真机反馈后重排，别再改回去）──
+        // ① 编辑模式按钮（用户刚长按唤出来的东西，命中判据最精确，先给它）
+        // ② chrome 隐藏时：**任何一次点击先把 UI 唤回来**（否则整页都是插图的章里，
+        //    用户把 UI 藏起来后就再也调不出来 —— 这是"点图开查看器"必然带来的新口子）
+        // ③ 菜单按钮那一小块（见 [inMenuZone]，**不再是右上角一大片**）
+        // ④ 点插图 = 看全图（**整张图都是触发范围**）
+        // ⑤ 九宫格：中格显隐 UI、上下/左右半屏翻页
         imageControlAt(x, y)?.let { button ->
             val para = focusedImagePara
             if (para != null) {
@@ -1082,9 +1101,19 @@ class NovelReaderActivity : AppCompatActivity() {
                 return
             }
         }
+        if (chromeHidden) {
+            toggleChrome()
+            return
+        }
+        if (inMenuZone(x, y)) {
+            showMenu()
+            return
+        }
         // **点插图本身 = 放大查看全图**（用户口径 2026-10-04：「点击图片应该要可以放大查看全图」）。
-        // ⚠️ 必须放在九宫格翻页判定**之前**：整页插图时用户点它显然是想看图，
-        // 而不是想翻页（翻页还有滑动、以及点正文区两种方式）。
+        // ⚠️ 必须排在**中格（显隐 UI）之前**（用户口径 2026-10-04 真机反馈：「滚动模式下图片点击打开的
+        // 位置有问题，触发范围应该都是整张图片才对；有的图片打不开，必须在很刁钻的位置才能打开」）：
+        // 中格占屏幕正中 1/9，落在中格里的插图**一个点都点不到**（整张图正好在中格时永远打不开），
+        // 边缘的图也只能点到露在中格外的上下两条 —— 这就是"很刁钻的位置"。
         val tapped = paragraphAt(x, y)
         if (tapped != null && onImageParagraph(tapped)) {
             openImageViewer(tapped)
@@ -1096,6 +1125,10 @@ class NovelReaderActivity : AppCompatActivity() {
             focusedImagePara = null
             refreshImageChrome()
         }
+        if (inChromeToggleZone(x, y, w, h)) {
+            toggleChrome()
+            return
+        }
         when {
             // 连续滚动：点上下半屏 = 上一段 / 下一段
             isScrollMode() -> scrollByParagraph(if (y >= h / 2f) 1 else -1)
@@ -1106,18 +1139,40 @@ class NovelReaderActivity : AppCompatActivity() {
         }
     }
 
-    /** 右上角 22%×28% → 菜单；正中间一格 → 显隐上下 UI。返回 true 表示已消费。 */
-    private fun consumeChromeOrMenuTap(x: Float, y: Float, w: Float, h: Float): Boolean {
-        if (y < h * 0.22f && x > w * 0.72f) {
-            showMenu()
-            return true
-        }
-        if (x >= w / 3f && x < w * 2f / 3f && y >= h / 3f && y < h * 2f / 3f) {
-            toggleChrome()
-            return true
-        }
-        return false
+    /**
+     * **菜单按钮的补充点击区** = 按钮矩形向外扩 [MENU_ZONE_PAD_DP]。
+     *
+     * ⚠️ **不许再用屏幕百分比**（老实现是"右上角 28%×22%"）：那块区域是按钮本身的十倍以上，
+     * 在按钮**下方老远**点一下也会弹出面板（用户口径 2026-10-04：「点击屏幕右上角（菜单按钮的
+     * 下方很大一片区域）都可以打开底部菜单」），还顺手吃掉本该翻页/点插图的点击。
+     * 现在贴着按钮算，尺寸跟着按钮走（`btn_menu` 是 40dp 见方 → 有效区约 52dp）。
+     *
+     * ⚠️ 按钮本身是**可点视图**（`btnMenu.setOnClickListener`），点在按钮上根本到不了这里 ——
+     * 这一块纯粹是给"按在按钮边缘/旁边一点点"兜底的。chrome 隐藏时按钮是 `GONE`，直接不认。
+     */
+    private fun inMenuZone(x: Float, y: Float): Boolean {
+        val v = binding.btnMenu
+        if (v.visibility != View.VISIBLE || v.width <= 0 || v.height <= 0) return false
+        val target: View = if (isScrollMode()) binding.novelScroll else binding.novelPager
+        val vLoc = IntArray(2)
+        v.getLocationOnScreen(vLoc)
+        val tLoc = IntArray(2)
+        target.getLocationOnScreen(tLoc)
+        val pad = MENU_ZONE_PAD_DP * resources.displayMetrics.density
+        val left = vLoc[0] - tLoc[0] - pad
+        val top = vLoc[1] - tLoc[1] - pad
+        return x >= left && x <= left + v.width + 2 * pad &&
+            y >= top && y <= top + v.height + 2 * pad
     }
+
+    /**
+     * 九宫格**中格** = 显隐上下 UI（Koto 式）。
+     *
+     * ⚠️ 它的判定必须排在**插图之后**（见 [handleTap] 的顺序说明）：中格会把落在里面的插图
+     * 整个吃掉，用户点图"没反应"。正文（文字段）照旧走它。
+     */
+    private fun inChromeToggleZone(x: Float, y: Float, w: Float, h: Float): Boolean =
+        x >= w / 3f && x < w * 2f / 3f && y >= h / 3f && y < h * 2f / 3f
 
     // ===== 选择模式（长按多选 → 翻译 / 重翻） =====
 

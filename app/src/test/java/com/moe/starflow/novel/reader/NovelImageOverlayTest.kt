@@ -58,4 +58,38 @@ class NovelImageOverlayTest {
         assertEquals("第一話", bubbles[1].translatedText)
         assertTrue("矩形不能因为切态而变", bubbles[1].rect.top == 30)
     }
+
+    // ===== 覆盖层的超采样倍率（真机反馈：小尺寸插图的译文糊）=====
+    //
+    // 用户口径 2026-10-04：「渲染回图片的译文非常不清晰，图片尺寸小，但是你的翻译文本没必要
+    // 也为了贴合原图搞得那么模糊」。根因：插图允许放大到 3×，而覆盖层仍按**底图**分辨率
+    // 光栅化，拉上去的字形是插值出来的像素。修法与漫画那条一致（`manga/CLAUDE.md`
+    // 「低分辨率漫画译文模糊」）：让文字在"已被放大的坐标系"里落笔。
+
+    /** 底图够大（画的时候是缩小）→ 不放大，倍率 1（老行为、零内存增量）。 */
+    @Test
+    fun `底图够大时不超采样`() {
+        assertEquals(1f, NovelImageOverlay.renderScaleFor(drawnWidth = 900, baseWidth = 900), 0.001f)
+        assertEquals(1f, NovelImageOverlay.renderScaleFor(drawnWidth = 800, baseWidth = 1400), 0.001f)
+    }
+
+    /** 小图被放大显示 → 按比例超采样（文字按最终尺寸光栅化，才不糊）。 */
+    @Test
+    fun `小图被放大时按比例超采样`() {
+        assertEquals(1.5f, NovelImageOverlay.renderScaleFor(drawnWidth = 600, baseWidth = 400), 0.001f)
+    }
+
+    /** 封顶 2×（×2 = 4 倍像素，而输出还进 48MB 的 LRU）。 */
+    @Test
+    fun `超采样封顶两倍`() {
+        assertEquals(2f, NovelImageOverlay.renderScaleFor(drawnWidth = 1200, baseWidth = 400), 0.001f)
+        assertEquals(2f, NovelImageOverlay.renderScaleFor(drawnWidth = 1080, baseWidth = 1), 0.001f)
+    }
+
+    /** 底图宽取不到（0）也不能除零/炸掉。 */
+    @Test
+    fun `底图宽为 0 时兜底`() {
+        assertEquals(2f, NovelImageOverlay.renderScaleFor(drawnWidth = 900, baseWidth = 0), 0.001f)
+        assertEquals(1f, NovelImageOverlay.renderScaleFor(drawnWidth = 0, baseWidth = 900), 0.001f)
+    }
 }
