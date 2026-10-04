@@ -1766,10 +1766,13 @@
     <!-- ===== 导入弹窗的选项说明（措辞与 koto 统一；只保留「文件」「文件夹(单部)」，不含多部入口）===== -->
     <string name="import_desc_files_manga">Pick one or more CBZ/ZIP/CBR/7z files. Each file becomes one manga; its subfolders become chapters.</string>
     <string name="import_desc_dir_manga">Pick a folder holding a single manga. Its subfolders become chapters; loose images in the root become chapter 0.</string>
-    <string name="import_desc_files_novel">Pick one or more EPUB or TXT files. Each file is imported as one novel.</string>
-    <string name="import_desc_dir_novel">Pick a folder holding a single novel. TXT files inside become chapters; each EPUB becomes a volume and keeps its own chapters.</string>
+    <string name="import_desc_files_novel">Pick one or more TXT / EPUB / ZIP (novel pack containing HTML) / HTML files. Each file is imported as one novel. Note: a single HTML file is copied on its own, so illustrations that sit next to it cannot be read — import the whole folder instead if it has pictures.</string>
+    <string name="import_desc_dir_novel">Pick a folder holding a single novel. TXT / HTML files inside become chapters; each EPUB becomes a volume and keeps its own chapters. When the folder contains HTML, the pictures under it are copied too so illustrations show up.</string>
     <string name="import_option_dir_manga_single">Import folder (single manga)</string>
     <string name="import_option_dir_novel_single">Import folder (single novel)</string>
+    <!-- ⚠️ 小说侧的「导入文件」按钮**必须**用自己的 key：曾经复用 import_manga_option_files，
+         于是文本导入弹窗上写着「导入文件（zip/cbz/cbr/7z）」—— 那三种是漫画格式（用户 2026-10-04 指出）。 -->
+    <string name="import_novel_option_files">Import files (txt / epub / zip / html)</string>
 
     <string name="reader_clear_page_desc">Clear this page</string>
     <string name="reader_clear_page_confirm_title">Clear this page\'s translation?</string>

@@ -211,4 +211,57 @@ class NovelImageExtractionTest {
         assertNull(ZipImages.resolveLocal(base, "../../etc/passwd"))
         assertTrue(ZipImages.resolveLocal(base, "images/a.png")!!.path.startsWith(base.canonicalPath))
     }
+
+    // ===== 文件夹：html 章节能读到插图（2026-10-04 加）=====
+    //
+    // 用户口径：「所有支持的格式都支持图片预览」。文件夹导入以前只拷 txt/epub ——
+    // 「一堆 html + images/ 目录」这种最常见的分发形态既不认章节、也没有图。
+
+    @Test
+    fun `文件夹里的 html 章节能读出插图`() = runBlocking {
+        val dir = tmp.newFolder("folder")
+        File(dir, "images").mkdirs()
+        File(dir, "images/a.png").writeBytes(blob())
+        File(dir, "ch2.txt").writeText("第二章正文")
+        File(dir, "ch1.html").writeText("<p>第一章正文</p><img src=\"images/a.png\"/>")
+
+        val book = FolderNovelParser.parse(dir)
+        assertEquals("html 与 txt 都要成章，且按自然序", listOf("ch1", "ch2"), book.chapters.map { it.title })
+
+        val src = FolderNovelParser.loadChapterSource(dir, "ch1.html")
+        assertTrue("正文要读出来", src.text.contains("第一章正文"))
+        assertEquals(1, src.images.size)
+        assertTrue("夹内 html 的插图必须读得出来（导入时已递归拷进来）", src.images[0] != null)
+
+        // txt 那一章照旧是纯文本，不受 html 分支影响
+        val txt = FolderNovelParser.loadChapterSource(dir, "ch2.txt")
+        assertTrue(txt.text.contains("第二章正文"))
+        assertTrue("txt 章没有图", txt.images.isEmpty())
+    }
+
+    /** 子目录里的 html **不**成章（既有约定：只取直接子文件，别把杂七杂八吞成章节）。 */
+    @Test
+    fun `子目录里的 html 不成章`() = runBlocking {
+        val dir = tmp.newFolder("folder2")
+        File(dir, "text").mkdirs()
+        File(dir, "text/ch1.html").writeText("<p>藏在子目录里</p>")
+        File(dir, "ch0.txt").writeText("根目录的正文")
+
+        val book = FolderNovelParser.parse(dir)
+        assertEquals(listOf("ch0"), book.chapters.map { it.title })
+    }
+
+    /** 夹内 html 引用的图**不在**时返回 null（渲染回落占位），不能抛也不能改变张数。 */
+    @Test
+    fun `夹内 html 缺图时返回 null`() = runBlocking {
+        val dir = tmp.newFolder("folder3")
+        File(dir, "ch1.html").writeText("<img src=\"images/missing.png\"/><img src=\"images/ok.png\"/>")
+        File(dir, "images").mkdirs()
+        File(dir, "images/ok.png").writeBytes(blob())
+
+        val src = FolderNovelParser.loadChapterSource(dir, "ch1.html")
+        assertEquals(2, src.images.size)
+        assertNull(src.images[0])
+        assertTrue(src.images[1] != null)
+    }
 }

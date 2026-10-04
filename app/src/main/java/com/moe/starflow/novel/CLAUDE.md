@@ -67,6 +67,44 @@ Robolectric 的文本引擎是**桩**：`Paint.breakText` 不按宽度换行、�
   别看到版本号已是 3 就以为"动完了不能再动"，也别把上面那句清理路径删了
 - 另一条路是把 `splitVersion` 并进主键（要一次重建表的迁移），没做
 
+### ⚠️ 支持哪些格式 / 每种格式的插图能力（2026-10-04 整理，改动前必读）
+
+`NovelFormat` 只有 **5 种**：`TXT` / `EPUB` / `ZIP_HTML` / `HTML` / `FOLDER`
+（判定在 `NovelFormatDetector.detect`：**先按内容**试 zip 分流，再按扩展名；未知扩展名先嗅探内容，
+见文件顶部那条「先看内容再信扩展名」）。
+
+| 格式 | 导入入口 | 章节 | **插图** |
+|---|---|---|---|
+| `TXT` | 文件 | 按章节标记切；无标记 = 整本一章 | —（纯文本，没有图片的概念） |
+| `EPUB` | 文件 | spine 序（不是文件名字典序） | ✅ 包内图（整包复制进来） |
+| `ZIP_HTML` | 文件（.zip） | 包内 html/htm/xhtml/txt 条目，自然序 | ✅ 包内图（`ZipImages.read`） |
+| `HTML` | 文件（.html） | 整篇 = 一章 | ⚠️ **导不进来**：单文件授权只有那一个文件，兄弟图片拿不到 → 回落占位文本 |
+| `FOLDER` | 文件夹 | 直接子文件：txt / **html** / epub（epub 展开成卷） | ✅ 夹内 html 引用的图（导入时**递归**拷进来）；epub 卷的图 ✅；txt 无图 |
+
+- ⚠️ **小说侧不许复用漫画的导入文案**：`NovelShelfFragment.showImportDialog` 曾用
+  `import_manga_option_files`（＝「导入文件（zip/cbz/cbr/7z）」）—— **cbr/cbz/7z 是漫画的格式**
+  （走 libarchive 解压那套），小说一条都不认。用户 2026-10-04 直接指出了这条。
+  小说的按钮/描述有自己的 key：`import_novel_option_files` / `import_desc_files_novel` /
+  `import_desc_dir_novel`。漫画那边是 `import_manga_option_files` / `import_desc_files_manga`。
+- ⚠️ **单 HTML 的图片是 SAF 的硬限制**（不是漏做）：`ACTION_OPEN_DOCUMENT` 的单文件授权
+  只覆盖那一个文件，同目录的兄弟图片读不了（构造兄弟 URI 也会 `SecurityException`）。
+  所以 `import_desc_files_novel` 的文案里**明说**了「有插图请改用导入文件夹」。
+  要真做成，只能再加一次 `ACTION_OPEN_DOCUMENT_TREE`（让用户把父目录授权一遍）——没做。
+- ⚠️ **夹内 html 的图片靠"导入时递归拷"**（`NovelImporter.collectImageDocs`）：html 里的
+  `images/a.jpg` 是**相对路径**，而 `resolveLocal` 的基准目录是书目录 —— 不把图拷进书目录，
+  解析出来永远是 null。两条配套约束：
+  1. **只有夹里有 html 才拷图片**（txt/epub 不需要外部图；纯 txt 夹不该被塞进一堆图）；
+  2. 相对路径由 **documentId** 折出来（`DocumentsContract.getDocumentId` 去掉树根前缀），
+     不是靠 `DocumentFile.name` 拼 —— 后者只有文件名，`images/` 那层就丢了。
+- ⚠️ **拷图片必须过两道守卫**（与 `safeSegment` / `resolveInside` 同一套威胁模型）：
+  `sanitizeRelPath`（拒 `..`、冒号/盘符、控制字符、超长、层级过深）+ `resolveInsideTree`
+  （规范路径必须**严格**落在书目录内）。放行一条 `../../x.jpg` 就能覆盖别的书/封面/日志。
+  张数/字节上限：`MAX_DIR_IMAGES = 2000` / `MAX_DIR_IMAGE_BYTES = 400MB`（命中只停拷 + 留日志）。
+- 单张图拷失败**不让整次导入失败**（少一张插图 ≠ 整本书读不了），但必须 `LogCollector.w` 留痕。
+- 守卫：`NovelImporterDirectoryRulesTest`（扩展名分类 + 路径消毒 8 例）、
+  `NovelImageExtractionTest`（含「文件夹里的 html 章节能读出插图」/「子目录里的 html 不成章」/
+  「夹内 html 缺图返回 null」）、`FolderNovelParserTest`（12 例，既有约定一条没破）。
+
 ### ⚠️ EPUB/HTML 的内嵌插图（2026-10-04 加，改动前必读）
 
 小说阅读器**会显示 epub/zip 里的插图**（封面页、插图页）。整条链路是"标记 ←→ 字节 ←→ 文件"
@@ -86,11 +124,13 @@ Robolectric 的文本引擎是**桩**：`Paint.breakText` 不按宽度换行、�
   非常多，无上限放大就是**一整屏色块**；而完全不放又让真插图贴着原始像素显示（用户报的
   「图片感觉都太小了」）。详见下面「插图**翻译**」一节的尺寸条与 `NovelImageMetrics.MAX_UPSCALE`。
 - ⚠️ 读不到的图写 `null` → 该段**回落成占位文本**：少一张图不能把正文也丢了
-- ⚠️ 单 HTML / 文件夹里的**散章**没有图：导入只复制 txt/epub（SAF 单文件授权拿不到兄弟文件），
-  所以 `HtmlParser.loadChapterSource` 那条路解析出来的地址在导入后都取不到（留着的意义是
-  以后若改成连图一起拷，它立刻能用）
+- ⚠️ **单 HTML 的图导不进来**（SAF 单文件授权拿不到兄弟文件，见上面那张表 + 那条硬约束）；
+  夹内散章（txt）本来就没有图；**夹内 html 的图能显示**（2026-10-04 起，导入时递归拷贝）。
+  `HtmlParser.loadChapterSource` 那条路径一直按规矩解析 —— 图片一旦在书目录里（夹内 html、
+  或用户手工放进书目录），它立刻就能用
 - 守卫：`NovelImageExtractionTest`（抽地址 / 配对 / epub 相对路径 / 百分号转义 / SVG 包装 /
-  `data:` / 路径穿越）、`NovelImageMetricsTest`（尺寸口径）、`NovelImagePaginationTest`（占位高度与换页）
+  `data:` / 路径穿越 / 夹内 html 取图）、`NovelImageMetricsTest`（尺寸口径）、
+  `NovelImagePaginationTest`（占位高度与换页）
 
 ### ⚠️ 插图**翻译**（2026-10-04 加，改动前必读）
 

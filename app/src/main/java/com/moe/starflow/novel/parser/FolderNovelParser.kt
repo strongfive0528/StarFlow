@@ -15,22 +15,27 @@ import java.util.Locale
  * 文件夹子：**整个文件夹 = 一部小说**。
  *
  * 与漫画侧同一套心智（整个夹 = 一部作品），区别只在「一章」的粒度：
- * 漫画的子文件夹是一章，小说这里**夹内每个 txt 就是一章**。
+ * 漫画的子文件夹是一章，小说这里**夹内每个文本文件就是一章**。
  *
  * ### 章标题与顺序
  * - `.txt` → 一章，标题取文件名主干（`01 雾港.txt` → `01 雾港`）
+ * - `.html/.htm/.xhtml` → 一章（2026-10-04 加，用户要求「所有格式都支持图片预览」）：
+ *   「一堆 html + 一个 images/ 目录」是小说下载最常见的分发形态；导入时图片也一起拷进来，
+ *   所以这类章节的插图能显示（见 [loadChapterSource]）
  * - `.epub` → 当作**一卷**，内部章节原样展开，标题加卷名前缀（`卷名 · 章名`）
  *   这样「一部小说 = 若干卷 epub + 若干散章 txt」这种下载形态也能读
  * - 排序用**自然序**（`第10章` 在 `第2章` 之后）—— 字典序会把顺序弄乱
  *
  * ⚠️ 只取**直接子文件**，不递归：递归会把「夹里套了一堆杂七杂八」的情况也吞进来变成
  * 莫名其妙的章节。要递归的话得先明确用户意图（那是多部还是单部的混合结构）。
+ * （图片是例外：导入侧会**递归**把图片拷进来，因为 `images/` 这种子目录是常态。）
  */
 object FolderNovelParser : NovelParser {
 
     private const val TAG = "FolderNovelParser"
 
     private val TEXT_EXTS = setOf("txt")
+    private val HTML_EXTS = setOf("html", "htm", "xhtml")
     private val VOLUME_EXTS = setOf("epub")
 
     /** locator 里「卷内定位」的分隔符。文件名理论上可能含 `|`，但那种文件极少见。 */
@@ -47,7 +52,7 @@ object FolderNovelParser : NovelParser {
         for (child in children) {
             val ext = child.extension.lowercase(Locale.ROOT)
             when {
-                ext in TEXT_EXTS -> chapters.add(
+                ext in TEXT_EXTS || ext in HTML_EXTS -> chapters.add(
                     NovelChapterMeta(
                         index = chapters.size,
                         title = child.nameWithoutExtension.ifBlank { child.name },
@@ -97,8 +102,11 @@ object FolderNovelParser : NovelParser {
     /**
      * 正文 + 图片。
      *
-     * ⚠️ 夹里的**散章都是 txt**（导入只拷 txt/epub）→ 本来就没有图片；夹里的 **epub 卷**则整条
-     * 委托给 [EpubParser.loadChapterSource]（卷内插图照常显示）。
+     * - 夹里的 **epub 卷**：整条委托给 [EpubParser.loadChapterSource]（卷内插图照常显示）
+     * - 夹里的 **html**：与单 HTML 同一条路（[HtmlParser.loadChapterSource]）——
+     *   基准目录就是 html 所在目录（= 书目录，因为只取直接子文件），
+     *   而导入时 `images/` 这类子目录里的图片**已经递归拷进来了**，所以插图能显示
+     * - 夹里的 **txt**：纯文本（「一行一段」，与 [TxtParser] 同一套）
      */
     override suspend fun loadChapterSource(file: File, locator: String): ChapterSource =
         withContext(Dispatchers.IO) {
@@ -111,7 +119,13 @@ object FolderNovelParser : NovelParser {
             }
             val target = File(file, locator)
             if (!target.isFile) return@withContext ChapterSource.EMPTY
-            // 夹内的散章都是 txt（见 NovelImporter.DIR_IMPORT_EXTS）→ 与 TxtParser 同一套「一行一段」
+            if (target.extension.lowercase(Locale.ROOT) in HTML_EXTS) {
+                // ⚠️ 图片基准 = html 的父目录（书目录）。导入只拷直接子级 html，
+                // 所以父目录就是书目录；`images/a.jpg` 与 `../` 都由 `ZipImages.resolveLocal`
+                // 做「夹在基准目录内」的越界守卫。
+                return@withContext HtmlParser.loadChapterSource(target, "")
+            }
+            // 夹内的散章都是 txt（见 NovelImporter.DIR_TEXT_EXTS）→ 与 TxtParser 同一套「一行一段」
             ChapterSource(
                 NovelParagraphSplitter.linesToParagraphs(
                     TextEncoding.decode(NovelReadLimits.readFile(target))

@@ -1764,10 +1764,13 @@
     <!-- ===== 导入弹窗的选项说明（措辞与 koto 统一；只保留「文件」「文件夹(单部)」，不含多部入口）===== -->
     <string name="import_desc_files_manga">选择一个或多个 CBZ/ZIP/CBR/7z 文件，每个文件导入为一本漫画，夹内的子文件夹将作为章节。</string>
     <string name="import_desc_dir_manga">选择一个包含单部漫画的文件夹，子文件夹将作为章节，最外层散图作为第0章。</string>
-    <string name="import_desc_files_novel">选择一个或多个 EPUB 或 TXT 文件，每个文件导入为一部小说。</string>
-    <string name="import_desc_dir_novel">选择一个包含单部小说的文件夹。内部 TXT 文件会作为章节导入；每个 EPUB 文件会作为一个分卷导入，并保留其内部章节。</string>
+    <string name="import_desc_files_novel">选择一个或多个 TXT / EPUB / ZIP（内含 HTML 的小说包）/ HTML 文件，每个文件导入为一部小说。注意：单个 HTML 只复制它自己，旁边同目录的插图读不到 —— 有插图请改用「导入文件夹」。</string>
+    <string name="import_desc_dir_novel">选择一个包含单部小说的文件夹。内部 TXT / HTML 文件会作为章节导入；每个 EPUB 文件会作为一个分卷导入，并保留其内部章节。夹内存在 HTML 时，它引用的图片也会一起复制，插图可正常显示。</string>
     <string name="import_option_dir_manga_single">导入文件夹（单部漫画）</string>
     <string name="import_option_dir_novel_single">导入文件夹（单部小说）</string>
+    <!-- ⚠️ 小说侧的「导入文件」按钮**必须**用自己的 key：曾经复用 import_manga_option_files，
+         于是文本导入弹窗上写着「导入文件（zip/cbz/cbr/7z）」—— 那三种是漫画格式（用户 2026-10-04 指出）。 -->
+    <string name="import_novel_option_files">导入文件（txt / epub / zip / html）</string>
 
     <string name="reader_clear_page_desc">清除本页译文</string>
     <string name="reader_clear_page_confirm_title">清除本页译文？</string>
