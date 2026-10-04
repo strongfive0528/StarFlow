@@ -185,8 +185,17 @@ class TranslationJobService : LifecycleService() {
         // ⚠️ 到这里的章**一定是活动章**（调用方的 `active` 已滤掉 DONE/CANCELLED），
         // 所以不再有 CANCELLED 分支 —— 那是不可达代码（审查发现 `chapter_translate_notify_cancelled`
         // 因此是两个语言里的死资源）。
-        val text = when (job.state) {
-            ChapterJobState.PAUSED -> getString(R.string.chapter_translate_notify_paused, job.done, job.total)
+        val text = when {
+            // ⚠️ **暂停优先**：暂停在插图 OCR 中间时，"正在识别插图 2/3…"会骗人（其实已经不再推进）
+            job.state == ChapterJobState.PAUSED ->
+                getString(R.string.chapter_translate_notify_paused, job.done, job.total)
+            // 更细的一行状态（小说插图：「正在识别插图 2/3…」）—— 要能盖过"第 x/y"与"仅 OCR"，
+            // 否则阅读器关掉后用户看到的是进度不动（见 ActiveChapterJob.stageText）
+            !job.stageText.isNullOrBlank() -> job.stageText
+            // ⚠️ 仅 OCR 模式下一页都没在翻译 → 通知栏也必须报「正在OCR」（用户口径 2026-10：
+            //    只 OCR 模式的提示系统要对所有涉及 OCR 的功能生效）
+            TranslationExecutionMode.isOcrOnly(this) ->
+                getString(R.string.chapter_translate_notify_progress_ocr, job.done, job.total)
             else -> getString(R.string.chapter_translate_notify_progress, job.done, job.total)
         }
         val builder = NotificationCompat.Builder(this, CHANNEL_ID)

@@ -151,8 +151,8 @@ class NovelChapterJobHost(
             ),
             // 图片段：整章任务也要能翻插图（开关关着时返回 null = 老行为）
             imageHost = { imageHostOrNull() },
-            // 批内插图进度（串行 OCR，一张几秒）→ 阅读器浮层要显示"第 i/N 张"
-            onImageProgress = { ch, i, n -> onImageStage?.invoke(ch, i, n) },
+            // 批内插图进度（串行 OCR，一张几秒）→ 通知栏 + 阅读器浮层都要显示"第 i/N 张"
+            onImageProgress = { ch, i, n -> onImageStageInternal(ch, i, n) },
         ).also { translatorCache = it }
     }
 
@@ -421,21 +421,46 @@ class NovelChapterJobHost(
      * ⚠️ 这里**不持 `OcrLock`**：与漫画的 `translatePhase` 同一口径 —— 那把锁是 **OCR 引擎**锁，
      * 小说的翻译请求不碰 OCR。本地引擎的"串行"由 `novelConcurrency() == 1` 保证。
      */
+    /** 含插图批的门闩（见 [translateUnit] 里的说明）：保证插图 OCR 一批一批来。 */
+    private val imageGate = kotlinx.coroutines.sync.Mutex()
+
+    /** 这一批里有没有插图（含图就要走 [imageGate]）。 */
+    private suspend fun unitHasImage(unit: NovelWaitingBatch): Boolean {
+        if (!NovelPanelStyle.translateImages(readerPrefs)) return false
+        return runCatching {
+            repository.paragraphsOf(book, unit.chapterIndex)
+                .any { it.index in unit.paraIndexes && it.type == NovelParagraphType.IMAGE }
+        }.getOrDefault(false)
+    }
+
     private suspend fun translateUnit(unitId: Int): Boolean {
         val unit = synchronized(unitLock) { units[unitId] } ?: return false
         // ⚠️ 开翻前先推一次 UI：用户要求「正在提交/等待返回的批次**背景高亮**」——
         // 只在"批结束"时推的话，5 个批同时起飞要等第一个返回才看得见高亮（面板像是卡住了）。
         notifyUiChanged()
+        // ⚠️ **含插图的批之间串行**（整章任务的并发 N 会同时起好几个批）：插图 OCR 用的是
+        // 进程级单例引擎（`OcrLock`），同时起 3 个含图批只会让后两个在锁上干等；等满 20s 拿不到
+        // 就会被当成失败（`NovelImagePipeline`），而一条正常路径不该出现"因为排队而失败"。
+        // 这里用一把门闩把含图批排成队（**不影响纯文本批的并发**；锁在 try/finally 里成对放）。
+        val hasImage = unitHasImage(unit)
+        val paras = repository.paragraphsOf(book, unit.chapterIndex)
+        val src = CustomPreference.getInstance(app).getString("Source_Language", "auto")
+        val tgt = CustomPreference.getInstance(app).getString("Target_Language", "zh")
         val result = try {
-            translator().translateBatch(
-                book = book,
-                chapterIndex = unit.chapterIndex,
-                paragraphs = repository.paragraphsOf(book, unit.chapterIndex),
-                paraIndexes = unit.paraIndexes,
-                sourceLang = CustomPreference.getInstance(app).getString("Source_Language", "auto"),
-                targetLang = CustomPreference.getInstance(app).getString("Target_Language", "zh"),
-                translatorName = "novel",
-            )
+            if (hasImage) imageGate.lock()
+            try {
+                translator().translateBatch(
+                    book = book,
+                    chapterIndex = unit.chapterIndex,
+                    paragraphs = paras,
+                    paraIndexes = unit.paraIndexes,
+                    sourceLang = src,
+                    targetLang = tgt,
+                    translatorName = "novel",
+                )
+            } finally {
+                if (hasImage) imageGate.unlock()
+            }
         } catch (e: kotlinx.coroutines.CancellationException) {
             throw e
         } catch (e: Exception) {
@@ -458,6 +483,9 @@ class NovelChapterJobHost(
     }
 
     private fun forgetChapter(chapterIndex: Int) {
+        // ⚠️ **插图进度也要跟着忘掉**：批在插图 OCR 中途被取消/关进程时，那次"清零上报"
+        // 不会执行 —— 留着的话下一次这一章的任务会把上一轮的"正在识别插图 2/3…"重新发到通知栏。
+        imageStage.remove(chapterIndex)
         synchronized(unitLock) {
             chapterUnits.remove(chapterIndex)?.forEach { units.remove(it) }
         }
@@ -493,7 +521,31 @@ class NovelChapterJobHost(
             done = job.done,
             state = job.state,
             startPage = 0,
+            // 这一章正在逐张 OCR 插图 → 通知栏报「正在识别插图 i/N…」（阅读器关掉时也看得到）
+            stageText = stageTextOf(job.chapterIndex),
         )
+    }
+
+    /**
+     * 插图进度文案（`章 → 文案`）。
+     *
+     * ⚠️ **按章存**：整章任务可以多章并行，共用一个字段会让 A 章的"第 2/3 张"串到 B 章的通知上。
+     * 由 `onImageProgress` 写入（`index = 0` = 这一批插图跑完 → 删掉这一章的键）。
+     */
+    private val imageStage = ConcurrentHashMap<Int, String>()
+
+    private fun stageTextOf(chapterIndex: Int): String? = imageStage[chapterIndex]
+
+    /** 插图进度：写文案 + 让通知栏/面板立刻刷新（[TranslationJobRegistry.notifyChanged]）。 */
+    private fun onImageStageInternal(chapterIndex: Int, index: Int, total: Int) {
+        if (index <= 0 || total <= 0) {
+            imageStage.remove(chapterIndex)
+        } else {
+            imageStage[chapterIndex] = "正在识别插图 $index/$total…"
+        }
+        runCatching { TranslationJobRegistry.notifyChanged() }
+        // 阅读器挂着的话，它自己的芯片也要跟上（宿主只负责通知栏那条）
+        onImageStage?.invoke(chapterIndex, index, total)
     }
 
     override fun snapshot(): List<ActiveChapterJob> = snapshotOfBook()
