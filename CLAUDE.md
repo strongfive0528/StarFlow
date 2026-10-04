@@ -893,6 +893,29 @@ if (knownBefore == null || knownBefore != nowLandscape) clearCropForScreenChange
 
 ## 高频踩坑（gotchas）
 
+- ⚠️⚠️ **改完文件先看 `git show --stat` 有没有"整文件重写"**（2026-10-04 踩到）：
+  本仓库的工作区里**大量文件是 CRLF、而索引里存的是 LF**（`git ls-files --eol` 会显示
+  `i/lf w/crlf`，998 个文件如此），因为 git 靠 stat 缓存判断"没改过"，`git status` 一声不吭。
+  **一旦某个文件被重新写盘（编辑器/AI 工具整文件写回），它的字节就会被原样存进索引 —— CRLF 也存**，
+  于是那个文件的 diff 变成"整文件重写"（实测 `NovelImporter.kt` 540 行 CRLF → 919 行改动、
+  `NovelShelfFragment.kt` 473 行 → 945 行改动），真正的改动被埋在里面**完全 review 不动**。
+  两条处置：
+  1. 提交前扫一眼 `git show --stat HEAD`：某文件改动行数 ≈ 全文件行数 = 中招了；
+  2. 归一化再 `commit --amend`：
+     ```powershell
+     $p = (Resolve-Path <file>).Path
+     $t = [System.IO.File]::ReadAllText($p).Replace("`r`n", "`n")
+     [System.IO.File]::WriteAllText($p, $t, (New-Object System.Text.UTF8Encoding($false)))
+     ```
+  ⚠️ 别用 `Get-Content`/`Set-Content` 做这件事（会把中文读成 mojibake，见下一条）。
+  ⚠️ 也别想着"反正 git 会归一化"：本仓库 `core.autocrlf=false` + `core.eol=lf`，
+  **git 不会替你把 CRLF 转成 LF**（`.gitattributes` 只对 `novel-fixtures/**` 标了 `-text`）。
+
+- **读文件一律用 `read` 工具，不要用 `Get-Content`**（2026-10-04 踩到）：无 BOM 的 UTF-8 文件会被
+  PowerShell 5.1 按系统 ANSI（GBK）解码 —— 中文全变 mojibake（`灏忚鏂囦欢鏍煎紡`），
+  看着像文件坏了、其实只是读错了。要按字节核对（换行/BOM）就用
+  `[System.IO.File]::ReadAllBytes()`。
+
 - **Kotlin 块注释会嵌套**：KDoc 里出现 `/*` 就开一层新注释 —— 例如中文强调写法
   `失败/**不属于这本书**` → 报 `Unclosed comment` + 后面一整片 `Missing '}'`，
   而**行号指在函数中间、完全看不出是注释的锅**。中文强调用「」，别在注释里打出 `/**`。
