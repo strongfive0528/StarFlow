@@ -151,8 +151,20 @@ class NovelChapterJobHost(
             ),
             // 图片段：整章任务也要能翻插图（开关关着时返回 null = 老行为）
             imageHost = { imageHostOrNull() },
+            // 批内插图进度（串行 OCR，一张几秒）→ 阅读器浮层要显示"第 i/N 张"
+            onImageProgress = { ch, i, n -> onImageStage?.invoke(ch, i, n) },
         ).also { translatorCache = it }
     }
+
+    /**
+     * 插图进度上报（**阅读器挂上来的**，阅读器不在 = null → 只记日志）。
+     *
+     * ⚠️ 宿主是**应用级**的（阅读器关掉后整章任务继续跑），所以这里**只能**放一个不持有
+     * Activity 的回调字段：阅读器 `onStart` 时赋值、`onStop` 时清空（否则就是内存泄漏 +
+     * 往已销毁的 Activity 上刷 UI）。null 时整章任务照常跑，只是没有"第 i/N 张"的浮层。
+     */
+    @Volatile
+    var onImageStage: ((chapter: Int, index: Int, total: Int) -> Unit)? = null
 
     /**
      * 图片翻译宿主（**面板开关关着时返回 null** —— 那时整章任务照旧只翻文字）。

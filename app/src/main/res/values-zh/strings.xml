@@ -1681,6 +1681,7 @@
     <string name="novel_translate_images">同时翻译图片</string>
     <string name="novel_translate_images_hint">把书里的每张插图当成一个段落：先认出图上的文字，翻译后画回图上。默认关闭——每张图要跑一次 OCR（几秒）并发一次翻译请求。长按单张图片翻译不受这个开关限制。</string>
     <string name="novel_image_translating">正在翻译图片…</string>
+    <string name="novel_image_already_translating">这张插图正在翻译中，等一下再操作</string>
     <string name="novel_image_translating_progress">正在识别插图 %1$d/%2$d…</string>
     <string name="novel_image_edit_hint">已选中这张图 —— 点右下角按钮：翻译 / 切换显示 / 删除译文</string>
     <string name="novel_image_translated">图片翻译完成（%1$d 处文字）</string>

@@ -295,6 +295,17 @@ class NovelChapterTranslator(
         dao.deleteOtherVersions(book.id, book.translationKey, splitVersion)
     }
 
+    /**
+     * 只把残留的「翻译中」复位成 IDLE（**不动**别的版本的行）。
+     *
+     * 用途：**强制退出在途翻译**（停队列 / 打开面板 / 切后台）时那一批被 cancel，
+     * 写 SUCCESS/FAILED 的代码根本不会执行 → 库里留下 TRANSLATING，面板会把它永远显示成
+     * "翻译中"（用户看到的是"卡住了"）。这里当场复位，不等下次进阅读器的 [resetStale]。
+     */
+    suspend fun resetTranslating(book: ImportedNovel) {
+        dao.resetTranslating(book.id, book.translationKey)
+    }
+
     /** 见 [NovelBatchTranslator.abortAll]：整批任务/阅读器退出时把在途请求真的掐掉。 */
     override fun abortAll() {
         engine.abortInFlight()

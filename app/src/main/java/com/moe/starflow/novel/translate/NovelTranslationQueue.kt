@@ -226,7 +226,14 @@ class NovelTranslationQueue(
     fun inflightParaIndexes(): Set<Int> = inflightParasView
 
     /** 自动/增量每轮并进 `done` 的"别再挑"账（只有失败的锚点，避免无限重试同一批）。 */
+    /**
+     * 「这些段别碰」= 已译 ∪ 失败账本。
+     *
+     * ⚠️ 调度侧还要再并上 `excludedParas(章)`（整章任务已占住的段）与在飞段号 ——
+     * 三者缺一都会让同一段被两边各发一次请求（插图尤其贵：一次 OCR + 一次请求）。
+     */
     private fun skipSetFor(translated: Set<Int>): Set<Int> = translated + failedAnchors
+
 
     /**
      * 启动（或按新参数重启）队列。[NovelTranslateMode.MANUAL] 时只把状态清空 ——

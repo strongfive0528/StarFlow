@@ -340,7 +340,17 @@ class NovelScrollAdapter : RecyclerView.Adapter<NovelScrollAdapter.VH>() {
                             else -> null
                         }
                         if (frame != null) {
-                            NovelImageControls.drawFrame(canvas, selection, frame.first, frame.second, density)
+                            // ⚠️ 滚动模式的**条目边界就是图片边界**（高度 = 图高 + 段间距），
+                            // 边框画到图片外侧会被条目的裁剪吃掉上边 —— 这里改成**画在内侧**
+                            // （描边宽度的 1/2 内缩，视觉上仍是一圈框，但一定看得见）。
+                            val inset = frame.second * density / 2f
+                            val inside = NovelImageControls.Box(
+                                selection.left + inset + 3f * density,
+                                selection.top + inset + 3f * density,
+                                selection.right - inset - 3f * density,
+                                selection.bottom - inset - 3f * density,
+                            )
+                            NovelImageControls.drawFrame(canvas, inside, frame.first, frame.second, density)
                         }
                         if (focused) {
                             val items = imageControls()
