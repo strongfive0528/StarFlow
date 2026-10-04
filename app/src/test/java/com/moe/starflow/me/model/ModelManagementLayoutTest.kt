@@ -189,7 +189,27 @@ class ModelManagementLayoutTest {
         for (id in selecteds) assertNotNull("缺超分组「当前使用」$id", root.findViewById<View>(id))
 
         val rows = srRowIds()
-        assertEquals("超分行数应为 11（5 族逐档展开）", 11, rows.size)
+        // ⚠️ **不写死档数**（这里曾经是 `assertEquals(11, rows.size)`：2026-10 加 Real-CUGAN Pro 三档后
+        //    就变成"永远红"的假失败，下一轮就会被当噪声忽略）。真正的不变式是**跨来源一致**：
+        //    布局行 == `srRowIds()` == `ModelManagementFragment.srFamilies` 声明的行。
+        val fragment = java.io.File("src/main/java/com/moe/starflow/me/model/ModelManagementFragment.kt")
+        if (fragment.isFile) {
+            val declaredRows = Regex("R\\.id\\.(sr_[a-z0-9_]+_row)")
+                .findAll(fragment.readText())
+                .map { it.groupValues[1] }
+                .toSet()
+            assertTrue("Fragment 里一个超分行 id 都没解析到（正则或命名约定变了？）", declaredRows.isNotEmpty())
+            assertEquals(
+                "布局的 SR 行数必须与 ModelManagementFragment.srFamilies 声明的行数一致",
+                declaredRows.size,
+                rows.size,
+            )
+            assertEquals(
+                "srRowIds() 与 Fragment.srFamilies 必须逐行一致（多一行/少一行都要红）",
+                declaredRows,
+                rows.map { root.resources.getResourceEntryName(it) }.toSet(),
+            )
+        }
         val roots = rows.map { root.findViewById<View>(it) }
         rows.forEachIndexed { i, id -> assertNotNull("超分行根缺失: $id", roots[i]) }
         assertEquals("超分行根 id 必须唯一", rows.size, roots.toSet().size)
@@ -303,9 +323,11 @@ class ModelManagementLayoutTest {
      * 上一轮就是这样把单元测试留在了编译不通过的状态（只跑了 assembleDebug，没编译测试）。
      */
     private fun srRowIds() = listOf(
-        // upconv_7：2 档（不降噪 + 强力降噪 N2）
+        // upconv_7：4 档（动漫 2 + 照片 2）—— ⚠️ 照片族 2026-10 底回归，本清单当时漏补这两行
         R.id.sr_w2x_anime_m1_row,
         R.id.sr_w2x_anime_n2_row,
+        R.id.sr_w2x_photo_m1_row,
+        R.id.sr_w2x_photo_n2_row,
         // cunet 3 档
         R.id.sr_cunet_m1_row,
         R.id.sr_cunet_n1_row,
