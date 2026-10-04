@@ -307,6 +307,14 @@ class NovelChapterRepository(
          * 矩形与文字，不进键就会命中旧页表/旧渲染，用户点了「重新翻译」却看不出变化。
          */
         imageTranslations: Map<Int, NovelImageTranslation> = emptyMap(),
+        /**
+         * 「同时翻译图片」开着时传 true：插图段也算**可翻译段**。
+         *
+         * ⚠️ 只影响 `ChapterContent.translatableIndexes`（底部进度条绿块的判据）——
+         * 不算的话，含插图的那些页会在**图还没翻**的时候就变绿（用户以为这页翻完了）。
+         * 与面板分母（`paragraphCountOf(includeImages = true)`）是同一个口径。
+         */
+        includeImages: Boolean = false,
     ): ChapterContent = withContext(Dispatchers.IO) {
         val title = chaptersOf(book).getOrNull(chapterIndex)?.title.orEmpty()
         val paras = paragraphsOf(book, chapterIndex)
@@ -330,7 +338,9 @@ class NovelChapterRepository(
             // ⚠️ 锚点也要进键：同一个锚点在不同阅读位置会切出不同的页表（页首那刀）
             "${anchor?.paraIndex}:${anchor?.fraction}:" +
             // ⚠️ 图片译文载荷也要进键：重翻一张图会换掉矩形与文字
-            revisionOfImages(imageTranslations)
+            revisionOfImages(imageTranslations) +
+            // 开关也要进键：它决定 translatableIndexes（进度条绿块判据）
+            (if (includeImages) ":img" else "")
 
         // ⚠️ 先查缓存再算显示文本：`displayParas` 是 O(段数) 的对象分配，双语模式下每段还要
         // 拼一次字符串，而 `loadChapter` 每次改排版 / 切显示模式 / 切背景 / 译文到达都会调到这里。
@@ -350,7 +360,9 @@ class NovelChapterRepository(
             paragraphs = paras,
             displayTexts = displayTexts,
             pages = NovelPaginator.paginate(displayParas, style, widthPx, heightPx, anchor, layoutCache, images),
-            translatableIndexes = visible.filter { it.isTranslatable() }.mapTo(HashSet()) { it.index },
+            translatableIndexes = visible
+                .filter { it.isTranslatable() || (includeImages && it.type == NovelParagraphType.IMAGE) }
+                .mapTo(HashSet()) { it.index },
             images = images,
             imageTranslations = imageTranslations,
         ).also { content.put(key, it) }

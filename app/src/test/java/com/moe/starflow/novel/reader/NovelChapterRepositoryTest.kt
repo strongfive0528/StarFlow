@@ -108,6 +108,28 @@ class NovelChapterRepositoryTest {
         assertEquals(paras.count { it.isTranslatable() }, withoutImages)
     }
 
+    /**
+     * **进度条绿块的判据也要跟着开关走**：`translatableIndexes` 不含插图时，
+     * 含插图的页会在图还没翻的时候就变绿（用户以为这页翻完了）。
+     */
+    @Test
+    fun `插图算不算可翻译段由开关决定`() = runBlocking {
+        val text = "第一章 起\n\n这是第一段正文八个字\n\n📷 [图片]"
+        val repo = NovelChapterRepository()
+        val book = bookOf(text)
+        val imagePara = repo.paragraphsOf(book, 0)
+            .first { it.type == com.moe.starflow.novel.translate.NovelParagraphType.IMAGE }
+
+        val off = repo.load(book, 0, emptyMap(), NovelDisplayMode.TRANSLATED, style, 1080, 1920)
+        assertTrue("默认（开关关）插图不进可翻译集", imagePara.index !in off.translatableIndexes)
+
+        val on = repo.load(
+            book, 0, emptyMap(), NovelDisplayMode.TRANSLATED, style, 1080, 1920,
+            includeImages = true,
+        )
+        assertTrue("开关开着时插图要进可翻译集（进度条才不会提前变绿）", imagePara.index in on.translatableIndexes)
+    }
+
     @Test
     fun `文件丢失时不崩溃返回空内容`() = runBlocking {
         val repo = NovelChapterRepository()

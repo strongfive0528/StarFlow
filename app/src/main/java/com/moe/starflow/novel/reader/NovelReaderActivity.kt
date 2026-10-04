@@ -1558,6 +1558,8 @@ class NovelReaderActivity : AppCompatActivity() {
             val loaded = repository.load(
                 b, index, translations, NovelPanelStyle.displayMode(prefs), style, w, h, pageAnchor,
                 imageTranslations = imageMap,
+                // 开关开着时插图也算"可翻译段"：否则含插图的页在图还没翻时就变绿（进度条说谎）
+                includeImages = imagesEnabled(),
             )
             if (token != loadToken) {
                 return@launch
