@@ -2554,8 +2554,11 @@ class NovelReaderActivity : AppCompatActivity() {
         jobs.forEach { job ->
             alive += job.chapterIndex
             // 这一章正在逐张 OCR 插图 → 芯片报"第 i/N 张"（用户口径：提示系统要显示当前
-            // 正在翻译的图片状态）；否则报批进度
-            val stage = imageStageText?.takeIf { imageStageChapter == job.chapterIndex }
+            // 正在翻译的图片状态）；否则报批进度。
+            // ⚠️ 优先用**宿主快照里的** stageText：整章任务可以在别的章上跑（甚至阅读器已关），
+            // 那时 Activity 自己那份 `imageStageText` 因为"不是当前章"根本没被写入。
+            val stage = chapterHost?.imageStageTextOf(job.chapterIndex)
+                ?: imageStageText?.takeIf { imageStageChapter == job.chapterIndex }
             val text = when {
                 stage != null -> stage
                 job.state == ChapterJobState.PAUSED ->

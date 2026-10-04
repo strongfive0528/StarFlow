@@ -177,6 +177,27 @@ Robolectric 的文本引擎是**桩**：`Paint.breakText` 不按宽度换行、�
 - ⚠️ **返回键先退编辑模式**（用户口径：「选中文本可以通过返回退出编辑，为什么选中图片返回直接就
   退出阅读器？」）：`OnBackPressedCallback` 里 `selecting` 与 `focusedImagePara != null` 同一套处理，
   都只退出编辑态、不 finish、**也不打断在途翻译**。
+- ⚠️ **含图批串行有两条路**（缺一条就出现"因为排队而失败"）：
+  前台队列 `NovelTranslationQueue.imageBusy`（判据=批内含图）；**整章任务**走
+  `NovelChapterJobHost.imageGate`（一把 Mutex，只圈含图批，不影响纯文本批的并发）。
+  两处都必须 try/finally 成对放 —— 取消/异常路径漏放就是"插图永远排队"。
+- ⚠️ **插图进度要进通知栏**（阅读器关掉时也看得到）：`ActiveChapterJob.stageText`（默认 null，
+  漫画侧零影响）+ `TranslationJobService` 文案优先级 **暂停 > stageText > 仅OCR > 进度**；
+  ⚠️ 暂停必须优先，否则"暂停在插图 OCR 中间"仍显示「正在识别插图 2/3…」（骗人）；
+  宿主按章存 `imageStage`（多章并行不串），并在 `forgetChapter`（收尾/取消）里清 —— 不清的话
+  下一轮任务会把上一轮的"第 2/3 张"重新发到通知栏。
+- ⚠️ **强制退出要清两样**（`pauseToManual`）：插图进度文案 + 库里残留的「翻译中」
+  （`NovelChapterTranslator.resetTranslating`）—— 在途批被 cancel 时写 SUCCESS/FAILED 的代码不会执行，
+  不复位的话面板会把那几张图永远显示成"翻译中"。
+- ⚠️ **同一张图不许被两路同时翻**：`imageInFlightElsewhere()`（整章在飞 ∪ 队列在飞 ∪ 手动那张）
+  → 翻译/重翻/删除都先拦一下并提示 `novel_image_already_translating`。
+  删除尤其要拦：删了之后那一批落库会把它**写回来**（用户看到"删了又出现"）。
+  手动翻的那张图同时要进队列的 `excludedParas`（库里还是 IDLE，不去重就是同一张图 OCR 两遍）。
+- ⚠️ **浮层的"已翻/未翻"判据含插图载荷**（`isUnitTranslated`）：`translations` 装的是
+  "这一段显示什么文字"，图片行虽然也有 `translatedText`，但**载荷才是插图真的翻过的凭据**
+  （载荷丢了/被清时两者会不一致）。
+- 守卫：`NovelImageConcurrencyGuardTest`（含图批不持外锁 / 两条串行路 / 强制退出清进度与复位 /
+  通知栏优先插图进度 / 同一张图不被两路翻）。
 - **长按单张图不受开关限制**（那是用户对这张图的显式指令）；开关只管自动/增量/整章/手动一批
   要不要把插图也带上。
 - 图片视图的载荷走 **`setImageState(visuals, focused, translations)` 单独灌**，不读适配器手里那份

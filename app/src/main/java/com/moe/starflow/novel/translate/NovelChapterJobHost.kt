@@ -522,7 +522,7 @@ class NovelChapterJobHost(
             state = job.state,
             startPage = 0,
             // 这一章正在逐张 OCR 插图 → 通知栏报「正在识别插图 i/N…」（阅读器关掉时也看得到）
-            stageText = stageTextOf(job.chapterIndex),
+            stageText = imageStageTextOf(job.chapterIndex),
         )
     }
 
@@ -534,7 +534,8 @@ class NovelChapterJobHost(
      */
     private val imageStage = ConcurrentHashMap<Int, String>()
 
-    private fun stageTextOf(chapterIndex: Int): String? = imageStage[chapterIndex]
+    /** 这一章当前的插图进度文案（没有 = null）。阅读器的整章芯片也读它。 */
+    fun imageStageTextOf(chapterIndex: Int): String? = imageStage[chapterIndex]
 
     /** 插图进度：写文案 + 让通知栏/面板立刻刷新（[TranslationJobRegistry.notifyChanged]）。 */
     private fun onImageStageInternal(chapterIndex: Int, index: Int, total: Int) {

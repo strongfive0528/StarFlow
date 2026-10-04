@@ -109,9 +109,13 @@ class NovelImageConcurrencyGuardTest {
             "服务优先用 stageText",
             service.contains("!job.stageText.isNullOrBlank() -> job.stageText"),
         )
-        assertTrue("宿主写 stageText", host.contains("stageText = stageTextOf(job.chapterIndex)"))
+        assertTrue("宿主写 stageText", host.contains("stageText = imageStageTextOf(job.chapterIndex)"))
         assertTrue("宿主按章存（多章并行不串）", host.contains("imageStage[chapterIndex] ="))
         assertTrue("宿主上报时刷新注册表", host.contains("TranslationJobRegistry.notifyChanged()"))
+        assertTrue(
+            "收尾/取消要清这一章的进度（否则下一轮会把上一轮的'第 2/3 张'重新发出来）",
+            bodyOf(host, "private fun forgetChapter(").contains("imageStage.remove(chapterIndex)"),
+        )
         // 阅读器前台队列那条通知也要带上
         assertTrue(
             "阅读器通知带图片进度",
