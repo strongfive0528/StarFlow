@@ -3,6 +3,7 @@ package com.moe.starflow.novel.reader
 import android.content.Context
 import android.content.SharedPreferences
 import org.junit.Assert.assertEquals
+import org.junit.Assert.assertFalse
 import org.junit.Assert.assertTrue
 import org.junit.Before
 import org.junit.Test
@@ -268,6 +269,20 @@ class NovelPanelStyleTest {
         assertEquals(NovelQuota.MAX, NovelPanelStyle.aheadBatches(prefs))
         NovelPanelStyle.setAheadBatches(prefs, 0)
         assertEquals(NovelQuota.MIN, NovelPanelStyle.aheadBatches(prefs))
+    }
+
+    /**
+     * **同时翻译图片**：默认**关**（每张图 = 一次 OCR 几秒 + 一次翻译请求），开完要能读回来。
+     *
+     * 用户口径 2026-10：翻译面板要多一个「同时翻译图片」开关，插图当一个段落一起翻。
+     */
+    @Test
+    fun `同时翻译图片默认关且能持久化`() {
+        assertFalse("默认必须是关（OCR 与请求都有代价，得让用户自己开）", NovelPanelStyle.translateImages(prefs))
+        NovelPanelStyle.setTranslateImages(prefs, true)
+        assertTrue(NovelPanelStyle.translateImages(prefs))
+        NovelPanelStyle.setTranslateImages(prefs, false)
+        assertFalse(NovelPanelStyle.translateImages(prefs))
     }
 
     /** 旧键留在盘上也不该被当成批数读进来。 */
