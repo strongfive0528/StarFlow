@@ -344,10 +344,13 @@ class NovelScrollAdapter : RecyclerView.Adapter<NovelScrollAdapter.VH>() {
             )
         }
 
-        /** 聚焦那张图右下角的三颗按钮（与 [imageControlAt] 同一份几何）。 */
+        /** 编辑模式里那张图右下角的按钮条（按"有没有译文"决定显示几颗）。 */
         private fun drawImageControls(canvas: Canvas, right: Float, bottom: Float) {
             val density = resources.displayMetrics.density
-            val items = NovelImageControls.layout(right, bottom, density)
+            val items = NovelImageControls.layout(
+                right, bottom, density,
+                NovelImageControls.buttonsFor(hasTranslation = payload != null),
+            )
             NovelImageControls.drawBackdrop(canvas, items, density)
             for (item in items) {
                 NovelImageControls.drawIcon(canvas, item, imageIconOf(item.button), density)
@@ -357,7 +360,7 @@ class NovelScrollAdapter : RecyclerView.Adapter<NovelScrollAdapter.VH>() {
         /**
          * 插图按钮条的命中测试（坐标相对本条目）。
          *
-         * 走法与 [onDraw] 同一份几何（`fit` + 居中 + `NovelImageControls.layout`），
+         * 走法与 [onDraw] 同一份几何（`fit` + 居中 + 同一份按钮列表），
          * 所以"点到的按钮"与"看到的按钮"必然一致。
          */
         fun imageControlAt(x: Float, y: Float): NovelImageButton? {
@@ -368,6 +371,7 @@ class NovelScrollAdapter : RecyclerView.Adapter<NovelScrollAdapter.VH>() {
             val left = style.paddingPx + (contentWidth - size.width) / 2f
             val items = NovelImageControls.layout(
                 left + size.width, size.height, resources.displayMetrics.density,
+                NovelImageControls.buttonsFor(hasTranslation = payload != null),
             )
             return NovelImageControls.hit(items, x, y)
         }
@@ -375,12 +379,17 @@ class NovelScrollAdapter : RecyclerView.Adapter<NovelScrollAdapter.VH>() {
         /** 按钮图标（白色 tint：按钮底是深色药丸）。 */
         private fun imageIconOf(button: NovelImageButton): android.graphics.drawable.Drawable? {
             val res = when (button) {
+                // 翻译 / 重翻是同一个动作的两个时机：还没翻过用「翻译」图标，翻过了用「刷新」
+                NovelImageButton.TRANSLATE -> if (payload != null) {
+                    R.drawable.ic_refresh
+                } else {
+                    R.drawable.ic_reader_translate
+                }
                 NovelImageButton.TOGGLE -> when (visual) {
                     NovelImageVisual.TRANSLATED -> R.drawable.ic_display_translated
                     NovelImageVisual.ORIGINAL -> R.drawable.ic_display_original
                     NovelImageVisual.PLAIN -> R.drawable.ic_display_plain
                 }
-                NovelImageButton.RETRANSLATE -> R.drawable.ic_refresh
                 NovelImageButton.DELETE -> R.drawable.ic_action_delete
             }
             return context.getDrawable(res)?.mutate()?.apply {

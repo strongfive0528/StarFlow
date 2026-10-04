@@ -919,23 +919,26 @@ class NovelReaderActivity : AppCompatActivity() {
             return
         }
         if (consumeChromeOrMenuTap(x, y, w, h)) return
-        // 聚焦插图上的那排按钮（三态 / 重翻 / 删除）：**优先于九宫格翻页**
-        // （它们画在图上，按九宫格判会变成"翻页"）
+        // 编辑模式里那张图的按钮条：**优先于九宫格翻页**（它们画在图上，
+        // 按九宫格判会变成"翻页"）
         imageControlAt(x, y)?.let { button ->
             val para = focusedImagePara
             if (para != null) {
                 when (button) {
+                    NovelImageButton.TRANSLATE -> translateImageNow(para)
                     NovelImageButton.TOGGLE -> cycleImageVisual(para)
-                    NovelImageButton.RETRANSLATE -> translateImageNow(para)
                     NovelImageButton.DELETE -> deleteImageTranslation(para)
                 }
                 return
             }
         }
-        // 点到别处 = 收起插图操作条（与"点空白退出选择模式"同一个心智）
+        // 点了正在编辑的那张图本身 → 留在编辑模式（用户多半是想点按钮，只是没点准）；
+        // 点别处 → **退出编辑模式**（按钮跟着收掉），并吃掉这一下，免得顺手翻了页
         if (focusedImagePara != null) {
+            val same = paragraphAt(x, y) == focusedImagePara
             focusedImagePara = null
             refreshImageChrome()
+            if (same) return
         }
         when {
             // 连续滚动：点上下半屏 = 上一段 / 下一段
@@ -998,30 +1001,26 @@ class NovelReaderActivity : AppCompatActivity() {
         content?.images?.containsKey(paraIndex) == true
 
     /**
-     * 长按插图：
-     * - 还没翻过 → **立刻翻这一张**（OCR + 翻译 + 画回图上），完成后把操作条亮出来
-     * - 已经翻过 → 只把操作条亮出来（想重翻就点「重新翻译」）
+     * 长按插图：**只进编辑模式**（把按钮亮出来），**不自动开翻**。
      *
-     * ⚠️ 与文本段不同，插图**不进选择模式**：一张图就是一个独立单位，多选没有意义
-     * （用户在需求里也是"长按图片翻译图片内容"）。
+     * 用户口径（2026-10-04 明确纠正）：「长按图片 → 出现翻译按钮，**点击翻译才会 OCR 翻译**」
+     * —— 之前那版长按即开跑，用户还没看清按钮在哪，OCR 与翻译请求就已经发出去了
+     * （几秒 + 一次请求，还可能点错图）。
+     *
+     * ⚠️ 与文本段不同，插图**不进选择模式**：一张图就是一个独立单位，多选没有意义。
      */
     private fun onLongPressImage(paraIndex: Int) {
         exitSelection()
         focusedImagePara = paraIndex
         refreshImageChrome()
-        if (imageTranslations.containsKey(paraIndex)) {
-            // 已有译文：只提示当前态，剩下的交给操作条上的三颗按钮
-            showOverlayToast(getString(visualLabelRes(imageVisualOf(paraIndex))), error = false)
-            return
-        }
-        translateImageNow(paraIndex)
+        showOverlayToast(getString(R.string.novel_image_edit_hint), error = false)
     }
 
     /**
      * 翻（或重翻）**一张插图**：`OCR → 翻译 → 落库 → 上屏`。
      *
-     * ⚠️ 这是**用户对这张图的显式指令**，不受面板「同时翻译图片」开关限制
-     * （那个开关管的是自动/增量/整章批量翻译要不要带上插图）。
+     * ⚠️ 这是**用户对这张图的显式指令**（编辑模式里点「翻译」按钮），不受面板
+     * 「同时翻译图片」开关限制（那个开关管的是自动/增量/整章批量翻译要不要带上插图）。
      */
     private fun translateImageNow(paraIndex: Int) {
         val b = book ?: return
@@ -1250,8 +1249,13 @@ class NovelReaderActivity : AppCompatActivity() {
      * 切章只保留**显式入口**：目录、底部胶囊左右按钮、面板章卡片、通知跳章。
      */
     private fun turnPage(delta: Int) {
-        // 用户点按翻页 = 真的在导航 → 松掉带位锚点
+        // 用户点按翻页 = 真的在导航 → 松掉带位锚点，也**退出插图编辑模式**
+        // （用户口径：「退出编辑模式隐藏相关按钮」；翻页就是离开那张图）
         carryAnchor = null
+        if (focusedImagePara != null) {
+            focusedImagePara = null
+            refreshImageChrome()
+        }
         val pages = content?.pages ?: return
         if (pages.isEmpty()) {
             // ⚠️ 空页表也不许切章（原来这里也是直接 gotoChapter）

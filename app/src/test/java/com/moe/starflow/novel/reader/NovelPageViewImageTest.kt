@@ -109,27 +109,81 @@ class NovelPageViewImageTest {
         val canvasBitmap = Bitmap.createBitmap(600, 900, Bitmap.Config.ARGB_8888)
         view.draw(Canvas(canvasBitmap))
 
-        // 按钮条贴图片右下角 → 用同一份几何算出三态按钮的中心，点它必须命中
+        // 按钮条贴图片右下角 → 用**视图自己那份几何**算出按钮位置，点它必须命中。
+        // ⚠️ 按钮个数跟着"有没有译文"变（用户口径：还没翻过时只有一颗「翻译」），
+        // 所以这里必须用同一个判据构造期望几何 —— 否则就成了"按另一套布局点按钮"。
         val cw = style.contentWidthPx(600)
         val size = NovelImageMetrics.fit(image, cw, style.contentHeightPx(900))!!
         val left = style.paddingPx + (cw - size.width) / 2f
-        val top = page.segments.first { it.paraIndex == 1 }.let { _ ->
-            // 插图是这一页的第一段（分页把它单独成页）→ 正文框顶部
-            style.topPaddingPx
-        }
+        val top = style.topPaddingPx
         val density = ctx.resources.displayMetrics.density
-        val items = NovelImageControls.layout(left + size.width, top + size.height, density)
-        assertEquals(
-            "点三态按钮必须命中三态",
-            NovelImageButton.TOGGLE,
-            view.imageControlAt(items[0].centerX, items[0].centerY),
+        val withPayload = NovelImageControls.layout(
+            left + size.width, top + size.height, density, NovelImageControls.buttonsFor(true),
         )
         assertEquals(
-            "点删除按钮必须命中删除",
+            "有译文时点最左那颗 = 重新翻译",
+            NovelImageButton.TRANSLATE,
+            view.imageControlAt(withPayload[0].centerX, withPayload[0].centerY),
+        )
+        assertEquals(
+            "点中间那颗 = 三态",
+            NovelImageButton.TOGGLE,
+            view.imageControlAt(withPayload[1].centerX, withPayload[1].centerY),
+        )
+        assertEquals(
+            "点最右那颗 = 删除",
             NovelImageButton.DELETE,
-            view.imageControlAt(items[2].centerX, items[2].centerY),
+            view.imageControlAt(withPayload[2].centerX, withPayload[2].centerY),
         )
         assertNull("图片中间不是按钮", view.imageControlAt(left + size.width / 2f, top + size.height / 2f))
+    }
+
+    /**
+     * **还没翻过的图只有一颗「翻译」按钮**（用户口径 2026-10-04：「长按出现翻译按钮，
+     * 点击翻译才会 OCR 翻译」）。
+     *
+     * 那两颗"没什么可做"的按钮（三态 / 删除）不能出现，也不能留下命中区 ——
+     * 点了没反应比没有按钮更让人困惑。
+     */
+    @Test
+    fun `没译文时只有翻译一颗可点`() {
+        val ctx = RuntimeEnvironment.getApplication()
+        val image = NovelImage(pngFile(200, 300), 200, 300)
+        val content = contentWithImage(image, withPayload = false)
+        val page = pageWithImage(content)
+
+        val view = NovelPageView(ctx)
+        view.bind(content, page, style, Color.BLACK)
+        view.setImageState(emptyMap(), focused = 1, translations = emptyMap())
+        view.measure(
+            android.view.View.MeasureSpec.makeMeasureSpec(600, android.view.View.MeasureSpec.EXACTLY),
+            android.view.View.MeasureSpec.makeMeasureSpec(900, android.view.View.MeasureSpec.EXACTLY),
+        )
+        view.layout(0, 0, 600, 900)
+        view.draw(Canvas(Bitmap.createBitmap(600, 900, Bitmap.Config.ARGB_8888)))
+
+        val cw = style.contentWidthPx(600)
+        val size = NovelImageMetrics.fit(image, cw, style.contentHeightPx(900))!!
+        val left = style.paddingPx + (cw - size.width) / 2f
+        val top = style.topPaddingPx
+        val density = ctx.resources.displayMetrics.density
+        val one = NovelImageControls.layout(
+            left + size.width, top + size.height, density, NovelImageControls.buttonsFor(false),
+        )
+        assertEquals(1, one.size)
+        assertEquals(
+            "那颗按钮必须命中「翻译」",
+            NovelImageButton.TRANSLATE,
+            view.imageControlAt(one[0].centerX, one[0].centerY),
+        )
+        // 三颗布局里 TOGGLE 会占的位置（单颗布局里是空白）不该有命中区。
+        // ⚠️ 不能拿 `three[2]`（最右那颗）去断言 —— 单颗按钮也是**贴右边界**的，
+        // 它与三颗布局里的 DELETE 位置完全重合，那里本来就该命中「翻译」。
+        val three = NovelImageControls.layout(
+            left + size.width, top + size.height, density, NovelImageControls.buttonsFor(true),
+        )
+        assertNull("没译文时不该有三态按钮的命中区", view.imageControlAt(three[1].centerX, three[1].centerY))
+        assertNull("没译文时左边那两颗的位置都该是空白", view.imageControlAt(three[0].centerX, three[0].centerY))
     }
 
     /** 没有译文载荷时也能画（原图态），且**不显示**按钮条（没聚焦）。 */

@@ -165,30 +165,45 @@ class NovelPageView(context: Context) : View(context) {
         imageVisuals[paraIndex] ?: NovelImageVisual.TRANSLATED
 
     /**
-     * 插图按钮条的命中测试（**聚焦那张图**右下角的三颗按钮）。
+     * 插图按钮条的命中测试（**只认正在编辑的那张图**）。
      *
-     * 走法与 [onDraw] 同一条（[NovelPageGeometry.walk] + 同一份 `fit`），所以
-     * "手指点到的按钮"与"屏幕上画的那个按钮"按定义一致。
+     * 走法与 [onDraw] 同一条（[NovelPageGeometry.walk] + 同一份 `fit` + 同一个
+     * [controlsOf]），所以"手指点到的按钮"与"屏幕上画的那个按钮"按定义一致。
      */
     fun imageControlAt(x: Float, y: Float): NovelImageButton? {
+        val items = controlsOf() ?: return null
+        return NovelImageControls.hit(items, x, y)
+    }
+
+    /**
+     * **正在编辑的那张图**的按钮条几何（没在编辑 / 那张图不在本页 → null）。
+     *
+     * ⚠️ 画与命中都必须走它：两处各算一遍的话，改一下按钮个数/尺寸就会出现
+     * 「画了三颗、只认一颗」这类只能靠肉眼发现的错位。
+     */
+    internal fun controlsOf(): List<NovelImageControls.Item>? {
         val p = page ?: return null
         val c = content ?: return null
         val focus = focusedImage ?: return null
         ensureLayouts()
         val cw = style.contentWidthPx(width)
-        var hit: NovelImageButton? = null
+        var out: List<NovelImageControls.Item>? = null
         NovelPageGeometry.walk(p.segments, { lineHeights[it] }, style.paragraphSpacingPx, style.topPaddingPx) { seg, top, _ ->
-            if (hit != null || seg.paraIndex != focus) return@walk
+            if (out != null || seg.paraIndex != focus) return@walk
             val image = c.images[seg.paraIndex] ?: return@walk
             val size = NovelImageMetrics.fit(image, cw, style.contentHeightPx(height)) ?: return@walk
             val left = style.paddingPx + (cw - size.width) / 2f
-            val items = NovelImageControls.layout(
-                left + size.width, top + size.height, resources.displayMetrics.density,
-            )
-            hit = NovelImageControls.hit(items, x, y)
+            out = controlsAt(left + size.width, top + size.height, seg.paraIndex)
         }
-        return hit
+        return out
     }
+
+    /** 右下角在 ([right], [bottom]) 的图，其按钮条（按"有没有译文"决定显示几颗）。 */
+    private fun controlsAt(right: Float, bottom: Float, paraIndex: Int): List<NovelImageControls.Item> =
+        NovelImageControls.layout(
+            right, bottom, resources.displayMetrics.density,
+            NovelImageControls.buttonsFor(hasTranslation = imageTranslations.containsKey(paraIndex)),
+        )
 
     /**
      * 把当前文字色灌进**已经排好**的 layout。
@@ -379,27 +394,36 @@ class NovelPageView(context: Context) : View(context) {
         } else {
             NovelImageStore.draw(canvas, image, left, top, size)
         }
-        // 聚焦的那张：右下角三颗按钮（三态 / 重翻 / 删除），与命中测试同一份几何
+        // **编辑模式**里那张图：右下角按钮条（翻译 / 三态 / 删除），与命中测试同一份几何
         if (paraIndex == focusedImage) {
             val density = resources.displayMetrics.density
-            val items = NovelImageControls.layout(left + size.width, top + size.height, density)
+            val items = controlsAt(left + size.width, top + size.height, paraIndex)
             NovelImageControls.drawBackdrop(canvas, items, density)
             for (item in items) {
-                NovelImageControls.drawIcon(canvas, item, imageIconOf(item.button, visual), density)
+                NovelImageControls.drawIcon(canvas, item, imageIconOf(item.button, visual, paraIndex), density)
             }
         }
         canvas.restore()
     }
 
     /** 按钮图标（矢量图，白色 tint：按钮底是深色药丸）。 */
-    private fun imageIconOf(button: NovelImageButton, visual: NovelImageVisual): android.graphics.drawable.Drawable? {
+    private fun imageIconOf(
+        button: NovelImageButton,
+        visual: NovelImageVisual,
+        paraIndex: Int,
+    ): android.graphics.drawable.Drawable? {
         val res = when (button) {
+            // 翻译 / 重翻是同一个动作的两个时机：还没翻过用「翻译」图标，翻过了用「刷新」
+            NovelImageButton.TRANSLATE -> if (imageTranslations.containsKey(paraIndex)) {
+                R.drawable.ic_refresh
+            } else {
+                R.drawable.ic_reader_translate
+            }
             NovelImageButton.TOGGLE -> when (visual) {
                 NovelImageVisual.TRANSLATED -> R.drawable.ic_display_translated
                 NovelImageVisual.ORIGINAL -> R.drawable.ic_display_original
                 NovelImageVisual.PLAIN -> R.drawable.ic_display_plain
             }
-            NovelImageButton.RETRANSLATE -> R.drawable.ic_refresh
             NovelImageButton.DELETE -> R.drawable.ic_action_delete
         }
         return context.getDrawable(res)?.mutate()?.apply {

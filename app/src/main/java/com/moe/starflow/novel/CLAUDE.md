@@ -105,7 +105,7 @@ Robolectric 的文本引擎是**桩**：`Paint.breakText` 不按宽度换行、�
 | 翻译 | `TranslateUtils.translateBubbles` | 漫画那套编号批量 + prefill + 空译文回退原文 + 取消看门狗；本地引擎（NLLB/LlamaCpp）外面套 `LocalTranslationCoordinator.mutex`（判据 `isLocalHeavyEngine()`） |
 | 载荷 | `NovelImageTranslation` + `NovelImagePayloadCodec` | 一个块 = 矩形 + OCR 原文 + 译文 + 竖排 + 字号；存 `novel_paragraph_translation.imagePayload`（JSON）。**同一行的 `translatedText` 存拼接译文**（导出/进度/「已翻」判据直接复用），所以图片段在库里就是一条普通成功行 |
 | 渲染 | `NovelImageOverlay` | 三态 = 译文（`useOriginalText=false`）/ 识别原文（`true`）/ 纯图（**不调** `renderOverlay`）；按 `(图片路径, 态, 载荷 hashCode, 目标宽)` 缓存；`renderScale=1f`（会进 LRU）。"原文"是**把 OCR 原文画回原位**，不是裸原图 |
-| 交互 | `NovelImageControls` + `NovelPageView`/`NovelScrollAdapter` | 长按图片 → 立即翻（已翻过则只亮操作条）；图上右下角三颗按钮（三态 / 重翻 / 删除），**几何与命中同源**（各算一套就是"看着有按钮点不动"） |
+| 交互 | `NovelImageControls` + `NovelPageView`/`NovelScrollAdapter` | **长按只进"编辑模式"**（按钮亮出来，**不自动开翻**）→ 点右下角「翻译」按钮才 OCR+翻译；按钮**画在图上**（贴图片绘制矩形右下角内侧），**画与命中同源**（`controlsOf()` 一份几何） |
 
 **硬约束与踩过的坑**：
 
@@ -124,6 +124,22 @@ Robolectric 的文本引擎是**桩**：`Paint.breakText` 不按宽度换行、�
   补齐，后面整章翻译再也不补分母 → 章行显示「已翻 1/1」却还有几十段没翻。
 - **三态与聚焦是会话级内存态**（不落库，与漫画"翻页重置为译文"同一取舍）：落库会让下次打开仍停在
   上次随手切的"原图"上，用户以为译文丢了。
+- ⚠️ **长按只进「编辑模式」，不自动开翻**（用户口径 2026-10-04 明确纠正：「长按出现翻译按钮，
+  点击翻译才会 OCR 翻译」）：长按只把按钮亮出来 + 一句提示 `novel_image_edit_hint`，
+  **点那颗「翻译」按钮**才真的 OCR+翻译。之前那版长按即开跑，用户还没看清按钮，几秒的 OCR 与一次
+  翻译请求就已经发出去了。
+- ⚠️ **按钮个数跟着"有没有译文"变**（`NovelImageControls.buttonsFor`）：
+  没译文 → **只有一颗「翻译」**；有译文 → `[重翻][三态][删除]`。
+  **翻译与重翻合成一颗按钮**（图标随状态换：翻译用 `ic_reader_translate`、重翻用 `ic_refresh`）——
+  拆成两颗会让第一次进编辑模式的人点到一颗"点了什么都不会发生"的按钮。
+  删除永远在最右（离前两颗远一点，少误触）。
+- ⚠️ **退出编辑模式的入口有三个**（都要真的把按钮收掉，不然会在图上留一排幽灵按钮）：
+  点图上**别的位置**（点这张图本身留在编辑模式，方便用户补点按钮）、**翻页**（`turnPage`）、
+  换章（`loadChapter` 里清 `focusedImagePara`）。⚠️ 点空白那一支会**吃掉这一下点击**，
+  否则退出编辑模式的顺手一点就变成翻页了。
+- ⚠️ **按钮尺寸 26dp、底色 alpha 0x99**（用户口径「小一点、加点透明」；原 34dp / 0xCC）。
+  改尺寸只改 `NovelImageControls` 的常量与 `drawIcon` 的内边距 —— **画与命中都读同一份**，
+  不许在视图里再写一遍数字。
 - **面板开关在折叠组之外、常显**（用户点名要的开关，藏进默认折叠的「批次处理」里等于没做）；
   默认**关**（每张图 = 一次 OCR 几秒 + 一次翻译请求）。
 - **长按单张图不受开关限制**（那是用户对这张图的显式指令）；开关只管自动/增量/整章/手动一批

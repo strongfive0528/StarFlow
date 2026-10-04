@@ -1680,6 +1680,7 @@
     <string name="novel_translate_images">Translate images too</string>
     <string name="novel_translate_images_hint">Treat each illustration in the book as one paragraph: OCR the text in it, translate it, then draw the translation back onto the image. Off by default — each image costs one OCR (a few seconds) plus one translation request. Long-pressing a single image translates it regardless of this switch.</string>
     <string name="novel_image_translating">Translating image…</string>
+    <string name="novel_image_edit_hint">Image selected — use the buttons at its bottom-right: translate / switch view / delete</string>
     <string name="novel_image_translated">Image translated (%1$d blocks)</string>
     <string name="novel_image_failed">Image translation failed: %1$s</string>
     <string name="novel_image_no_text">No text found in this image</string>
