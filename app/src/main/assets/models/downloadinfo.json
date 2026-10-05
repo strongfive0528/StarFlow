@@ -572,6 +572,52 @@
           "checksum": "620ebe3363900ed67354aef10b725ba4"
         }
       ]
+    },
+    {
+      "model_key": "SR_REALCUGAN_NOSE_2X",
+      "browser_url": "https://github.com/HaoweiLi97/mihon_img_upscale",
+      "family": "realcugan",
+      "scale": 2,
+      "noise": 0,
+      "prepad": 18,
+      "fp16Arithmetic": true,
+      "files": [
+        {
+          "file_name": "up2x_nose_no_denoise.param",
+          "download_url": "https://raw.githubusercontent.com/HaoweiLi97/mihon_img_upscale/master/app/src/main/assets/waifu2x-models-nose/up2x-no-denoise.param",
+          "file_size": 3309,
+          "checksum": "94fe05f0d88558dff402168c6c33f864"
+        },
+        {
+          "file_name": "up2x_nose_no_denoise.bin",
+          "download_url": "https://raw.githubusercontent.com/HaoweiLi97/mihon_img_upscale/master/app/src/main/assets/waifu2x-models-nose/up2x-no-denoise.bin",
+          "file_size": 2551408,
+          "checksum": "a0a02d39c5990e967b7766f256157516"
+        }
+      ]
+    },
+    {
+      "model_key": "SR_REALESRGAN_V3_ANIME_X2",
+      "browser_url": "https://github.com/xinntao/Real-ESRGAN",
+      "family": "realesrgan",
+      "scale": 2,
+      "noise": 0,
+      "prepad": 10,
+      "fp16Arithmetic": true,
+      "files": [
+        {
+          "file_name": "esrgan_v3_anime_x2.param",
+          "download_url": "https://raw.githubusercontent.com/HaoweiLi97/mihon_img_upscale/master/app/src/main/assets/realesrgan-models/v3-anime/x2.param",
+          "file_size": 3173,
+          "checksum": "b80b641cfe03afdea5c5ad3119388eb8"
+        },
+        {
+          "file_name": "esrgan_v3_anime_x2.bin",
+          "download_url": "https://raw.githubusercontent.com/HaoweiLi97/mihon_img_upscale/master/app/src/main/assets/realesrgan-models/v3-anime/x2.bin",
+          "file_size": 1247368,
+          "checksum": "3d0f8e0531ae348443b91268342b2f41"
+        }
+      ]
     }
   ]
 }

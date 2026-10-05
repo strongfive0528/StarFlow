@@ -101,6 +101,10 @@ enum class ModelKey(val stableId: Int) {
     SR_REALCUGAN_PRO_CONSERVATIVE(3071),
     /** Pro · 降噪 3x */
     SR_REALCUGAN_PRO_DENOISE3X(3076),
+    /** Real-CUGAN **Nose** · 不降噪（参照项目 mihon_img_upscale 的模型档之一） */
+    SR_REALCUGAN_NOSE_2X(3077),
+    /** Real-ESRGAN **animevideov3** · 2x（参照项目同款；x2/x3/x4 共用同一份权重，只有 param 不同） */
+    SR_REALESRGAN_V3_ANIME_X2(3078),
 
     /** 4 倍放大 */
     SR_REALESRGAN_ANIME6B(3080);

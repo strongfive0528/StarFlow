@@ -179,6 +179,8 @@ class ModelManagementFragment : Fragment() {
             // Real-CUGAN Pro：同族、只换权重（PC 实测优于 SE；见 ModelKey 注释）
             SrRow(ModelKey.SR_REALCUGAN_PRO_NODENOISE, R.id.sr_cugan_pro_dn_row, R.id.sr_cugan_pro_dn_radio, R.id.sr_cugan_pro_dn_title),
             SrRow(ModelKey.SR_REALCUGAN_PRO_CONSERVATIVE, R.id.sr_cugan_pro_cons_row, R.id.sr_cugan_pro_cons_radio, R.id.sr_cugan_pro_cons_title),
+        SrRow(ModelKey.SR_REALCUGAN_NOSE_2X, R.id.sr_cugan_nose_row, R.id.sr_cugan_nose_radio, R.id.sr_cugan_nose_title),
+        SrRow(ModelKey.SR_REALESRGAN_V3_ANIME_X2, R.id.sr_rsrgan_v3_x2_row, R.id.sr_rsrgan_v3_x2_radio, R.id.sr_rsrgan_v3_x2_title),
             SrRow(ModelKey.SR_REALCUGAN_PRO_DENOISE3X, R.id.sr_cugan_pro_d3_row, R.id.sr_cugan_pro_d3_radio, R.id.sr_cugan_pro_d3_title),
         )),
         SrFamily(R.id.sr_rsrgan_group_title, R.id.sr_rsrgan_group_selected, listOf(
@@ -205,6 +207,8 @@ class ModelManagementFragment : Fragment() {
         ModelKey.SR_REALCUGAN_DENOISE3X -> "~2.5MB"
         ModelKey.SR_REALCUGAN_PRO_NODENOISE -> "~2.5MB"
         ModelKey.SR_REALCUGAN_PRO_CONSERVATIVE -> "~2.5MB"
+        ModelKey.SR_REALCUGAN_NOSE_2X -> "~2.4MB"
+        ModelKey.SR_REALESRGAN_V3_ANIME_X2 -> "~1.2MB"
         ModelKey.SR_REALCUGAN_PRO_DENOISE3X -> "~2.5MB"
         ModelKey.SR_REALESRGAN_ANIME6B -> "~17.1MB"
         else -> ""
