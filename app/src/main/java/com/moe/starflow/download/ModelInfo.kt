@@ -31,7 +31,13 @@ data class ModelInfo(
      * 与 TachiyomiX 模型包同名字段同语义：只开 `use_fp16_storage` 省的是显存，
      * **真正影响速度的是算术精度**。设备不支持 FP16 算术时原生侧自动退回 FP32。
      */
-    val srFp16Arithmetic: Boolean = true
+    val srFp16Arithmetic: Boolean = true,
+    /** 通用家族（`family="generic"`）的输入 blob 名；空 = 引擎默认 Input1 */
+    val srBlobIn: String = "",
+    /** 通用家族的输出 blob 名；空 = 引擎默认 Eltwise4 */
+    val srBlobOut: String = "",
+    /** 通用家族的输入是否 BGR（SPAN/W2xEX 需要；waifu2x 家族不需要） */
+    val srBgr: Boolean = false
 )
 
 /**

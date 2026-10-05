@@ -244,6 +244,8 @@ object SuperResolutionEngines {
             "srmd" -> SrNcnnNative.FAMILY_SRMD
             "realcugan" -> SrNcnnNative.FAMILY_REALCUGAN
             "realesrgan" -> SrNcnnNative.FAMILY_REALESRGAN
+            // 通用家族：blob 名与通道序从清单读（SPAN / sudo / W2xEX / AnimeJaNai…）
+            "generic" -> SrNcnnNative.FAMILY_GENERIC
             else -> {
                 LogCollector.e(TAG, "未知的 ncnn 引擎族: $family ($key)")
                 return null
@@ -265,6 +267,9 @@ object SuperResolutionEngines {
             // ⚠️ 两处开关必须**同时**允许才用 FP16 算术：清单（逐模型，默认 true）&& 用户选项（默认 false，
             //    对齐 mihon_img_upscale 的 `pref_realcugan_fp16_arithmetic` 默认值）。
             fp16Arithmetic = info.srFp16Arithmetic && options.fp16Arithmetic,
+            inputBlob = info.srBlobIn,
+            outputBlob = info.srBlobOut,
+            bgr = info.srBgr,
         )
         if (!engine.initialize()) {
             LogCollector.e(TAG, "ncnn 超分引擎初始化失败: $key")

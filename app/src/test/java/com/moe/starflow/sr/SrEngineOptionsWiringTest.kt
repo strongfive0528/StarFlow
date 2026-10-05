@@ -29,7 +29,8 @@ class SrEngineOptionsWiringTest {
         val src = jni ?: return
         assertTrue(
             "create() 必须收下 fp16Arithmetic（不然上层开关到不了引擎）",
-            src.contains("jint numThreads, jboolean fp16Arithmetic)"),
+            src.contains("jint numThreads, jboolean fp16Arithmetic,") &&
+                src.contains("jstring inputBlob, jstring outputBlob, jboolean bgr)"),
         )
         // 每个 family 都必须「先赋值、再 load」：ncnn 的 opt 在 load() 里固化，顺序反了就静默无效
         for (family in listOf("Waifu2x", "SRMD", "RealCUGAN", "RealESRGAN")) {

@@ -45,6 +45,10 @@ class NcnnSrEngine(
      * ⚠️ 只在 **建实例**时生效（ncnn 的 opt 在 load 时固化），切档/改选项要重建实例。
      */
     private val fp16Arithmetic: Boolean = false,
+    /** 通用家族（family=generic）的 blob 名/通道序；其余家族留空即可 */
+    private val inputBlob: String = "",
+    private val outputBlob: String = "",
+    private val bgr: Boolean = false,
 ) : SuperResolutionEngine {
 
     /**
@@ -88,7 +92,7 @@ class NcnnSrEngine(
         return try {
             val h = SrNcnnNative.create(
                 family, paramFile.absolutePath, binFile.absolutePath, GPU_ID, srThreads(),
-                fp16Arithmetic
+                fp16Arithmetic, inputBlob, outputBlob, bgr
             )
             if (h == 0L) {
                 LogCollector.e(TAG, "原生引擎创建失败: ${paramFile.name} (family=$family)")

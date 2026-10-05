@@ -61,6 +61,8 @@ constexpr int kFamilyWaifu2x = 0;
 constexpr int kFamilySrmd = 1;
 constexpr int kFamilyRealCugan = 2;
 constexpr int kFamilyRealEsrgan = 3;
+/** 通用 ncnn 模型（SPAN / sudo / W2xEX / AnimeJaNai…）：blob 名与通道序逐模型来自清单 */
+constexpr int kFamilyGeneric = 4;
 
 /**
  * 输出字节数上限。Kotlin 侧已按 10MP 卡过一次（约 30MB），这里再设一道宽松的硬顶：
@@ -74,7 +76,8 @@ constexpr jlong kMaxOutBytes = 256LL << 20;   // 256MB
  * `vkdev->acquire_blob_allocator()` 无判空；realesrgan.cpp:191 `net.vulkan_device()->…` 同理。
  */
 bool familyHasCpuPath(int family) {
-    return family == kFamilyWaifu2x || family == kFamilyRealCugan;
+    // generic 走的就是 Waifu2x 引擎（它有 CPU 路径）
+    return family == kFamilyWaifu2x || family == kFamilyRealCugan || family == kFamilyGeneric;
 }
 
 /** 一个引擎实例。family 决定用哪个成员。 */
@@ -242,7 +245,8 @@ extern "C" {
 JNIEXPORT jlong JNICALL
 Java_com_moe_starflow_sr_ncnn_SrNcnnNative_create(
         JNIEnv* env, jclass, jint family, jstring paramPath, jstring binPath,
-        jint gpuId, jint numThreads, jboolean fp16Arithmetic) {
+        jint gpuId, jint numThreads, jboolean fp16Arithmetic,
+        jstring inputBlob, jstring outputBlob, jboolean bgr) {
     ensureGpu();
     const std::string param = jstr(env, paramPath);
     const std::string bin = jstr(env, binPath);
@@ -265,6 +269,10 @@ Java_com_moe_starflow_sr_ncnn_SrNcnnNative_create(
         gpuid = -1;
     }
 
+    // 通用入口的 blob 名/通道序：空串 = 用 Waifu2x 的默认（Input1/Eltwise4）
+    const std::string inBlob = jstr(env, inputBlob);
+    const std::string outBlob = jstr(env, outputBlob);
+
     auto* h = new SrHandle();
     h->family = family;
 
@@ -276,8 +284,13 @@ Java_com_moe_starflow_sr_ncnn_SrNcnnNative_create(
     }
 
     switch (family) {
-        case kFamilyWaifu2x: {
+        case kFamilyWaifu2x:
+        case kFamilyGeneric: {
             auto* e = new Waifu2x(gpuid, /*tta*/ false, numThreads);
+            // 通用模型（family=4）用清单给的 blob 名与通道序；waifu2x 家族留空 = 保持默认
+            if (!inBlob.empty()) e->input_blob = inBlob;
+            if (!outBlob.empty()) e->output_blob = outBlob;
+            e->bgr = bgr != 0;
             e->fp16_arithmetic = fp16Arithmetic != 0;   // ⚠️ 必须在 load() 之前（opt 在 load 时固化）
             e->load(param, bin);
             h->w2x = e;
@@ -390,6 +403,7 @@ Java_com_moe_starflow_sr_ncnn_SrNcnnNative_process(
     int rc = -1;
     switch (h->family) {
         case kFamilyWaifu2x:
+        case kFamilyGeneric:
             h->w2x->noise = noise;
             h->w2x->scale = scale;
             h->w2x->tilesize = tileSize;

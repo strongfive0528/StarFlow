@@ -40,6 +40,13 @@ object SrNcnnNative {
     /** Real-ESRGAN 家族（x4plus / anime 6B 等），noise 忽略 */
     const val FAMILY_REALESRGAN = 3
 
+    /**
+     * **通用 ncnn 家族**（参照项目的做法）：SPAN NomosUni / sudo UltraCompact / W2xEX / AnimeJaNai 等
+     * 形状是「pad → net → crop」的模型都能跑，blob 名与通道序逐模型来自 `downloadinfo.json`。
+     * 复用 Waifu2x 引擎，因此**有 CPU 路径**（无 Vulkan 时回退而不是判不可用）。
+     */
+    const val FAMILY_GENERIC = 4
+
     init {
         System.loadLibrary("starflow_sr")
     }
@@ -65,7 +72,13 @@ object SrNcnnNative {
         binPath: String,
         gpuId: Int,
         numThreads: Int,
-        fp16Arithmetic: Boolean
+        fp16Arithmetic: Boolean,
+        /** 通用家族（[FAMILY_GENERIC]）的输入 blob 名；空串 = 用引擎默认（Input1） */
+        inputBlob: String = "",
+        /** 通用家族的输出 blob 名；空串 = 用引擎默认（Eltwise4） */
+        outputBlob: String = "",
+        /** 通用家族的输入是否 BGR（默认 false；参照项目里 SPAN/W2xEX 需要 BGR） */
+        bgr: Boolean = false,
     ): Long
 
     /**
