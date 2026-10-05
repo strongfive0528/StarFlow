@@ -109,6 +109,12 @@ enum class ModelKey(val stableId: Int) {
     SR_SPAN_UNI_2X(3079),
     /** sudo UltraCompact · 2x（通用 ncnn：input → output，RGB） */
     SR_SUDO_UC_2X(3080),
+    /** W2xEX Universal-Fast-W2xEX · 2x（通用 ncnn：data → output，BGR） */
+    SR_W2XEX_UNIVERSAL_FAST_2X(3081),
+    /** W2xEX Omni-MiniV2-W2xEX · 2x（通用 ncnn：data → output，BGR） */
+    SR_W2XEX_OMNI_MINI_V2_2X(3082),
+    /** W2xEX Photo-Small-W2xEX · 2x（通用 ncnn：data → output，BGR） */
+    SR_W2XEX_PHOTO_SMALL_2X(3083),
 
     /** 4 倍放大 */
     SR_REALESRGAN_ANIME6B(3080);

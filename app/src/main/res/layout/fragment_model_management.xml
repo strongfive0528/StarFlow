@@ -1494,6 +1494,120 @@
                       <include
                           layout="@layout/item_model_row_browser"/>
                   </LinearLayout>
+                  <View
+                      android:layout_width="match_parent"
+                      android:layout_height="1dp"
+                      android:background="#1A000000"/>
+
+                  <LinearLayout
+                      android:id="@+id/sr_w2xex_uf_row"
+                      android:layout_width="match_parent"
+                      android:layout_height="wrap_content"
+                      android:orientation="vertical"
+                      android:clickable="true">
+
+                      <LinearLayout
+                          android:layout_width="match_parent"
+                          android:layout_height="wrap_content"
+                          android:orientation="horizontal"
+                          android:gravity="center_vertical">
+
+                          <TextView
+                              android:id="@+id/sr_w2xex_uf_title"
+                                  android:layout_width="0dp"
+                                  android:layout_height="wrap_content"
+                                  android:layout_weight="1"
+                                  android:text="@string/sr_model_sr_w2xex_universal_fast_2x"
+                                  android:textSize="14sp"
+                                  android:textStyle="bold"/>
+
+                          <RadioButton
+                              android:id="@+id/sr_w2xex_uf_radio"
+                              android:layout_width="wrap_content"
+                              android:layout_height="wrap_content"
+                              android:clickable="false"
+                              android:focusable="false"/>
+                      </LinearLayout>
+
+                      <include
+                          layout="@layout/item_model_row_browser"/>
+                  </LinearLayout>
+                  <View
+                      android:layout_width="match_parent"
+                      android:layout_height="1dp"
+                      android:background="#1A000000"/>
+
+                  <LinearLayout
+                      android:id="@+id/sr_w2xex_omni_row"
+                      android:layout_width="match_parent"
+                      android:layout_height="wrap_content"
+                      android:orientation="vertical"
+                      android:clickable="true">
+
+                      <LinearLayout
+                          android:layout_width="match_parent"
+                          android:layout_height="wrap_content"
+                          android:orientation="horizontal"
+                          android:gravity="center_vertical">
+
+                          <TextView
+                              android:id="@+id/sr_w2xex_omni_title"
+                                  android:layout_width="0dp"
+                                  android:layout_height="wrap_content"
+                                  android:layout_weight="1"
+                                  android:text="@string/sr_model_sr_w2xex_omni_mini_v2_2x"
+                                  android:textSize="14sp"
+                                  android:textStyle="bold"/>
+
+                          <RadioButton
+                              android:id="@+id/sr_w2xex_omni_radio"
+                              android:layout_width="wrap_content"
+                              android:layout_height="wrap_content"
+                              android:clickable="false"
+                              android:focusable="false"/>
+                      </LinearLayout>
+
+                      <include
+                          layout="@layout/item_model_row_browser"/>
+                  </LinearLayout>
+                  <View
+                      android:layout_width="match_parent"
+                      android:layout_height="1dp"
+                      android:background="#1A000000"/>
+
+                  <LinearLayout
+                      android:id="@+id/sr_w2xex_photo_row"
+                      android:layout_width="match_parent"
+                      android:layout_height="wrap_content"
+                      android:orientation="vertical"
+                      android:clickable="true">
+
+                      <LinearLayout
+                          android:layout_width="match_parent"
+                          android:layout_height="wrap_content"
+                          android:orientation="horizontal"
+                          android:gravity="center_vertical">
+
+                          <TextView
+                              android:id="@+id/sr_w2xex_photo_title"
+                                  android:layout_width="0dp"
+                                  android:layout_height="wrap_content"
+                                  android:layout_weight="1"
+                                  android:text="@string/sr_model_sr_w2xex_photo_small_2x"
+                                  android:textSize="14sp"
+                                  android:textStyle="bold"/>
+
+                          <RadioButton
+                              android:id="@+id/sr_w2xex_photo_radio"
+                              android:layout_width="wrap_content"
+                              android:layout_height="wrap_content"
+                              android:clickable="false"
+                              android:focusable="false"/>
+                      </LinearLayout>
+
+                      <include
+                          layout="@layout/item_model_row_browser"/>
+                  </LinearLayout>
 
                   <View
                       android:layout_width="match_parent"

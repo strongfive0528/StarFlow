@@ -179,6 +179,7 @@ class SrReaderWiringTest {
             "sr_cugan_cons", "sr_cugan_d3", "sr_cugan_pro_dn", "sr_cugan_pro_cons",
         "sr_cugan_nose", "sr_rsrgan_v3_x2",
         "sr_span_uni", "sr_sudo_uc",
+        "sr_w2xex_uf", "sr_w2xex_omni", "sr_w2xex_photo",
             "sr_cugan_pro_d3", "sr_rsrgan_a6b"
         )) {
             val wrapper = layout.indexOf("android:id=\"@+id/${base}_row\"")

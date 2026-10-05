@@ -310,6 +310,7 @@ class ModelManagementLayoutTest {
             "sr_cugan_cons", "sr_cugan_d3", "sr_cugan_pro_dn", "sr_cugan_pro_cons",
         "sr_cugan_nose", "sr_rsrgan_v3_x2",
         "sr_span_uni", "sr_sudo_uc",
+        "sr_w2xex_uf", "sr_w2xex_omni", "sr_w2xex_photo",
             "sr_cugan_pro_d3", "sr_rsrgan_a6b"
         )) {
             assertTrue("$base 缺标题 id（置灰要用）", layout.contains("android:id=\"@+id/${base}_title\""))
@@ -347,6 +348,9 @@ class ModelManagementLayoutTest {
         R.id.sr_rsrgan_v3_x2_row,
         R.id.sr_span_uni_row,
         R.id.sr_sudo_uc_row,
+        R.id.sr_w2xex_uf_row,
+        R.id.sr_w2xex_omni_row,
+        R.id.sr_w2xex_photo_row,
         R.id.sr_cugan_pro_d3_row,
         // Real-ESRGAN 1 档（4x）
         R.id.sr_rsrgan_a6b_row,

@@ -650,6 +650,9 @@
     <string name="sr_model_cugan_dn">Real-CUGAN SE · 2x 不降噪</string>
     <string name="sr_model_span_uni_2x">SPAN NomosUni Photo 2x</string>
     <string name="sr_model_sudo_uc_2x">sudo UltraCompact 2x</string>
+    <string name="sr_model_sr_w2xex_universal_fast_2x">Universal-Fast-W2xEX</string>
+    <string name="sr_model_sr_w2xex_omni_mini_v2_2x">Omni-MiniV2-W2xEX</string>
+    <string name="sr_model_sr_w2xex_photo_small_2x">Photo-Small-W2xEX</string>
     <string name="sr_model_cugan_nose_2x">Real-CUGAN Nose 2x · 不降噪</string>
     <string name="sr_model_esrgan_v3_anime_x2">Real-ESRGAN animevideov3 2x</string>
     <string name="sr_model_cugan_pro_cons">Real-CUGAN Pro · 2x 保守</string>

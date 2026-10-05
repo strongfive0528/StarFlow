@@ -670,6 +670,84 @@
           "checksum": "2939b2354685e9411090849bb6c19e3d"
         }
       ]
+    },
+    {
+      "model_key": "SR_W2XEX_UNIVERSAL_FAST_2X",
+      "browser_url": "https://huggingface.co/randomblock1/W2xEX-ESRGAN",
+      "family": "generic",
+      "scale": 2,
+      "noise": 0,
+      "prepad": 16,
+      "fp16Arithmetic": true,
+      "blobIn": "data",
+      "blobOut": "output",
+      "bgr": true,
+      "files": [
+        {
+          "file_name": "w2xex_universal_fast_x2.param",
+          "download_url": "https://huggingface.co/randomblock1/W2xEX-ESRGAN/resolve/main/Universal-Fast-W2xEX.param",
+          "file_size": 3886,
+          "checksum": "153849f1db108984b48b0a94f7e9bbf8"
+        },
+        {
+          "file_name": "w2xex_universal_fast_x2.bin",
+          "download_url": "https://huggingface.co/randomblock1/W2xEX-ESRGAN/resolve/main/Universal-Fast-W2xEX.bin",
+          "file_size": 2402680,
+          "checksum": "2084461a6f4042aad4501933640fdad5"
+        }
+      ]
+    },
+    {
+      "model_key": "SR_W2XEX_OMNI_MINI_V2_2X",
+      "browser_url": "https://huggingface.co/randomblock1/W2xEX-ESRGAN",
+      "family": "generic",
+      "scale": 2,
+      "noise": 0,
+      "prepad": 16,
+      "fp16Arithmetic": true,
+      "blobIn": "data",
+      "blobOut": "output",
+      "bgr": true,
+      "files": [
+        {
+          "file_name": "w2xex_omni_mini_v2_x2.param",
+          "download_url": "https://huggingface.co/randomblock1/W2xEX-ESRGAN/resolve/main/Omni-MiniV2-W2xEX.param",
+          "file_size": 1689,
+          "checksum": "2841ac544616417f27a27c3288452531"
+        },
+        {
+          "file_name": "w2xex_omni_mini_v2_x2.bin",
+          "download_url": "https://huggingface.co/randomblock1/W2xEX-ESRGAN/resolve/main/Omni-MiniV2-W2xEX.bin",
+          "file_size": 180664,
+          "checksum": "f2837bd9b27208a5cf0007ba8ca2fbe3"
+        }
+      ]
+    },
+    {
+      "model_key": "SR_W2XEX_PHOTO_SMALL_2X",
+      "browser_url": "https://huggingface.co/randomblock1/W2xEX-ESRGAN",
+      "family": "generic",
+      "scale": 2,
+      "noise": 0,
+      "prepad": 16,
+      "fp16Arithmetic": true,
+      "blobIn": "data",
+      "blobOut": "output",
+      "bgr": true,
+      "files": [
+        {
+          "file_name": "w2xex_photo_small_x2.param",
+          "download_url": "https://huggingface.co/randomblock1/W2xEX-ESRGAN/resolve/main/Photo-Small-W2xEX.param",
+          "file_size": 3886,
+          "checksum": "153849f1db108984b48b0a94f7e9bbf8"
+        },
+        {
+          "file_name": "w2xex_photo_small_x2.bin",
+          "download_url": "https://huggingface.co/randomblock1/W2xEX-ESRGAN/resolve/main/Photo-Small-W2xEX.bin",
+          "file_size": 2402680,
+          "checksum": "e458f0849741b30c1975d32a49cb8a0d"
+        }
+      ]
     }
   ]
 }
