@@ -40,8 +40,10 @@ import com.moe.starflow.translate.TranslationTextAPI
 import com.moe.starflow.translate.isLocalHeavyEngine
 import com.moe.starflow.sr.SrBaseKind
 import com.moe.starflow.sr.SrDisplayBase
+import com.moe.starflow.sr.SrEnhanceQueue
 import com.moe.starflow.sr.SrFailReason
 import com.moe.starflow.sr.SrModelManager
+import com.moe.starflow.sr.SrOptions
 import com.moe.starflow.sr.SrOutcome
 import com.moe.starflow.sr.SrProcessor
 import com.moe.starflow.sr.SrSettings
@@ -247,6 +249,25 @@ class ReaderTranslationController(
     /** 超分逐页记录（面板的「超分记录」列表用它）。与 [rows] 平行、互不覆盖。 */
     private val srDao = db.importedPageSrDao()
     private val srRows = MutableStateFlow<Map<Int, ImportedPageSr>>(emptyMap())
+
+    /**
+     * **超分调度队列** —— 复刻 `HaoweiLi97/mihon_img_upscale` 的 `ImageEnhancer`：
+     * 当前页优先 → 距当前页近 → 先入先出；翻页只改锚点、不重建队列；退出/换书整体作废。
+     *
+     * 真正干活的是既有私有入口 [enhancePage]（它已经覆盖：总开关 / 跳过阈值 / `OcrLock` 让路 OCR /
+     * 原图加载 / 推理 / 落盘 / 写记录），成功后调 [onBaseChanged] 让**正在屏上的那一页就地重绑**
+     * —— 这就是他们的"渐进替换"（先原图，超分完无缝换）。
+     */
+    private val srQueue: SrEnhanceQueue by lazy {
+        // ⚠️ 必须用**具名参数**：构造参数最后一个是 `autoStart`，尾随 lambda 会绑到它上面
+        SrEnhanceQueue(
+            scope = scope,
+            runPage = { page ->
+                val outcome = enhancePage(page)
+                if (outcome.ok) onBaseChanged(page)
+            },
+        )
+    }
 
     private val appPrefs get() = PreferenceManager.getDefaultSharedPreferences(context)
     private val customPrefs get() = CustomPreference.getInstance(context)
@@ -1187,6 +1208,8 @@ class ReaderTranslationController(
      */
     fun onReaderClosed() {
         cancelEverything()
+        // 超分调度队列也要停：它的预加载会在后台继续解码+推理，退出阅读器后没人需要它
+        srQueue.cancelAll()
         // ⚠️ **超分本章必须停下来**（与章节翻译刻意不同）：章节翻译有前台服务 + 通知栏，
         //    关掉阅读器用户仍能看进度、能暂停取消；超分本章**没有通知栏入口**，而它的
         //    「正在超分第 N 页…」是**系统级浮层窗口** —— 跟着跑到后台就会把芯片贴到别的应用上，
@@ -1202,6 +1225,7 @@ class ReaderTranslationController(
     fun shutdownAll() {
         closed = true
         cancelEverything()
+        srQueue.cancelAll()
         cancelSrChapterJob()
         chapterRunner.shutdown()
         translateMode.value = MODE_MANUAL
@@ -1243,6 +1267,35 @@ class ReaderTranslationController(
     fun onCurrentPageChanged() {
         if (translateMode.value != MODE_MANUAL && queueJob?.isActive != true) {
             restartQueue()
+        }
+        scheduleSrAroundCurrentPage()
+    }
+
+    /**
+     * 按参照项目的路径喂超分队列：**当前页高优先 + 预加载当前页 ± `SrOptions.preloadPages`**。
+     *
+     * - 只在「阅读器超分开关」开着时排（手动按钮、章节批量各有自己的入口与提示，不受影响）
+     * - 跳过**已经按当前模型超分过**的页（`srAlreadyCurrent`，与手动/章节路径同一判据）
+     * - 预加载不越过书的首页/末页
+     *
+     * ⚠️ 不在这里判 `OcrLock`：让路逻辑在 [SrProcessor] 里（超分等锁时若 `hasOcrDemand()` 就排队等），
+     *    这里只是"把活儿排好顺序"，不能因为当时 OCR 忙就把预加载整个丢掉。
+     */
+    private fun scheduleSrAroundCurrentPage() {
+        if (!SrSettings.isEnabledForReader(appPrefs)) return
+        val total = pageCount()
+        if (total <= 0) return
+        val cur = currentPageProvider().coerceIn(0, total - 1)
+        srQueue.setTarget(cur)
+        if (!srAlreadyCurrent(cur)) srQueue.enqueue(cur, highPriority = true)
+        val radius = SrOptions.from(appPrefs).preloadPages
+        if (radius > 0) {
+            for (d in 1..radius) {
+                val next = cur + d
+                val prev = cur - d
+                if (next in 0 until total && !srAlreadyCurrent(next)) srQueue.enqueue(next)
+                if (prev in 0 until total && !srAlreadyCurrent(prev)) srQueue.enqueue(prev)
+            }
         }
     }
 

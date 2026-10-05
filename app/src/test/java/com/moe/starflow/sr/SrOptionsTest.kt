@@ -53,6 +53,7 @@ class SrOptionsTest {
         assertFalse("fp16 算术默认 **关**（他们的 pref_realcugan_fp16_arithmetic 默认 false）", o.fp16Arithmetic)
         assertEquals("跳过阈值默认 0 = 不跳过", 0, o.skipMaxWidth)
         assertEquals("跳过阈值默认 0 = 不跳过", 0, o.skipMaxHeight)
+        assertEquals("预加载页数默认 3（他们的 realCuganPreloadSize）", 3, o.preloadPages)
     }
 
     @Test

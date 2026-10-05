@@ -34,6 +34,11 @@ data class SrOptions(
     val precision: Int = DEFAULT_PRECISION,
     /** 算力精度开关（FP16 算术）；默认 **false**，对齐他们的模型包/设置默认 */
     val fp16Arithmetic: Boolean = DEFAULT_FP16_ARITHMETIC,
+    /**
+     * 预加载页数（当前页 ±N）—— 对齐他们的 `pref_realcugan_preload_size`（默认 **3**）。
+     * 走 [SrEnhanceQueue.enqueueAround]，**只在没有 OCR 需求时**才启动（见阅读器接线）。
+     */
+    val preloadPages: Int = DEFAULT_PRELOAD_PAGES,
 ) {
 
     /** 他们的 `tileSleepMs`：0 → 0ms、1 → 5ms、2 → 15ms（块间休眠，用速度换前台流畅） */
@@ -71,6 +76,9 @@ data class SrOptions(
         const val DEFAULT_PRECISION = 0
         const val DEFAULT_FP16_ARITHMETIC = false
 
+        /** 他们的 `pref_realcugan_preload_size` 默认值 */
+        const val DEFAULT_PRELOAD_PAGES = 3
+
         const val PRECISION_FP16 = 0
         const val PRECISION_FP32 = 1
 
@@ -80,6 +88,7 @@ data class SrOptions(
         const val KEY_PERFORMANCE_MODE = "sr_opt_performance_mode"
         const val KEY_PRECISION = "sr_opt_precision"
         const val KEY_FP16_ARITHMETIC = "sr_opt_fp16_arithmetic"
+        const val KEY_PRELOAD_PAGES = "sr_opt_preload_pages"
 
         /**
          * 从 prefs 读（**唯一读入口**）—— 三处调用点（单页 / 章节批量 / 预加载）必须同源，
@@ -93,6 +102,7 @@ data class SrOptions(
                 .coerceIn(0, 2),
             precision = prefs.getInt(KEY_PRECISION, DEFAULT_PRECISION).coerceIn(0, 1),
             fp16Arithmetic = prefs.getBoolean(KEY_FP16_ARITHMETIC, DEFAULT_FP16_ARITHMETIC),
+            preloadPages = prefs.getInt(KEY_PRELOAD_PAGES, DEFAULT_PRELOAD_PAGES).coerceIn(0, 8),
         )
 
         fun write(prefs: SharedPreferences, options: SrOptions) {
@@ -103,6 +113,7 @@ data class SrOptions(
                 .putInt(KEY_PERFORMANCE_MODE, options.performanceMode)
                 .putInt(KEY_PRECISION, options.precision)
                 .putBoolean(KEY_FP16_ARITHMETIC, options.fp16Arithmetic)
+                .putInt(KEY_PRELOAD_PAGES, options.preloadPages)
                 .apply()
         }
     }
