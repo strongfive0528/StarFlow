@@ -244,7 +244,7 @@ class NovelTranslationQueue(
                 val chapterParas = chapterParaIndexes(book, chapter)
                 // ⚠️ 在飞的批也算"已完成"：不然同一个锚点会被反复挑中
                 //（并发下就是同一时间发出 N 个一模一样的请求，白烧额度）
-                val done = skipSetFor(chapter, translatedIndexes(book, chapter)) +
+                val done = skipSetFor(translatedIndexes(book, chapter)) +
                     runCatching { excludedParas(chapter) }.getOrDefault(emptySet()) +
                     synchronized(lock) { inflightParas.toList() }
                 val page = currentPageParaIndexes()
@@ -456,7 +456,7 @@ class NovelTranslationQueue(
         val chapterParas = chapterParaIndexes(book, chapterIndex)
         var done = 0
         while (currentCoroutineContext().isActive) {
-            val translated = skipSetFor(chapterIndex, translatedIndexes(book, chapterIndex))
+            val translated = skipSetFor(translatedIndexes(book, chapterIndex))
             val anchor = chapterParas.firstOrNull { it !in translated } ?: return done
             val batch = NovelBatchPlanner.nextBatch(chapterParas, anchor, translated, batchSize())
             if (batch.isEmpty()) return done
