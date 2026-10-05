@@ -496,7 +496,15 @@ class MangaReaderActivity : AppCompatActivity() {
             if (mode == 2) ViewPager2.ORIENTATION_VERTICAL else ViewPager2.ORIENTATION_HORIZONTAL
         // 预绑定邻页：当前页停住后空闲期即后台解码下一页 → 滑动翻页时邻页图已就位，
         // 消除「翻页瞬间旧页颜色/空白闪烁」（配 loadTo 绑定即清残留，快速连翻不显旧图）
-        binding.viewPager.offscreenPageLimit = 1
+        // ⚠️ 超分开着时跟随 `SrOptions.preloadPages`（参照项目就是 `offscreenPageLimit = preloadSize`）：
+        //    邻页本来就要被超分，让 pager 顺手解码省一次 IO；关超分时保持 1（不要平白多解码）。
+        val readerPrefs = PreferenceManager.getDefaultSharedPreferences(this)
+        binding.viewPager.offscreenPageLimit =
+            if (com.moe.starflow.sr.SrSettings.isEnabledForReader(readerPrefs)) {
+                com.moe.starflow.sr.SrOptions.from(readerPrefs).preloadPages.coerceIn(1, 8)
+            } else {
+                1
+            }
         // 禁用 RecyclerView 默认 item 动画：notifyItemChanged（翻页落定/三态重绑）会触发 change alpha
         // 淡入淡出 → 刚落定的页「透明渐变、轻微变白/变黑」。分页器无 item 动画需求，直接关掉。
         (binding.viewPager.getChildAt(0) as? androidx.recyclerview.widget.RecyclerView)?.itemAnimator = null

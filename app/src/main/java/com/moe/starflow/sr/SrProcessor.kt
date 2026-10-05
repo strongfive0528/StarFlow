@@ -212,7 +212,12 @@ object SrProcessor {
             //    大图（压缩后 2x = 1.17 倍）一刀不砍 —— 砍的全是最需要放大的低分辨率页。已删。
             val product: Bitmap = raw
             val model = SrModelManager.getActiveKey(prefs)?.name ?: "-"
-            val saved = SrStore.save(app, mangaId, page, product, model, mangaKey, cacheLimitMb(prefs))
+            // 选项指纹（对齐参照项目的 `configHash`）：换模型/tile/精度/fp16/跳过阈值都要跟着变 ——
+            // 它随标记落盘，下一版用它判「这份产物是不是按当前设置出的」。
+            // ⚠️ 倍率不单独入指纹：它已经编码在模型 key 里（如 `SR_REALESRGAN_ANIME_X4`），
+            //    而 `feed` 到这一步可能已被回收，读它 `.width` 是不安全的。
+            val fp = options.fingerprint(model, 0, 0)
+            val saved = SrStore.save(app, mangaId, page, product, model, mangaKey, cacheLimitMb(prefs), fp)
             if (!saved) {
                 LogCollector.e(TAG, "超分落盘失败: $k")
                 SrOutcome.fail(SrFailReason.SAVE_FAILED)

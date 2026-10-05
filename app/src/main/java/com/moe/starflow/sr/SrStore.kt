@@ -182,7 +182,13 @@ object SrStore {
         bitmap: Bitmap,
         modelName: String,
         mangaKey: String,
-        limitMb: Int = DEFAULT_LIMIT_MB
+        limitMb: Int = DEFAULT_LIMIT_MB,
+        /**
+         * 产出这份结果的**选项指纹**（[SrOptions.fingerprint]）—— 对齐参照项目的 `configHash`：
+         * 换模型/倍率/tile/精度/跳过阈值后，旧产物就不该再被当成"当前设置的结果"。
+         * 默认空串 = 不记（老调用点行为不变）。
+         */
+        fingerprint: String = "",
     ): Boolean {
         if (bitmap.width <= 0 || bitmap.height <= 0) return false
         if (mangaKey.isEmpty()) {
@@ -217,6 +223,7 @@ object SrStore {
                     JSONObject()
                         .put(KEY_FIELD, mangaKey)
                         .put("model", modelName)
+                        .put("fp", fingerprint)
                         .put("scale", 2)
                         .put("w", bitmap.width)
                         .put("h", bitmap.height)
