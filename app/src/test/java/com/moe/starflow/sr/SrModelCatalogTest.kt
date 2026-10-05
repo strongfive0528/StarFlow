@@ -80,10 +80,16 @@ class SrModelCatalogTest {
             val family = entry.optString("family", "")
             assertTrue(
                 "$key 的 family 必须是 ncnn 四族之一，实际是 '$family'",
-                family in setOf("waifu2x", "srmd", "realcugan", "realesrgan"),
+                family in setOf("waifu2x", "srmd", "realcugan", "realesrgan", "generic"),
             )
             assertTrue("$key 缺 scale", entry.optInt("scale", 0) in setOf(2, 3, 4))
             assertTrue("$key 缺 prepad", entry.optInt("prepad", 0) > 0)
+            if (family == "generic") {
+                // 通用 ncnn 模型（P4 加的入口）：blob 名必须显式给出 —— 默认的 Input1/Eltwise4 是
+                // waifu2x 家族的，通用模型（SPAN/sudo/W2xEX…）不写就必然加载/推理失败。
+                assertTrue("$key 是 generic 却没写 blobIn", entry.optString("blobIn", "").isNotEmpty())
+                assertTrue("$key 是 generic 却没写 blobOut", entry.optString("blobOut", "").isNotEmpty())
+            }
             assertTrue("$key 缺 browser_url", entry.optString("browser_url", "").startsWith("https://"))
             // P1（TachiyomiX 同款选项）：算力精度必须逐条写明，缺字段虽然解析时默认 true，
             // 但"清单里看不见"就等于没人知道这档跑的是 FP16 还是 FP32 —— 显式声明。

@@ -51,6 +51,8 @@ object SrModelManager {
         ModelKey.SR_REALCUGAN_PRO_CONSERVATIVE,
     ModelKey.SR_REALCUGAN_NOSE_2X,
     ModelKey.SR_REALESRGAN_V3_ANIME_X2,
+    ModelKey.SR_SPAN_UNI_2X,
+    ModelKey.SR_SUDO_UC_2X,
         ModelKey.SR_REALCUGAN_PRO_DENOISE3X,
         ModelKey.SR_REALESRGAN_ANIME6B,
     )
@@ -98,6 +100,8 @@ object SrModelManager {
         ModelKey.SR_REALCUGAN_PRO_CONSERVATIVE -> R.string.sr_model_cugan_pro_cons
         ModelKey.SR_REALCUGAN_NOSE_2X -> R.string.sr_model_cugan_nose_2x
         ModelKey.SR_REALESRGAN_V3_ANIME_X2 -> R.string.sr_model_esrgan_v3_anime_x2
+        ModelKey.SR_SPAN_UNI_2X -> R.string.sr_model_span_uni_2x
+        ModelKey.SR_SUDO_UC_2X -> R.string.sr_model_sudo_uc_2x
         ModelKey.SR_REALCUGAN_PRO_DENOISE3X -> R.string.sr_model_cugan_pro_d3
         ModelKey.SR_REALESRGAN_ANIME6B -> R.string.sr_model_rsrgan_a6b
         else -> 0

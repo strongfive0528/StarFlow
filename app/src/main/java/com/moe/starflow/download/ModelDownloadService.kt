@@ -252,6 +252,8 @@ class ModelDownloadService : LifecycleService() {
         ModelKey.SR_REALCUGAN_PRO_CONSERVATIVE -> getString(SrModelManager.nameResOf(this))
         ModelKey.SR_REALCUGAN_NOSE_2X,
         ModelKey.SR_REALESRGAN_V3_ANIME_X2,
+        ModelKey.SR_SPAN_UNI_2X,
+        ModelKey.SR_SUDO_UC_2X,
         -> getString(SrModelManager.nameResOf(this))
         ModelKey.SR_REALCUGAN_PRO_DENOISE3X -> getString(SrModelManager.nameResOf(this))
         ModelKey.SR_REALESRGAN_ANIME6B -> getString(SrModelManager.nameResOf(this))
@@ -604,6 +606,7 @@ class ModelDownloadService : LifecycleService() {
         ModelKey.SR_REALCUGAN_DENOISE3X,
         ModelKey.SR_REALCUGAN_PRO_NODENOISE, ModelKey.SR_REALCUGAN_PRO_CONSERVATIVE,
         ModelKey.SR_REALCUGAN_NOSE_2X, ModelKey.SR_REALESRGAN_V3_ANIME_X2,
+        ModelKey.SR_SPAN_UNI_2X, ModelKey.SR_SUDO_UC_2X,
         ModelKey.SR_REALCUGAN_PRO_DENOISE3X,
         ModelKey.SR_REALESRGAN_ANIME6B -> File(applicationContext.getExternalFilesDir(null), "sr")
     }

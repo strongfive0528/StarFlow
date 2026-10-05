@@ -105,6 +105,10 @@ enum class ModelKey(val stableId: Int) {
     SR_REALCUGAN_NOSE_2X(3077),
     /** Real-ESRGAN **animevideov3** · 2x（参照项目同款；x2/x3/x4 共用同一份权重，只有 param 不同） */
     SR_REALESRGAN_V3_ANIME_X2(3078),
+    /** SPAN NomosUni Photo · 2x（通用 ncnn：in0 → out0，BGR） */
+    SR_SPAN_UNI_2X(3079),
+    /** sudo UltraCompact · 2x（通用 ncnn：input → output，RGB） */
+    SR_SUDO_UC_2X(3080),
 
     /** 4 倍放大 */
     SR_REALESRGAN_ANIME6B(3080);

@@ -181,6 +181,8 @@ class ModelManagementFragment : Fragment() {
             SrRow(ModelKey.SR_REALCUGAN_PRO_CONSERVATIVE, R.id.sr_cugan_pro_cons_row, R.id.sr_cugan_pro_cons_radio, R.id.sr_cugan_pro_cons_title),
         SrRow(ModelKey.SR_REALCUGAN_NOSE_2X, R.id.sr_cugan_nose_row, R.id.sr_cugan_nose_radio, R.id.sr_cugan_nose_title),
         SrRow(ModelKey.SR_REALESRGAN_V3_ANIME_X2, R.id.sr_rsrgan_v3_x2_row, R.id.sr_rsrgan_v3_x2_radio, R.id.sr_rsrgan_v3_x2_title),
+        SrRow(ModelKey.SR_SPAN_UNI_2X, R.id.sr_span_uni_row, R.id.sr_span_uni_radio, R.id.sr_span_uni_title),
+        SrRow(ModelKey.SR_SUDO_UC_2X, R.id.sr_sudo_uc_row, R.id.sr_sudo_uc_radio, R.id.sr_sudo_uc_title),
             SrRow(ModelKey.SR_REALCUGAN_PRO_DENOISE3X, R.id.sr_cugan_pro_d3_row, R.id.sr_cugan_pro_d3_radio, R.id.sr_cugan_pro_d3_title),
         )),
         SrFamily(R.id.sr_rsrgan_group_title, R.id.sr_rsrgan_group_selected, listOf(
@@ -209,6 +211,8 @@ class ModelManagementFragment : Fragment() {
         ModelKey.SR_REALCUGAN_PRO_CONSERVATIVE -> "~2.5MB"
         ModelKey.SR_REALCUGAN_NOSE_2X -> "~2.4MB"
         ModelKey.SR_REALESRGAN_V3_ANIME_X2 -> "~1.2MB"
+        ModelKey.SR_SPAN_UNI_2X -> "~1.6MB"
+        ModelKey.SR_SUDO_UC_2X -> "~1.2MB"
         ModelKey.SR_REALCUGAN_PRO_DENOISE3X -> "~2.5MB"
         ModelKey.SR_REALESRGAN_ANIME6B -> "~17.1MB"
         else -> ""

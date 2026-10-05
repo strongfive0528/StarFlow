@@ -618,6 +618,58 @@
           "checksum": "3d0f8e0531ae348443b91268342b2f41"
         }
       ]
+    },
+    {
+      "model_key": "SR_SPAN_UNI_2X",
+      "browser_url": "https://openmodeldb.info/models/2x-NomosUni-span-multijpg-ldl",
+      "family": "generic",
+      "scale": 2,
+      "noise": 0,
+      "prepad": 24,
+      "fp16Arithmetic": true,
+      "blobIn": "in0",
+      "blobOut": "out0",
+      "bgr": true,
+      "files": [
+        {
+          "file_name": "span_uni_2x.param",
+          "download_url": "https://raw.githubusercontent.com/HaoweiLi97/mihon_img_upscale/master/app/src/main/assets/span-nomosuni/2x-NomosUni-SPAN-multijpg-ldl/2x-NomosUni-SPAN-multijpg-ldl.param",
+          "file_size": 6046,
+          "checksum": "69a93e1206f9be6153787ecc3284026d"
+        },
+        {
+          "file_name": "span_uni_2x.bin",
+          "download_url": "https://raw.githubusercontent.com/HaoweiLi97/mihon_img_upscale/master/app/src/main/assets/span-nomosuni/2x-NomosUni-SPAN-multijpg-ldl/2x-NomosUni-SPAN-multijpg-ldl.bin",
+          "file_size": 1642900,
+          "checksum": "04fc96676ff20cd958af50a49cc0b7c5"
+        }
+      ]
+    },
+    {
+      "model_key": "SR_SUDO_UC_2X",
+      "browser_url": "https://openmodeldb.info/models/2x-sudo-UltraCompact",
+      "family": "generic",
+      "scale": 2,
+      "noise": 0,
+      "prepad": 24,
+      "fp16Arithmetic": true,
+      "blobIn": "input",
+      "blobOut": "output",
+      "bgr": false,
+      "files": [
+        {
+          "file_name": "sudo_uc_2x.param",
+          "download_url": "https://raw.githubusercontent.com/HaoweiLi97/mihon_img_upscale/master/app/src/main/assets/sudo-ultracompact/2x-sudo-UltraCompact/2x-sudo-UltraCompact.param",
+          "file_size": 1833,
+          "checksum": "b7ff950f07fa82f68f71fd4b3765a8e7"
+        },
+        {
+          "file_name": "sudo_uc_2x.bin",
+          "download_url": "https://raw.githubusercontent.com/HaoweiLi97/mihon_img_upscale/master/app/src/main/assets/sudo-ultracompact/2x-sudo-UltraCompact/2x-sudo-UltraCompact.bin",
+          "file_size": 1218904,
+          "checksum": "2939b2354685e9411090849bb6c19e3d"
+        }
+      ]
     }
   ]
 }
