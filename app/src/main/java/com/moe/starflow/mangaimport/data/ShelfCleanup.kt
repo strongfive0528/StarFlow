@@ -74,7 +74,7 @@ object ShelfCleanup {
             // ⚠️ 也用 `mangaId` 做 key，但删除是异步的 → 理论上与复用同 id 的新书有竞态，
             //    代价只是"新书那几页要重新超分"，不影响正确性（文件按 mangaId+页码覆盖写）。
             mangas.forEach { m ->
-                runCatching { SrStore.deleteManga(app, m.id) }
+                runCatching { SrStore.deleteManga(app, m.id, m.translationKey) }
                     .onFailure { LogCollector.w(TAG, "删除超分缓存失败 mangaId=${m.id}: ${it.message}") }
             }
         }

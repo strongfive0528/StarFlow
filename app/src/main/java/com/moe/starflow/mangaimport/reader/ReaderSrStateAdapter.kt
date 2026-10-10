@@ -11,6 +11,9 @@ import com.moe.starflow.R
 import com.moe.starflow.data.ImportedPageSr
 import com.moe.starflow.mangaimport.data.MangaChapter
 import com.moe.starflow.mangaimport.translate.ReaderTranslationController
+import org.json.JSONObject
+import com.moe.starflow.download.ModelKey
+import com.moe.starflow.sr.SrModelManager
 import java.text.SimpleDateFormat
 import java.util.Date
 import java.util.Locale
@@ -155,7 +158,7 @@ class ReaderSrStateAdapter(
         if (chapters.isEmpty()) return emptyList()
         val successByChapter = HashMap<Int, Int>()
         for (r in records) {
-            if (r.state != ImportedPageSr.STATE_SUCCESS) continue
+            if (runCatching { JSONObject(r.executionJson ?: "{}").has("artifactModel") }.getOrDefault(false).not()) continue
             val idx = chapterIndexFor(r.pageIndex)
             if (idx >= 0) successByChapter[idx] = (successByChapter[idx] ?: 0) + 1
         }
@@ -233,8 +236,9 @@ class ReaderSrStateAdapter(
             //    可点性 = **真的有页可超**；删任一页的超分结果 → 记录表变化 → `success` 掉下来
             //    → 这里自然恢复可用（删除路径会 `pushPanelNow()` 立刻重推，不是等下次开面板）。
             // ⚠️ 跑着时必须保持可点 —— 那时它是「取消」，一起禁掉就停不下来了。
-            val idleAndDone = !running && allDone
-            isEnabled = !idleAndDone
+            val stale=records.any {chapterIndexFor(it.pageIndex)==row.chapterIndex && runCatching {JSONObject(it.executionJson ?: "{}").optBoolean("oldConfig")}.getOrDefault(false)}
+            val idleAndDone = !running && allDone && !stale
+            isEnabled = !idleAndDone && row.job?.stopping != true
             setTextColor(
                 when {
                     running -> amber
@@ -250,7 +254,7 @@ class ReaderSrStateAdapter(
                 }
             )
             text = ctx.getString(
-                if (running) R.string.cancel else R.string.reader_sr_chapter_translate
+                if(row.job?.stopping==true)R.string.reader_sr_stopping else if (running) R.string.cancel else R.string.reader_sr_chapter_translate
             )
             setOnClickListener { onChapterPrimary(row.chapterIndex) }
         }
@@ -318,12 +322,18 @@ class ReaderSrStateAdapter(
         CardBackdrop.applyNested(item, tone, dark)
 
         item.findViewById<TextView>(R.id.tv_page_label).apply {
-            text = "P${page.pageIndex + 1}"
+            val info=runCatching {JSONObject(page.executionJson ?: "{}")} .getOrNull()
+            val ms=info?.optLong("totalMs",-1L)?.takeIf {it>=0} ?: if(page.finishedAtMs>page.startedAtMs && page.startedAtMs>0)page.finishedAtMs-page.startedAtMs else -1L
+            val duration=if(ms<0)"—" else String.format(Locale.getDefault(),"%.2f",ms/1000.0)
+            text = "P${page.pageIndex + 1} · "+item.context.getString(R.string.reader_sr_elapsed,duration)
             setTextColor(labelColor)
         }
         item.findViewById<TextView>(R.id.tv_state_badge).apply {
             text = item.context.getString(
                 when (page.state) {
+                    ImportedPageSr.STATE_STOPPING -> R.string.reader_sr_stopping
+                    ImportedPageSr.STATE_CANCELLED -> R.string.sr_fail_cancelled
+                    ImportedPageSr.STATE_RESULT_MISSING -> R.string.reader_sr_result_missing
                     ImportedPageSr.STATE_RUNNING -> R.string.reader_sr_state_running
                     ImportedPageSr.STATE_SUCCESS -> R.string.reader_translate_state_success
                     ImportedPageSr.STATE_FAILED -> R.string.reader_translate_state_failed
@@ -354,6 +364,7 @@ class ReaderSrStateAdapter(
         )
 
         item.findViewById<TextView>(R.id.btn_row_delete).apply {
+            text=item.context.getString(R.string.reader_sr_delete)
             visibility = View.VISIBLE
             setOnClickListener { onDeletePage(page.pageIndex) }
         }
@@ -397,7 +408,7 @@ class ReaderSrStateAdapter(
             else -> row.updatedAtMs
         }
         val meta = buildString {
-            row.modelName?.takeIf { it.isNotBlank() }?.let { append(ctx.getString(R.string.reader_sr_detail_model, it)) }
+            row.modelName?.takeIf { it.isNotBlank() }?.let { append(ctx.getString(R.string.reader_sr_detail_model, modelLabel(ctx,it))) }
             if (time > 0L) {
                 if (isNotEmpty()) append(" · ")
                 append(SimpleDateFormat("MM-dd HH:mm", Locale.getDefault()).format(Date(time)))
@@ -416,6 +427,27 @@ class ReaderSrStateAdapter(
             if (sb.isNotEmpty()) sb.append('\n')
             sb.append(ctx.getString(R.string.reader_sr_detail_out, row.outWidth, row.outHeight, fmtBytes(row.outBytes)))
         }
+        val e=runCatching {JSONObject(row.executionJson ?: "{}")} .getOrNull()
+        if(e!=null && e.has("model")) {
+            val n=e.optJSONObject("native") ?: JSONObject()
+            fun secs(k: String)=if(e.has(k))String.format(Locale.getDefault(),"%.2f",e.optLong(k)/1000.0) else "—"
+            fun enabled(o: JSONObject,k: String)=if(!o.has(k))"—" else ctx.getString(if(o.optBoolean(k))R.string.reader_sr_setting_on else R.string.reader_sr_setting_off)
+            val tile=if(e.optInt("tileRequested")==0)ctx.getString(R.string.sr_opt_tile_auto) else e.optInt("tileRequested").toString()
+            val perf=ctx.getString(when(e.optInt("performanceMode")){1->R.string.sr_opt_perf_50;2->R.string.sr_opt_perf_30;else->R.string.sr_opt_perf_90})
+            if(sb.isNotEmpty())sb.append('\n')
+            sb.append(ctx.getString(R.string.reader_sr_detail_execution,n.optString("backend","—"),tile,n.optInt("tile").takeIf {it>0}?.toString() ?: "—",
+                e.optString("precisionRequested","—"),n.optString("precision","—"),enabled(e,"fp16ArithmeticRequested"),enabled(n,"fp16Arithmetic"),
+                perf,e.optInt("tileSleepMs"),n.optInt("threads").takeIf {it>0}?.toString() ?: "—",
+                if(e.optDouble("thresholdMP")>0)e.optDouble("thresholdMP").toString() else ctx.getString(R.string.sr_opt_maxinput_none),
+                if(e.has("inputWidth"))"${e.optInt("inputWidth")}×${e.optInt("inputHeight")}" else "—",
+                secs("totalMs"),secs("waitMs"),secs("initMs"),secs("preprocessMs"),secs("inferenceMs"),secs("saveMs")))
+            fun mp(w: String,h: String)=if(e.has(w) && e.has(h))String.format(Locale.getDefault(),"%.2f",e.optInt(w).toDouble()*e.optInt(h)/1_000_000) else "—"
+            sb.append('\n').append(ctx.getString(R.string.reader_sr_detail_conversion,secs("decodeMs"),secs("rgbPackMs"),secs("rgbUnpackMs"),
+                n.optString("deviceName","—"),n.optLong("throttleMs"),mp("srcWidth","srcHeight"),mp("inputWidth","inputHeight"),mp("outputWidth","outputHeight")))
+        }
+        if(e?.optBoolean("oldConfig")==true)sb.append("\n").append(ctx.getString(R.string.reader_sr_old_config))
+        if(e?.has("artifactModel")==true && row.state!=ImportedPageSr.STATE_SUCCESS)sb.append("\n").append(ctx.getString(R.string.reader_sr_detail_retained,
+            modelLabel(ctx,e.optString("artifactModel")),e.optInt("artifactWidth"),e.optInt("artifactHeight")))
         item.findViewById<TextView>(R.id.tv_detail_list).apply {
             text = sb.toString().ifBlank { ctx.getString(R.string.reader_sr_detail_none) }
             setTextColor(labelColor)
@@ -428,6 +460,11 @@ class ReaderSrStateAdapter(
             }
         }
     }
+
+    private fun modelLabel(ctx: android.content.Context,name: String): String = runCatching {
+        val res=SrModelManager.nameResOf(ModelKey.valueOf(name))
+        if(res==0)name else ctx.getString(res)
+    }.getOrDefault(name)
 
     private fun fmtBytes(bytes: Long): String = when {
         bytes <= 0L -> "-"

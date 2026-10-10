@@ -13,7 +13,7 @@ project(starflow_sr CXX)
 #   官方 `ncnn-<版本>-android-vulkan.zip` 是用**新版 NDK**编的，引用
 #   `std::__ndk1::__libcpp_verbose_abort`，而本项目 NDK 25.2.9519653 的
 #   libc++_shared.so 不导出该符号 → 链接期 undefined symbol。
-#   自编可保证 ABI 严格一致，也能关掉用不到的部件（OpenMP/工具/示例）。
+#   自编可保证 ABI 严格一致，也能关掉用不到的部件（工具/示例）。
 #
 # ⚠️ ncnn-src/ 不入库（见 sr/.gitignore）：首次 clone 后跑 `pwsh sr/setup-ncnn.ps1`。
 # ─────────────────────────────────────────────────────────────────────────────
@@ -23,7 +23,9 @@ set(CMAKE_CXX_STANDARD_REQUIRED ON)
 
 # ── ncnn：只编我们需要的那部分 ────────────────────────────────────────────────
 set(NCNN_VULKAN ON CACHE BOOL "" FORCE)             # 核心：GPU 跑超分
-set(NCNN_OPENMP OFF CACHE BOOL "" FORCE)            # 本模块只用 GPU 路径 → 省掉 libomp
+set(NCNN_OPENMP ON CACHE BOOL "" FORCE)
+set(NCNN_SIMPLEOMP ON CACHE BOOL "" FORCE)
+set(NCNN_THREADS ON CACHE BOOL "" FORCE)            # CPU 使用内置 simpleomp，无需 libomp.so
 set(NCNN_BUILD_TOOLS OFF CACHE BOOL "" FORCE)
 set(NCNN_BUILD_EXAMPLES OFF CACHE BOOL "" FORCE)
 set(NCNN_BUILD_BENCHMARK OFF CACHE BOOL "" FORCE)
@@ -39,6 +41,17 @@ set(NCNN_SHARED_LIB OFF CACHE BOOL "" FORCE)        # 静态链进 libstarflow_s
 #    是个静默空操作（碰巧 NCNN_SHARED_LIB 默认就是 OFF 才没出事，改名后才是真的锁住）。
 add_subdirectory(ncnn-src)
 
+# Android's pthread implementation is part of libc; there is no libpthread.so.
+if(ANDROID)
+    foreach(property LINK_LIBRARIES INTERFACE_LINK_LIBRARIES)
+        get_target_property(ncnn_links ncnn ${property})
+        if(ncnn_links)
+            list(REMOVE_ITEM ncnn_links pthread)
+            set_property(TARGET ncnn PROPERTY ${property} "${ncnn_links}")
+        endif()
+    endforeach()
+endif()
+
 include_directories(${CMAKE_CURRENT_SOURCE_DIR}/engines)
 include_directories(${CMAKE_CURRENT_BINARY_DIR})
 
@@ -48,7 +61,7 @@ find_library(android-lib android)
 
 # .comp (GLSL) -> .comp.hex.h（纯 text->hex，与上游 nihui 的脚本一致）
 # ⚠️ realcugan/realesrgan 用的是**已经生成好的** *.comp.hex.h（来自 koto 的构建产物），
-#    不参与这里；只有 waifu2x/srmd 需要现生成。
+#    不参与这里；只有 waifu2x 需要现生成。
 macro(sr_add_shader SHADER_SRC)
     get_filename_component(SHADER_SRC_NAME_WE ${SHADER_SRC} NAME_WE)
     set(SHADER_COMP_HEADER ${CMAKE_CURRENT_BINARY_DIR}/${SHADER_SRC_NAME_WE}.comp.hex.h)
@@ -68,15 +81,10 @@ sr_add_shader(engines/waifu2x_preproc.comp)
 sr_add_shader(engines/waifu2x_postproc.comp)
 sr_add_shader(engines/waifu2x_preproc_tta.comp)
 sr_add_shader(engines/waifu2x_postproc_tta.comp)
-sr_add_shader(engines/srmd_preproc.comp)
-sr_add_shader(engines/srmd_postproc.comp)
-sr_add_shader(engines/srmd_preproc_tta.comp)
-sr_add_shader(engines/srmd_postproc_tta.comp)
 
 add_library(starflow_sr SHARED
     sr_jni.cpp
     engines/waifu2x.cpp
-    engines/srmd.cpp
     engines/realcugan.cpp
     engines/realesrgan.cpp
     ${SR_SHADER_HDRS})

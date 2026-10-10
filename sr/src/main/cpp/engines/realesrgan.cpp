@@ -1,6 +1,8 @@
 // realesrgan implemented with ncnn library
 
 #include "realesrgan.h"
+#include "sr_control.h"
+#include <cmath>
 
 #include <algorithm>
 #include <vector>
@@ -16,12 +18,6 @@
 RealESRGAN::RealESRGAN(int gpuid, bool _tta_mode, int num_threads)
 {
     net.opt.use_vulkan_compute = true;
-    net.opt.use_fp16_packed = true;
-    net.opt.use_fp16_storage = true;
-    net.opt.use_fp16_arithmetic = false;
-    net.opt.use_int8_storage = true;
-    net.opt.use_int8_arithmetic = false;
-
     // 与 Waifu2x / RealCUGAN 对齐：线程数由调用方（Kotlin 侧 SrThreads）决定。
     // 上游原版没有这个参数，会用 ncnn 默认值（全核）。
     net.opt.num_threads = num_threads;
@@ -44,13 +40,13 @@ RealESRGAN::~RealESRGAN()
         delete realesrgan_postproc;
     }
 
-    bicubic_2x->destroy_pipeline(net.opt);
+    if (bicubic_2x) bicubic_2x->destroy_pipeline(net.opt);
     delete bicubic_2x;
 
-    bicubic_3x->destroy_pipeline(net.opt);
+    if (bicubic_3x) bicubic_3x->destroy_pipeline(net.opt);
     delete bicubic_3x;
 
-    bicubic_4x->destroy_pipeline(net.opt);
+    if (bicubic_4x) bicubic_4x->destroy_pipeline(net.opt);
     delete bicubic_4x;
 }
 
@@ -60,6 +56,16 @@ int RealESRGAN::load(const std::wstring& parampath, const std::wstring& modelpat
 int RealESRGAN::load(const std::string& parampath, const std::string& modelpath)
 #endif
 {
+    const auto* device = net.vulkan_device();
+    effective_fp16 = storage_fp16 && device && device->info.support_fp16_storage();
+    effective_arithmetic = effective_fp16 && fp16_arithmetic && device->info.support_fp16_arithmetic();
+    net.opt.use_fp16_packed = effective_fp16;
+    net.opt.use_fp16_storage = effective_fp16;
+    net.opt.use_fp16_arithmetic = effective_arithmetic;
+    net.opt.use_int8_storage = true;
+    net.opt.use_int8_arithmetic = false;
+    srSanitizeShaderOptions(net.opt, device);
+
 #if _WIN32
     {
         FILE* fp = _wfopen(parampath.c_str(), L"rb");
@@ -68,7 +74,7 @@ int RealESRGAN::load(const std::string& parampath, const std::string& modelpath)
             fwprintf(stderr, L"_wfopen %ls failed\n", parampath.c_str());
         }
 
-        net.load_param(fp);
+        srCheck(net.load_param(fp), "model load");
 
         fclose(fp);
     }
@@ -79,13 +85,13 @@ int RealESRGAN::load(const std::string& parampath, const std::string& modelpath)
             fwprintf(stderr, L"_wfopen %ls failed\n", modelpath.c_str());
         }
 
-        net.load_model(fp);
+        srCheck(net.load_model(fp), "model load");
 
         fclose(fp);
     }
 #else
-    net.load_param(parampath.c_str());
-    net.load_model(modelpath.c_str());
+    srCheck(net.load_param(parampath.c_str()), "model load");
+    srCheck(net.load_model(modelpath.c_str()), "model load");
 #endif
 
     // initialize preprocess and postprocess pipeline
@@ -103,41 +109,41 @@ int RealESRGAN::load(const std::string& parampath, const std::string& modelpath)
 #endif
 
         {
-            static std::vector<uint32_t> spirv;
+            std::vector<uint32_t> spirv;
             static ncnn::Mutex lock;
             {
                 ncnn::MutexLockGuard guard(lock);
                 if (spirv.empty())
                 {
                     if (tta_mode)
-                        compile_spirv_module(realesrgan_preproc_tta_comp_data, net.opt, spirv);
+                        srCheck(compile_spirv_module(realesrgan_preproc_tta_comp_data, net.opt, spirv), "shader compilation");
                     else
-                        compile_spirv_module(realesrgan_preproc_comp_data, net.opt, spirv);
+                        srCheck(compile_spirv_module(realesrgan_preproc_comp_data, net.opt, spirv), "shader compilation");
                 }
             }
 
             realesrgan_preproc = new ncnn::Pipeline(net.vulkan_device());
             realesrgan_preproc->set_optimal_local_size_xyz(32, 32, 3);
-            realesrgan_preproc->create(spirv.data(), spirv.size() * 4, specializations);
+            srCheck(realesrgan_preproc->create(spirv.data(), spirv.size() * 4, specializations), "shader pipeline");
         }
 
         {
-            static std::vector<uint32_t> spirv;
+            std::vector<uint32_t> spirv;
             static ncnn::Mutex lock;
             {
                 ncnn::MutexLockGuard guard(lock);
                 if (spirv.empty())
                 {
                     if (tta_mode)
-                        compile_spirv_module(realesrgan_postproc_tta_comp_data, net.opt, spirv);
+                        srCheck(compile_spirv_module(realesrgan_postproc_tta_comp_data, net.opt, spirv), "shader compilation");
                     else
-                        compile_spirv_module(realesrgan_postproc_comp_data, net.opt, spirv);
+                        srCheck(compile_spirv_module(realesrgan_postproc_comp_data, net.opt, spirv), "shader compilation");
                 }
             }
 
             realesrgan_postproc = new ncnn::Pipeline(net.vulkan_device());
             realesrgan_postproc->set_optimal_local_size_xyz(32, 32, 3);
-            realesrgan_postproc->create(spirv.data(), spirv.size() * 4, specializations);
+            srCheck(realesrgan_postproc->create(spirv.data(), spirv.size() * 4, specializations), "shader pipeline");
         }
     }
 
@@ -150,9 +156,9 @@ int RealESRGAN::load(const std::string& parampath, const std::string& modelpath)
         pd.set(0, 3);// bicubic
         pd.set(1, 2.f);
         pd.set(2, 2.f);
-        bicubic_2x->load_param(pd);
+        srCheck(bicubic_2x->load_param(pd), "bicubic pipeline");
 
-        bicubic_2x->create_pipeline(net.opt);
+        srCheck(bicubic_2x->create_pipeline(net.opt), "bicubic pipeline");
     }
     {
         bicubic_3x = ncnn::create_layer("Interp");
@@ -162,9 +168,9 @@ int RealESRGAN::load(const std::string& parampath, const std::string& modelpath)
         pd.set(0, 3);// bicubic
         pd.set(1, 3.f);
         pd.set(2, 3.f);
-        bicubic_3x->load_param(pd);
+        srCheck(bicubic_3x->load_param(pd), "bicubic pipeline");
 
-        bicubic_3x->create_pipeline(net.opt);
+        srCheck(bicubic_3x->create_pipeline(net.opt), "bicubic pipeline");
     }
     {
         bicubic_4x = ncnn::create_layer("Interp");
@@ -174,9 +180,9 @@ int RealESRGAN::load(const std::string& parampath, const std::string& modelpath)
         pd.set(0, 3);// bicubic
         pd.set(1, 4.f);
         pd.set(2, 4.f);
-        bicubic_4x->load_param(pd);
+        srCheck(bicubic_4x->load_param(pd), "bicubic pipeline");
 
-        bicubic_4x->create_pipeline(net.opt);
+        srCheck(bicubic_4x->create_pipeline(net.opt), "bicubic pipeline");
     }
 
     return 0;
@@ -194,6 +200,7 @@ int RealESRGAN::process(const ncnn::Mat& inimage, ncnn::Mat& outimage) const
 
     ncnn::VkAllocator* blob_vkallocator = net.vulkan_device()->acquire_blob_allocator();
     ncnn::VkAllocator* staging_vkallocator = net.vulkan_device()->acquire_staging_allocator();
+    SrAllocatorGuard allocator_guard{net.vulkan_device(), blob_vkallocator, staging_vkallocator};
 
     ncnn::Option opt = net.opt;
     opt.blob_vkallocator = blob_vkallocator;
@@ -225,16 +232,20 @@ int RealESRGAN::process(const ncnn::Mat& inimage, ncnn::Mat& outimage) const
             {
 #if _WIN32
                 in = ncnn::Mat::from_pixels(pixeldata + in_tile_y0 * w * channels, ncnn::Mat::PIXEL_BGR2RGB, w, (in_tile_y1 - in_tile_y0));
+                if(in.empty()) throw SrNativeError(-100,"input strip allocation failed; lower input MP threshold");
 #else
                 in = ncnn::Mat::from_pixels(pixeldata + in_tile_y0 * w * channels, ncnn::Mat::PIXEL_RGB, w, (in_tile_y1 - in_tile_y0));
+                if(in.empty()) throw SrNativeError(-100,"input strip allocation failed; lower input MP threshold");
 #endif
             }
             if (channels == 4)
             {
 #if _WIN32
                 in = ncnn::Mat::from_pixels(pixeldata + in_tile_y0 * w * channels, ncnn::Mat::PIXEL_BGRA2RGBA, w, (in_tile_y1 - in_tile_y0));
+                if(in.empty()) throw SrNativeError(-100,"input strip allocation failed; lower input MP threshold");
 #else
                 in = ncnn::Mat::from_pixels(pixeldata + in_tile_y0 * w * channels, ncnn::Mat::PIXEL_RGBA, w, (in_tile_y1 - in_tile_y0));
+                if(in.empty()) throw SrNativeError(-100,"input strip allocation failed; lower input MP threshold");
 #endif
             }
         }
@@ -248,7 +259,7 @@ int RealESRGAN::process(const ncnn::Mat& inimage, ncnn::Mat& outimage) const
 
             if (xtiles > 1)
             {
-                cmd.submit_and_wait();
+                srCheck(cmd.submit_and_wait(), "Vulkan submit");
                 cmd.reset();
             }
         }
@@ -259,15 +270,16 @@ int RealESRGAN::process(const ncnn::Mat& inimage, ncnn::Mat& outimage) const
         ncnn::VkMat out_gpu;
         if (opt.use_fp16_storage && opt.use_int8_storage)
         {
-            out_gpu.create(w * scale, (out_tile_y1 - out_tile_y0) * scale, (size_t)channels, 1, blob_vkallocator);
+            { out_gpu.create(w * scale, (out_tile_y1 - out_tile_y0) * scale, (size_t)channels, 1, blob_vkallocator); if(out_gpu.empty()) throw SrNativeError(-100,"tile/strip allocation failed; reduce tile size or input MP threshold"); }
         }
         else
         {
-            out_gpu.create(w * scale, (out_tile_y1 - out_tile_y0) * scale, channels, (size_t)4u, 1, blob_vkallocator);
+            { out_gpu.create(w * scale, (out_tile_y1 - out_tile_y0) * scale, channels, (size_t)4u, 1, blob_vkallocator); if(out_gpu.empty()) throw SrNativeError(-100,"tile/strip allocation failed; reduce tile size or input MP threshold"); }
         }
 
         for (int xi = 0; xi < xtiles; xi++)
         {
+            srTileCheckpoint();
             const int tile_w_nopad = std::min((xi + 1) * TILE_SIZE_X, w) - xi * TILE_SIZE_X;
 
             if (tta_mode)
@@ -282,18 +294,18 @@ int RealESRGAN::process(const ncnn::Mat& inimage, ncnn::Mat& outimage) const
                     int tile_y0 = yi * TILE_SIZE_Y - prepadding;
                     int tile_y1 = std::min((yi + 1) * TILE_SIZE_Y, h) + prepadding;
 
-                    in_tile_gpu[0].create(tile_x1 - tile_x0, tile_y1 - tile_y0, 3, in_out_tile_elemsize, 1, blob_vkallocator);
-                    in_tile_gpu[1].create(tile_x1 - tile_x0, tile_y1 - tile_y0, 3, in_out_tile_elemsize, 1, blob_vkallocator);
-                    in_tile_gpu[2].create(tile_x1 - tile_x0, tile_y1 - tile_y0, 3, in_out_tile_elemsize, 1, blob_vkallocator);
-                    in_tile_gpu[3].create(tile_x1 - tile_x0, tile_y1 - tile_y0, 3, in_out_tile_elemsize, 1, blob_vkallocator);
-                    in_tile_gpu[4].create(tile_y1 - tile_y0, tile_x1 - tile_x0, 3, in_out_tile_elemsize, 1, blob_vkallocator);
-                    in_tile_gpu[5].create(tile_y1 - tile_y0, tile_x1 - tile_x0, 3, in_out_tile_elemsize, 1, blob_vkallocator);
-                    in_tile_gpu[6].create(tile_y1 - tile_y0, tile_x1 - tile_x0, 3, in_out_tile_elemsize, 1, blob_vkallocator);
-                    in_tile_gpu[7].create(tile_y1 - tile_y0, tile_x1 - tile_x0, 3, in_out_tile_elemsize, 1, blob_vkallocator);
+                    { in_tile_gpu[0].create(tile_x1 - tile_x0, tile_y1 - tile_y0, 3, in_out_tile_elemsize, 1, blob_vkallocator); if(in_tile_gpu[0].empty()) throw SrNativeError(-100,"tile/strip allocation failed; reduce tile size or input MP threshold"); }
+                    { in_tile_gpu[1].create(tile_x1 - tile_x0, tile_y1 - tile_y0, 3, in_out_tile_elemsize, 1, blob_vkallocator); if(in_tile_gpu[1].empty()) throw SrNativeError(-100,"tile/strip allocation failed; reduce tile size or input MP threshold"); }
+                    { in_tile_gpu[2].create(tile_x1 - tile_x0, tile_y1 - tile_y0, 3, in_out_tile_elemsize, 1, blob_vkallocator); if(in_tile_gpu[2].empty()) throw SrNativeError(-100,"tile/strip allocation failed; reduce tile size or input MP threshold"); }
+                    { in_tile_gpu[3].create(tile_x1 - tile_x0, tile_y1 - tile_y0, 3, in_out_tile_elemsize, 1, blob_vkallocator); if(in_tile_gpu[3].empty()) throw SrNativeError(-100,"tile/strip allocation failed; reduce tile size or input MP threshold"); }
+                    { in_tile_gpu[4].create(tile_y1 - tile_y0, tile_x1 - tile_x0, 3, in_out_tile_elemsize, 1, blob_vkallocator); if(in_tile_gpu[4].empty()) throw SrNativeError(-100,"tile/strip allocation failed; reduce tile size or input MP threshold"); }
+                    { in_tile_gpu[5].create(tile_y1 - tile_y0, tile_x1 - tile_x0, 3, in_out_tile_elemsize, 1, blob_vkallocator); if(in_tile_gpu[5].empty()) throw SrNativeError(-100,"tile/strip allocation failed; reduce tile size or input MP threshold"); }
+                    { in_tile_gpu[6].create(tile_y1 - tile_y0, tile_x1 - tile_x0, 3, in_out_tile_elemsize, 1, blob_vkallocator); if(in_tile_gpu[6].empty()) throw SrNativeError(-100,"tile/strip allocation failed; reduce tile size or input MP threshold"); }
+                    { in_tile_gpu[7].create(tile_y1 - tile_y0, tile_x1 - tile_x0, 3, in_out_tile_elemsize, 1, blob_vkallocator); if(in_tile_gpu[7].empty()) throw SrNativeError(-100,"tile/strip allocation failed; reduce tile size or input MP threshold"); }
 
                     if (channels == 4)
                     {
-                        in_alpha_tile_gpu.create(tile_w_nopad, tile_h_nopad, 1, in_out_tile_elemsize, 1, blob_vkallocator);
+                        { in_alpha_tile_gpu.create(tile_w_nopad, tile_h_nopad, 1, in_out_tile_elemsize, 1, blob_vkallocator); if(in_alpha_tile_gpu.empty()) throw SrNativeError(-100,"tile/strip allocation failed; reduce tile size or input MP threshold"); }
                     }
 
                     std::vector<ncnn::VkMat> bindings(10);
@@ -341,12 +353,12 @@ int RealESRGAN::process(const ncnn::Mat& inimage, ncnn::Mat& outimage) const
                     ex.set_workspace_vkallocator(blob_vkallocator);
                     ex.set_staging_vkallocator(staging_vkallocator);
 
-                    ex.input("data", in_tile_gpu[ti]);
+                    srCheck(ex.input("data", in_tile_gpu[ti]), "network input/extract");
 
-                    ex.extract("output", out_tile_gpu[ti], cmd);
+                    srCheck(ex.extract("output", out_tile_gpu[ti], cmd), "network input/extract");
 
                     {
-                        cmd.submit_and_wait();
+                        srCheck(cmd.submit_and_wait(), "Vulkan submit");
                         cmd.reset();
                     }
                 }
@@ -421,11 +433,11 @@ int RealESRGAN::process(const ncnn::Mat& inimage, ncnn::Mat& outimage) const
                     int tile_y0 = yi * TILE_SIZE_Y - prepadding;
                     int tile_y1 = std::min((yi + 1) * TILE_SIZE_Y, h) + prepadding;
 
-                    in_tile_gpu.create(tile_x1 - tile_x0, tile_y1 - tile_y0, 3, in_out_tile_elemsize, 1, blob_vkallocator);
+                    { in_tile_gpu.create(tile_x1 - tile_x0, tile_y1 - tile_y0, 3, in_out_tile_elemsize, 1, blob_vkallocator); if(in_tile_gpu.empty()) throw SrNativeError(-100,"tile/strip allocation failed; reduce tile size or input MP threshold"); }
 
                     if (channels == 4)
                     {
-                        in_alpha_tile_gpu.create(tile_w_nopad, tile_h_nopad, 1, in_out_tile_elemsize, 1, blob_vkallocator);
+                        { in_alpha_tile_gpu.create(tile_w_nopad, tile_h_nopad, 1, in_out_tile_elemsize, 1, blob_vkallocator); if(in_alpha_tile_gpu.empty()) throw SrNativeError(-100,"tile/strip allocation failed; reduce tile size or input MP threshold"); }
                     }
 
                     std::vector<ncnn::VkMat> bindings(3);
@@ -465,9 +477,9 @@ int RealESRGAN::process(const ncnn::Mat& inimage, ncnn::Mat& outimage) const
                     ex.set_workspace_vkallocator(blob_vkallocator);
                     ex.set_staging_vkallocator(staging_vkallocator);
 
-                    ex.input("data", in_tile_gpu);
+                    srCheck(ex.input("data", in_tile_gpu), "network input/extract");
 
-                    ex.extract("output", out_tile_gpu, cmd);
+                    srCheck(ex.extract("output", out_tile_gpu, cmd), "network input/extract");
                 }
 
                 ncnn::VkMat out_alpha_tile_gpu;
@@ -524,7 +536,7 @@ int RealESRGAN::process(const ncnn::Mat& inimage, ncnn::Mat& outimage) const
 
             if (xtiles > 1)
             {
-                cmd.submit_and_wait();
+                srCheck(cmd.submit_and_wait(), "Vulkan submit");
                 cmd.reset();
             }
 
@@ -532,7 +544,7 @@ int RealESRGAN::process(const ncnn::Mat& inimage, ncnn::Mat& outimage) const
             // Without this, NCNN monopolizes the Vulkan queue and
             // the UI thread drops 50-80+ frames during SR processing.
             // 2ms is enough for HWUI to submit 1-2 draw commands.
-            std::this_thread::sleep_for(std::chrono::milliseconds(2));
+            // Throttling is applied by srTileCheckpoint().
         }
 
         // download
@@ -546,7 +558,7 @@ int RealESRGAN::process(const ncnn::Mat& inimage, ncnn::Mat& outimage) const
 
             cmd.record_clone(out_gpu, out, opt);
 
-            cmd.submit_and_wait();
+            srCheck(cmd.submit_and_wait(), "Vulkan submit");
 
             if (!(opt.use_fp16_storage && opt.use_int8_storage))
             {
@@ -570,8 +582,7 @@ int RealESRGAN::process(const ncnn::Mat& inimage, ncnn::Mat& outimage) const
         }
     }
 
-    net.vulkan_device()->reclaim_blob_allocator(blob_vkallocator);
-    net.vulkan_device()->reclaim_staging_allocator(staging_vkallocator);
+
 
     return 0;
 }

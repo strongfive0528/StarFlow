@@ -11,6 +11,14 @@ import com.moe.starflow.manga.engine.*
 import com.moe.starflow.manga.types.*
 import com.moe.starflow.manga.config.*
 import com.moe.starflow.utils.LogCollector
+import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.Job
+import kotlinx.coroutines.SupervisorJob
+import kotlinx.coroutines.cancel
+import kotlinx.coroutines.delay
+import kotlinx.coroutines.isActive
+import kotlinx.coroutines.launch
 
 /**
  * OCR 引擎互斥锁。
@@ -114,6 +122,21 @@ object OcrLock {
     @Synchronized
     fun acquire(): Long {
         maybeRecoverStale()
+        return acquireLocked()
+    }
+
+    /**
+     * Acquire only if idle, without stale recovery. Resource teardown must never evict a possibly-live
+     * OCR holder just because that holder has not reached its next heartbeat yet.
+     */
+    @Synchronized
+    private fun acquireIfIdle(): Long {
+        if (isRunning) return 0L
+        return acquireLocked()
+    }
+
+    /** Must be called while synchronized on this object. */
+    private fun acquireLocked(): Long {
         if (isRunning) return 0L
         isRunning = true
         val now = clockNs()
@@ -121,6 +144,39 @@ object OcrLock {
         heartbeatNs = now
         ownerToken = nextToken.incrementAndGet()
         return ownerToken
+    }
+
+    /**
+     * Run a short engine lifecycle operation only when the shared OCR/SR engine lock is truly idle.
+     * Unlike [acquire], this does not invoke stale recovery: if work appears active, callers should
+     * leave the process-wide engine alive rather than risk closing a session in use.
+     *
+     * @return false when another OCR/SR operation owns the lock.
+     */
+    fun tryRunExclusive(block: () -> Unit): Boolean {
+        val token = acquireIfIdle()
+        if (token == 0L) return false
+        try {
+            block()
+            return true
+        } finally {
+            release(token)
+        }
+    }
+
+    /** Start a detached heartbeat ticker for a long OCR/SR critical section. Cancel before release. */
+    fun startHeartbeat(token: Long, intervalMs: Long = 5_000L): Job {
+        val heartbeatScope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
+        return heartbeatScope.launch {
+            try {
+                while (isActive) {
+                    heartbeat(token)
+                    delay(intervalMs)
+                }
+            } finally {
+                heartbeatScope.cancel()
+            }
+        }
     }
 
     @Synchronized

@@ -63,6 +63,7 @@ import com.moe.starflow.manga.engine.MangaOcrBridge
 import com.moe.starflow.manga.engine.OCRTextRecognizer
 import com.moe.starflow.manga.engine.MangaOcrModelFiles
 import com.moe.starflow.manga.engine.MangaOcrRecognizer
+import com.moe.starflow.manga.OcrLock
 import com.moe.starflow.manga.config.OcrEngineGroup
 import com.moe.starflow.manga.engine.PPOcrModelFiles
 import com.moe.starflow.manga.types.TextDirection
@@ -1188,25 +1189,30 @@ class FloatingBallService : LifecycleService() {
     }
 
     private fun releaseEngine(engine: Int) {
-        when (engine) {
-            ENGINE_V5 -> {
-                if (PPOcrV5Engine.isInitialized) {
-                    LogCollector.d(TAG, "释放 PP-OCRv5")
-                    PPOcrV5Engine.release()
+        val released = OcrLock.tryRunExclusive {
+            when (engine) {
+                ENGINE_V5 -> {
+                    if (PPOcrV5Engine.isInitialized) {
+                        LogCollector.d(TAG, "释放 PP-OCRv5")
+                        PPOcrV5Engine.release()
+                    }
+                }
+                ENGINE_MANGA -> {
+                    if (MangaOcrBridge.isAvailable()) {
+                        LogCollector.d(TAG, "释放 manga-ocr")
+                        MangaOcrRecognizer.release()
+                    }
+                }
+                ENGINE_V6 -> {
+                    if (PPOcrV6Engine.isInitialized) {
+                        LogCollector.d(TAG, "释放 PP-OCRv6")
+                        PPOcrV6Engine.release()
+                    }
                 }
             }
-            ENGINE_MANGA -> {
-                if (MangaOcrBridge.isAvailable()) {
-                    LogCollector.d(TAG, "释放 manga-ocr")
-                    MangaOcrRecognizer.release()
-                }
-            }
-            ENGINE_V6 -> {
-                if (PPOcrV6Engine.isInitialized) {
-                    LogCollector.d(TAG, "释放 PP-OCRv6")
-                    PPOcrV6Engine.release()
-                }
-            }
+        }
+        if (!released) {
+            LogCollector.w(TAG, "跳过释放 OCR 引擎：OCR/超分仍在使用共享引擎")
         }
     }
 

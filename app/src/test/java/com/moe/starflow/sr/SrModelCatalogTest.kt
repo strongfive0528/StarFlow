@@ -3,6 +3,7 @@ package com.moe.starflow.sr
 import com.moe.starflow.download.ModelKey
 import org.json.JSONObject
 import org.junit.Assert.assertEquals
+import org.junit.Assert.assertNotEquals
 import org.junit.Assert.assertFalse
 import org.junit.Assert.assertTrue
 import org.junit.Test
@@ -80,11 +81,24 @@ class SrModelCatalogTest {
             val family = entry.optString("family", "")
             assertTrue(
                 "$key 的 family 必须是 ncnn 四族之一，实际是 '$family'",
-                family in setOf("waifu2x", "srmd", "realcugan", "realesrgan"),
+                family in setOf("waifu2x", "srmd", "realcugan", "realesrgan", "generic"),
             )
             assertTrue("$key 缺 scale", entry.optInt("scale", 0) in setOf(2, 3, 4))
             assertTrue("$key 缺 prepad", entry.optInt("prepad", 0) > 0)
+            if (family == "generic") {
+                // 通用 ncnn 模型（P4 加的入口）：blob 名必须显式给出 —— 默认的 Input1/Eltwise4 是
+                // waifu2x 家族的，通用模型（SPAN/sudo/W2xEX…）不写就必然加载/推理失败。
+                assertTrue("$key 是 generic 却没写 blobIn", entry.optString("blobIn", "").isNotEmpty())
+                assertTrue("$key 是 generic 却没写 blobOut", entry.optString("blobOut", "").isNotEmpty())
+            }
             assertTrue("$key 缺 browser_url", entry.optString("browser_url", "").startsWith("https://"))
+            // P1（TachiyomiX 同款选项）：算力精度必须逐条写明，缺字段虽然解析时默认 true，
+            // 但"清单里看不见"就等于没人知道这档跑的是 FP16 还是 FP32 —— 显式声明。
+            assertTrue("$key 缺 fp16Arithmetic（清单必须显式声明算力精度）", entry.has("fp16Arithmetic"))
+            assertTrue(
+                "$key 的 fp16Arithmetic 必须是布尔（写成 \"true\" 字符串会在解析时静默变默认值）",
+                entry.get("fp16Arithmetic") is Boolean,
+            )
 
             val files = entry.getJSONArray("files")
             assertEquals("$key 必须是 .param + .bin 两个文件", 2, files.length())
@@ -108,50 +122,59 @@ class SrModelCatalogTest {
     }
 
     /**
-     * Real-CUGAN **Pro** 三档（2026-10 从 TachiyomiX 模型包对照引入）。
+     * **参照项目（mihon_img_upscale）的模型集必须逐档在位**（2026-10-10 整套换模型）。
      *
-     * 这里把 **PC 端实测过的字节数与 MD5** 钉死：三档的 .param 是同一个架构文件
-     * （`5c178928…`），只有 .bin 不同。改清单时若对不上，下载校验会把文件判成损坏并反复重下。
+     * 换模型的动机是"完全照他们的模型与参数来"，所以这条测试盯的是**跨来源一致**：
+     * 枚举 == JSON == `SrModelManager.allKeys` == 11 档，且同一 `files/sr/` 目录里
+     * **没有任何两个档位共用同一个文件名**（共用 = 后下载的覆盖先下载的，静默换模型）。
+     * ⚠️ 不许写死"第 N 档叫什么以外的数量"以外的假设 —— 档位增减只改这里一处清单。
      */
     @Test
-    fun realCuganProTiersAreRealAndDistinctFromSe() {
+    fun referenceProjectModelsArePresentAndDistinct() {
         val byKey = entries()
-        val proKeys = listOf(
-            ModelKey.SR_REALCUGAN_PRO_NODENOISE,
-            ModelKey.SR_REALCUGAN_PRO_CONSERVATIVE,
-            ModelKey.SR_REALCUGAN_PRO_DENOISE3X,
+        val familyOf = mapOf(
+            ModelKey.SR_REALCUGAN_SE to "realcugan",
+            ModelKey.SR_REALCUGAN_PRO to "realcugan",
+            ModelKey.SR_REALCUGAN_NOSE to "generic",
+            ModelKey.SR_WAIFU2X_CUNET to "waifu2x",
+            ModelKey.SR_WAIFU2X_FAST to "waifu2x",
+            ModelKey.SR_REALESRGAN to "realesrgan",
+            ModelKey.SR_W2XEX_UNIVERSAL_FAST to "generic",
+            ModelKey.SR_W2XEX_OMNI_MINI_V2 to "generic",
+            ModelKey.SR_W2XEX_PHOTO_SMALL to "generic",
+            ModelKey.SR_SUDO_ULTRA_COMPACT to "generic",
+            ModelKey.SR_SPAN_NOMOSUNI to "generic",
         )
-        val expectedBinMd5 = mapOf(
-            ModelKey.SR_REALCUGAN_PRO_NODENOISE to "04ce2955f98775e57e664e06c2b4d773",
-            ModelKey.SR_REALCUGAN_PRO_CONSERVATIVE to "1f6824820c04bd61a8ddc9c0b4ef4f68",
-            ModelKey.SR_REALCUGAN_PRO_DENOISE3X to "de65a912b80fca965f7f33656e49b41b",
+        assertEquals(
+            "超分档位必须正好是参照项目那 11 档（枚举 == allKeys）",
+            familyOf.keys.map { it.name }.toSet(),
+            srKeys.map { it.name }.toSet(),
         )
-        val seFiles = mutableSetOf<String>()
-        for (key in listOf(
-            ModelKey.SR_REALCUGAN_NODENOISE,
-            ModelKey.SR_REALCUGAN_CONSERVATIVE,
-            ModelKey.SR_REALCUGAN_DENOISE3X,
-        )) {
-            val files = byKey.getValue(key.name).getJSONArray("files")
-            for (i in 0 until files.length()) seFiles += files.getJSONObject(i).getString("file_name")
-        }
-
-        for (key in proKeys) {
-            assertTrue("$key 必须在 allKeys 里", key in srKeys)
+        val bins = mutableMapOf<String, String>()
+        for ((key, family) in familyOf) {
             val entry = byKey.getValue(key.name)
-            assertEquals("$key 必须还是 realcugan 族（同族同接口，只换权重）", "realcugan", entry.getString("family"))
-            assertEquals("$key 必须是 2x", 2, entry.getInt("scale"))
-            assertEquals("$key 的 prepad 与 SE 一致（18）", 18, entry.getInt("prepad"))
-
+            assertEquals("$key 的引擎族", family, entry.getString("family"))
             val files = entry.getJSONArray("files")
             val names = (0 until files.length()).map { files.getJSONObject(it).getString("file_name") }
+            assertEquals("$key 必须恰好两个文件（param + bin）", 2, names.size)
+            assertTrue("$key 必须带 .param", names.any { it.endsWith(".param") })
+            assertTrue("$key 必须带 .bin", names.any { it.endsWith(".bin") })
             for (n in names) {
-                assertFalse("$key 的 $n 与 Real-CUGAN SE 的文件同名（会互相覆盖）", n in seFiles)
+                val prev = bins.put(n, key.name)
+                assertTrue("$n 同时属于 $prev 与 $key —— 同一目录会互相覆盖", prev == null)
             }
-            val bin = (0 until files.length())
-                .map { files.getJSONObject(it) }
-                .first { it.getString("file_name").endsWith(".bin") }
-            assertEquals("$key 的权重 md5 与 PC 端实测值不符", expectedBinMd5.getValue(key), bin.getString("checksum"))
         }
+        // 参数逐档核对：Nose 走通用入口、SPAN padding 24、W2xEX/sudo padding 10（都是参照项目的值）
+        assertEquals(18, byKey.getValue(ModelKey.SR_REALCUGAN_NOSE.name).getInt("prepad"))
+        assertEquals(24, byKey.getValue(ModelKey.SR_SPAN_NOMOSUNI.name).getInt("prepad"))
+        for (k in listOf(ModelKey.SR_W2XEX_UNIVERSAL_FAST, ModelKey.SR_W2XEX_OMNI_MINI_V2,
+                         ModelKey.SR_W2XEX_PHOTO_SMALL, ModelKey.SR_SUDO_ULTRA_COMPACT)) {
+            assertEquals("$k 的 padding 必须是参照项目的 10", 10, byKey.getValue(k.name).getInt("prepad"))
+        }
+        // 缓存指纹：同模型不同 tile 必须不同（否则"改了设置画面不变"）
+        assertNotEquals(
+            SrOptions().fingerprint(ModelKey.SR_REALCUGAN_SE.name, 2, 0),
+            SrOptions(tileSize = 64).fingerprint(ModelKey.SR_REALCUGAN_SE.name, 2, 0),
+        )
     }
 }

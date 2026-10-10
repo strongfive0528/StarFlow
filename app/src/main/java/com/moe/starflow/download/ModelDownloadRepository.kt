@@ -64,6 +64,7 @@ class ModelDownloadRepository private constructor(private val context: Context) 
      * 用于替代旧的 Download_NLLB 布尔标记（新下载架构不再写该标记）。
      */
     fun isFullyDownloaded(modelKey: ModelKey): Boolean {
+        if(modelKey in com.moe.starflow.sr.SrModelManager.allKeys)return com.moe.starflow.sr.SrModelManager.isDownloaded(context,modelKey)
         val info = getModelInfo(modelKey) ?: return false
         val baseDir = baseDirFor(modelKey)
         return info.files.all { fileInfo ->
@@ -89,13 +90,15 @@ class ModelDownloadRepository private constructor(private val context: Context) 
      * 用于页面进入时识别「目录里已有文件但状态还是 Idle/Partial」的模型：
      * 例如下载完成后状态未更新、或文件由外部放入。Running/Paused/Done 保持原样不打断。
      */
-    suspend fun refreshFromDisk(modelKey: ModelKey) = updateState(modelKey) {
+    suspend fun refreshFromDisk(modelKey: ModelKey) = withContext(Dispatchers.IO) { updateState(modelKey) {
         val current = stateMap[modelKey]
-        if (current is DownloadState.Running || current is DownloadState.Paused || current is DownloadState.Done) {
+        if (current is DownloadState.Running || current is DownloadState.Paused) {
             current
         } else {
             computeStateFromDisk(modelKey)
         }
+    }
+
     }
 
     /**
@@ -114,7 +117,12 @@ class ModelDownloadRepository private constructor(private val context: Context) 
                 val t = File(baseDir, fileInfo.fileName)
                 t.exists() && t.length() > 0
             }
-            if (allComplete) return DownloadState.Done
+            if (allComplete) {
+                if (modelKey !in com.moe.starflow.sr.SrModelManager.allKeys ||
+                    com.moe.starflow.sr.SrModelManager.validate(context, modelKey) == null) return DownloadState.Done
+                return DownloadState.Partial(0L, files.sumOf { it.fileSize }, 0, files.size,
+                    com.moe.starflow.sr.SrModelManager.validationError(context, modelKey) ?: "Model checksum failed", 0L, 0L)
+            }
 
             // 没有任何文件被下载（无 target 也无 .part）→ Idle
             val anyPartial = files.any { fileInfo ->
@@ -189,7 +197,9 @@ class ModelDownloadRepository private constructor(private val context: Context) 
         )
     }
 
-    suspend fun markDone(modelKey: ModelKey) = updateState(modelKey) { DownloadState.Done }
+    suspend fun markDone(modelKey: ModelKey) = withContext(Dispatchers.IO) {
+        updateState(modelKey) { if(modelKey in com.moe.starflow.sr.SrModelManager.allKeys) computeStateFromDisk(modelKey) else DownloadState.Done }
+    }
 
     private data class FileProgress(
         val downloadedBytes: Long,
@@ -370,7 +380,14 @@ class ModelDownloadRepository private constructor(private val context: Context) 
                 srFamily = modelObj.optString("family", "").ifEmpty { null },
                 srScale = modelObj.optInt("scale", 0),
                 srNoise = modelObj.optInt("noise", 0),
-                srPrepad = modelObj.optInt("prepad", 0)
+                srPrepad = modelObj.optInt("prepad", 0),
+                // 默认 true（对齐 TachiyomiX 模型包的 fp16Arithmetic 默认）：缺字段 = 用 FP16 算术。
+                // 只有在模型/机型上实测出画质问题才逐条写 false。
+                srFp16Arithmetic = modelObj.optBoolean("fp16Arithmetic", true),
+                srBlobIn = modelObj.optString("blobIn", ""),
+                srBlobOut = modelObj.optString("blobOut", ""),
+                srBgr = modelObj.optBoolean("bgr", false),
+                srSyncGap = modelObj.optInt("syncGap", 3)
             ))
         }
         modelListCached.value = models
@@ -451,19 +468,15 @@ class ModelDownloadRepository private constructor(private val context: Context) 
         ModelKey.PP_OCR_V5_DET, ModelKey.PP_OCR_V5_REC_ZH,
         ModelKey.PP_OCR_V5_REC_EN, ModelKey.PP_OCR_V5_REC_KO,
         ModelKey.PP_OCR_V5_REC_RU -> File(context.getExternalFilesDir(null), "ppocrv5")
+        ModelKey.SR_REALCUGAN_SE, ModelKey.SR_REALCUGAN_PRO, ModelKey.SR_REALCUGAN_NOSE, ModelKey.SR_WAIFU2X_CUNET,
+        ModelKey.SR_WAIFU2X_FAST, ModelKey.SR_REALESRGAN, ModelKey.SR_W2XEX_UNIVERSAL_FAST,
+        ModelKey.SR_W2XEX_OMNI_MINI_V2, ModelKey.SR_W2XEX_PHOTO_SMALL, ModelKey.SR_SUDO_ULTRA_COMPACT,
+        ModelKey.SR_SPAN_NOMOSUNI ->
+            File(context.getExternalFilesDir(null), "sr")
         // 超分模型统一放一个目录；文件名自带族/档位前缀，不会重名
         // （⚠️ waifu2x 的 cunet 与 upconv_7 上游**同名**，清单里的 file_name 必须各自改名）
         // ⚠️ 5 族 13 档（upconv_7 有动漫/照片两套权重，各两档），别漏也别重复
         //（这里曾把 SR_W2X_UP7_PHOTO_M1 写了两次、看起来像"少了一档"）
-        ModelKey.SR_W2X_UP7_ANIME_M1, ModelKey.SR_W2X_UP7_ANIME_N2,
-        ModelKey.SR_W2X_UP7_PHOTO_M1, ModelKey.SR_W2X_UP7_PHOTO_N2,
-        ModelKey.SR_W2X_CUNET_M1, ModelKey.SR_W2X_CUNET_N1, ModelKey.SR_W2X_CUNET_N2,
-        ModelKey.SR_SRMD_X2, ModelKey.SR_SRMD_NF_X2,
-        ModelKey.SR_REALCUGAN_NODENOISE, ModelKey.SR_REALCUGAN_CONSERVATIVE,
-        ModelKey.SR_REALCUGAN_DENOISE3X,
-        ModelKey.SR_REALCUGAN_PRO_NODENOISE, ModelKey.SR_REALCUGAN_PRO_CONSERVATIVE,
-        ModelKey.SR_REALCUGAN_PRO_DENOISE3X,
-        ModelKey.SR_REALESRGAN_ANIME6B -> File(context.getExternalFilesDir(null), "sr")
     }
 
     /** 返回某模型的目标文件（未下载时为期望路径；仅用于已完整下载的模型）。 */

@@ -174,10 +174,17 @@ class SrReaderWiringTest {
         //    行根必须在同时包住「标题/选中圈」与「下载行」的那一层上。
         val layout = read("src/main/res/layout/fragment_model_management.xml")
         for (base in listOf(
-            "sr_w2x_anime_m1", "sr_w2x_anime_n2", "sr_w2x_photo_m1", "sr_w2x_photo_n2", "sr_cunet_m1",
-            "sr_cunet_n1", "sr_cunet_n2", "sr_srmd_x2", "sr_srmd_nf_x2", "sr_cugan_dn",
-            "sr_cugan_cons", "sr_cugan_d3", "sr_cugan_pro_dn", "sr_cugan_pro_cons",
-            "sr_cugan_pro_d3", "sr_rsrgan_a6b"
+            "sr_cugan_se",
+            "sr_cugan_pro",
+            "sr_cugan_nose",
+            "sr_w2x_cunet",
+            "sr_w2x_fast",
+            "sr_esrgan_av3",
+            "sr_w2xex_uf",
+            "sr_w2xex_omni",
+            "sr_w2xex_photo",
+            "sr_sudo_uc",
+            "sr_span_uni"
         )) {
             val wrapper = layout.indexOf("android:id=\"@+id/${base}_row\"")
             val radio = layout.indexOf("android:id=\"@+id/${base}_radio\"")
@@ -323,8 +330,7 @@ class SrReaderWiringTest {
     /**
      * **产物原样落盘**：大图预处理只压**输入**，绝不缩**产物**。
      *
-     * 用户口径：「短边超过 1080 的**压缩尺寸后给超分的图片**，体积不能超过原来的像素和大小」
-     * （约束的是**输入**）+「**超分后肯定比原图大啊**」。
+     * 超分产物使用模型原始输出尺寸；输入缩放只为满足输入像素阈值，不再对照原图尺寸拒绝产物。
      * 产物的空间由两道**既有**的闸管住：引擎自己的输出上限（10MP）+ `SrStore` 的总容量 LRU（512MB）。
      * ⚠️ 2026-10 曾在这里加过「产物 ≤ 2× 原图像素」的单页预算，结果是自相矛盾的：
      * 小图（2x = 4 倍）被砍半、大图（压缩后 2x = 1.17 倍）一刀不砍 —— 砍的全是最需要放大的
@@ -519,27 +525,17 @@ class SrReaderWiringTest {
         )
     }
 
-    /**
-     * **「超分产物能不能用」的判据只能有一处**（2026-10 真机反馈「超分显示完成但没作用」的守卫）。
-     *
-     * 产出侧（`SrProcessor`）与显示侧（`ReaderTranslationController.srBaseFor`）判同一件事：
-     * 产物是否**比原图大**。各写一份的后果是**静默**的 —— 产出侧存了、显示侧丢弃，
-     * 记录写「完成」而画面一直是原图。所以这里机械校验：两边都调
-     * `SrDisplayBase.isUsableBase`，且显示侧那份内联阈值（`scale <= 1.001f`）已消失。
-     */
+    /** 产物可以小于原图；产出侧不因尺寸拒绝，显示侧只验证用于比例计算的尺寸有效。 */
     @Test
-    fun bothSidesShareTheSameBaseUsabilityRule() {
+    fun smallerSrOutputIsSavedAndDisplayed() {
         val ctl = controller()
         val processor = read("src/main/java/com/moe/starflow/sr/SrProcessor.kt")
         assertTrue(
-            "显示侧必须用共享判据 SrDisplayBase.isUsableBase",
+            "显示侧只做底图尺寸有效性检查",
             ctl.contains("SrDisplayBase.isUsableBase("),
         )
-        assertTrue(
-            "产出侧必须用同一个判据（否则会造出「完成但画面没变」的幽灵记录）",
-            processor.contains("SrDisplayBase.isUsableBase("),
-        )
-        assertFalse("不许再内联 1.001f 这类私有阈值", ctl.contains("scale <= 1.001f"))
+        assertFalse("产出侧不得因产物小于原图而拒绝", processor.contains("NOT_LARGER_THAN_SOURCE"))
+        assertFalse("显示侧不得按原图与产物大小回退", ctl.contains("NOT_LARGER_THAN_SOURCE"))
     }
 
     /**
@@ -563,6 +559,56 @@ class SrReaderWiringTest {
         assertFalse(
             "renderPage 里不许再直接 renderScale = renderScaleFor(...)",
             ctl.contains("renderScale = renderScaleFor(original.width),"),
+        )
+    }
+
+    /**
+     * ⚠️⚠️ **超分绝不会因为"翻页"而自动往后跑**（2026-10-05 真机事故，用户口径）。
+     *
+     * 现场：**点一次阅读器的超分按钮**，它就自己一页页往后超下去，"完全无法关闭" ——
+     * 退出阅读器、打开面板都停不掉。根因是"翻页 → 当前页 ± N 排进超分队列"这条预加载线：
+     * 手动超分完成 → `onBaseChanged` → 上屏重绑 → 又一次翻页回调 → 再排一批……
+     * 而**失败页永远不会变成"已经超好了"**，于是同一批页被无限重跑。
+     *
+     * 用户口径（逐字）：
+     * > 「阅读器的超分按钮应该是只对当前页生效才对。自动向后超分只存在于开启'翻译时自动超分'
+     * >   的情况下使用自动翻译或者增量翻译，或者是启动了'超分本章'。」
+     *
+     * 所以这里把**否定面**钉死（比"某行代码存在"更重要）：
+     * 1. `onCurrentPageChanged` 里一个超分动作都不许有；
+     * 2. `SrEnhanceQueue`（预加载队列的实现）在**生产代码里零引用** —— 它一旦被谁接回去，
+     *    这条事故就会原地复活；
+     * 3. 右下角那个按钮只跑"点击那一刻的页"，不许排任何后续页。
+     */
+    @Test
+    fun pageTurnsAndTheManualButtonNeverScheduleUpscaling() {
+        val ctl = controller()
+        val onPageChanged = ctl.substringAfter("fun onCurrentPageChanged()")
+            .substringBefore("private fun restartQueue")
+        assertFalse(
+            "翻页路径里不许出现任何超分动作（预加载队列就是这条事故的根因）",
+            onPageChanged.contains("Sr"),
+        )
+
+        // 生产代码（src/main/java）里不许有**真的用到** SrEnhanceQueue 的地方 ——
+        // ⚠️ 只查"真引用"（构造/类型/成员访问）：注释里提它的名字是正常的（文档要解释这段历史）。
+        val usageMarks = listOf("SrEnhanceQueue(", ": SrEnhanceQueue", "SrEnhanceQueue.")
+        val offenders = File("src/main/java").walkTopDown()
+            .filter { it.isFile && it.extension == "kt" && it.name != "SrEnhanceQueue.kt" }
+            .filter { f -> f.readText().let { t -> usageMarks.any { t.contains(it) } } }
+            .map { it.name }
+            .toList()
+        assertTrue(
+            "SrEnhanceQueue 必须零生产调用点（预加载挂到翻页上 = 超分关不掉），实际引用：$offenders",
+            offenders.isEmpty(),
+        )
+
+        val onButton = activity().substringAfter("private fun onSrEnhanceClicked()")
+            .substringBefore("private fun onSrToggleClicked")
+        assertTrue("手动按钮只对点击那一刻的那一页生效", onButton.contains("controller.onSrButtonClicked(page)"))
+        assertFalse(
+            "手动按钮不许牵动翻页/队列（否则又变成「点一下就一直超」）",
+            onButton.contains("onCurrentPageChanged") || onButton.contains("SrEnhanceQueue"),
         )
     }
 }

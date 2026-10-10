@@ -33,10 +33,22 @@ class MangaEngineManager(
 ) {
     private val TAG = "MangaEngineManager"
 
+    /**
+     * OCR engines are process-wide singletons shared with the reader and super-resolution pipeline.
+     * A service may release one only when the global engine lock is idle; otherwise keep it cached.
+     */
+    private fun releaseSharedEngine(name: String, release: () -> Unit) {
+        if (!OcrLock.tryRunExclusive(release)) {
+            LogCollector.w(TAG, "跳过释放 $name：OCR/超分仍在使用共享引擎")
+        }
+    }
+
     fun releaseMangaOcr() {
         try {
-            LogCollector.d(TAG, "releaseMangaOcr: 释放 manga-ocr 资源")
-            MangaOcrRecognizer.release()
+            releaseSharedEngine("manga-ocr") {
+                LogCollector.d(TAG, "releaseMangaOcr: 释放 manga-ocr 资源")
+                MangaOcrRecognizer.release()
+            }
         } catch (e: Exception) {
             LogCollector.e(TAG, "releaseMangaOcr: 释放失败", e)
         }
@@ -80,8 +92,10 @@ class MangaEngineManager(
 
     fun releaseRTDetrV2() {
         try {
-            LogCollector.d(TAG, "releaseRTDetrV2: 释放 RT-DETR-V2 资源")
-            ComicBubbleDetector.release()
+            releaseSharedEngine("RT-DETR-V2") {
+                LogCollector.d(TAG, "releaseRTDetrV2: 释放 RT-DETR-V2 资源")
+                ComicBubbleDetector.release()
+            }
         } catch (e: Exception) {
             LogCollector.e(TAG, "releaseRTDetrV2: 释放失败", e)
         }
@@ -119,8 +133,10 @@ class MangaEngineManager(
 
     fun releasePPOcrV5() {
         try {
-            LogCollector.d(TAG, "releasePPOcrV5: 释放 PP-OCRv5 资源")
-            PPOcrV5Engine.release()
+            releaseSharedEngine("PP-OCRv5") {
+                LogCollector.d(TAG, "releasePPOcrV5: 释放 PP-OCRv5 资源")
+                PPOcrV5Engine.release()
+            }
         } catch (e: Exception) {
             LogCollector.e(TAG, "releasePPOcrV5: 释放失败", e)
         }
@@ -158,8 +174,10 @@ class MangaEngineManager(
 
     fun releasePPOcrV6() {
         try {
-            LogCollector.d(TAG, "releasePPOcrV6: 释放 PP-OCRv6 资源")
-            PPOcrV6Engine.release()
+            releaseSharedEngine("PP-OCRv6") {
+                LogCollector.d(TAG, "releasePPOcrV6: 释放 PP-OCRv6 资源")
+                PPOcrV6Engine.release()
+            }
         } catch (e: Exception) {
             LogCollector.e(TAG, "releasePPOcrV6: 释放失败", e)
         }

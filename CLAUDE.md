@@ -180,7 +180,7 @@ adb devices
 - 游戏/视频新截图安全优先：先 OCR，再用 OCR 文本缓存命中；不要用不可靠的截图相似度直接套旧译文。游戏 OCR-only 历史仍保持查看/复制；漫画 OCR-only 历史进入管理视图并复用“重新翻译”入口。
 - OCR-only 游戏历史不能用破坏性的 `refreshGameCache` 删除已有译文；已有译文时只更新处理状态并保留译文载荷。
 
-- `sr/` — **图片超分**（feature/super-resolution）：`SrProcessor`（唯一执行入口：等锁 → 大图压缩 → 推理 → 落盘 → 写记录）/`SrDownscale`（大图预处理：短边 1080 + 引擎输入上限两个约束一起解）/`SuperResolutionEngines`（门面：选引擎 / 失败降级 / `resolveSteps`）/`NcnnSrEngine`（ncnn+Vulkan，主力）/`AnimeJaNaiEngine`（ONNX CPU，当前不可达）/`anime4k/`（GLES3 shader，不放大）/`SrStore`（webp + 标记的落盘）/`SrModelManager`/`SrSettings`/`SrDisplayBase`；原生在 **`:sr` 模块**（ncnn+Vulkan，源码自编）。详见 `sr/CLAUDE.md`。
+- `sr/` — **图片超分**（feature/sr-pipeline-v2）：`SrProcessor`（唯一执行入口：等锁 → 大图压缩 → 推理 → 落盘 → 写记录）/`SrDownscale`（仅按用户 MP 阈值等比压缩，默认 1.5MP，0 不压缩）/`SuperResolutionEngines`（门面：选引擎 / 失败降级 / `resolveSteps`）/`NcnnSrEngine`（ncnn+Vulkan，主力）/`anime4k/`（GLES3 shader，不放大）/`SrStore`（webp + 标记的落盘）/`SrModelManager`/`SrSettings`/`SrDisplayBase`；原生在 **`:sr` 模块**（ncnn+Vulkan，源码自编）。详见 `sr/CLAUDE.md`。
 - `novel/` — 小说导入 & 阅读（feature/novel-text-import）：`parser/`（格式判定与解析：`NovelParsers` 分发、`TxtParser`/`TxtChapterSplitter` 用**字符区间**定位章节、`EpubParser`、`ZipHtmlParser`/`HtmlParser`/`HtmlTextExtractor`、**`ZipImages`（epub/zip 内嵌插图：相对地址解析 + 百分号转义 + SVG 包装往里找一层 + `data:` + 单章额度）**、`FolderNovelParser`、`TextEncoding` 解 GBK/Big5）、`model/`+`data/`（`NovelFormat` 判定、`NovelImporter`/`NovelImportManager`/`NovelStore`/`NovelStorageDir`）、`shelf/`（`NovelShelfFragment`，宿主在 `mangaimport/ImportMangaFragment`）、`reader/`（`NovelReaderActivity` + `NovelChapterRepository`（含 epub 插图解出与落盘）+ `NovelPaginator` + `NovelTextRenderer`/`NovelPageView`/`NovelScrollAdapter`/**`NovelImage`+`NovelImageMetrics`/`NovelImageStore`（插图尺寸口径唯一一份 + 懒解码缓存）**/`NovelTocDialog`/`NovelPanelSheet`/`NovelPanelStyle`）、`translate/`（`NovelParagraphSplitter`/`NovelTranslationBatch`/`NovelTranslationEngine`/`NovelChapterTranslator`/`NovelTranslationQueue`）。详见 `novel/CLAUDE.md`。
 
 **翻译 API 实现** (`app/src/main/java/translationapi/`):
@@ -357,8 +357,9 @@ suspend fun renderOverlay(
 
 游戏/漫画模式独立配置（`Mode.Game` / `Mode.Comic`），各有 4 套 mipmap。`MangaFloatingService` 在翻译流程入口设 `Processing`，非分批路径在调翻译 API 前切 `Translating`，分批路径在第一批翻译开始时切 `Translating`（保持到全部完成）。`finalizeIncremental` 结束后切 `Completed`。
 
-**当前 DB 版本 20**（迁移链一路到 `MIGRATION_19_20`，见 `data/TranslationHistoryDatabase.kt`）。
+**当前 DB 版本 23**（迁移链一路到 `MIGRATION_22_23`，见 `data/TranslationHistoryDatabase.kt`）。
 v19→v20 新增 `translation_history.processing_state`（0=已翻译，1=OCR-only，2=失败保留 OCR），旧记录按载荷推断。
+v22→v23 增加超分执行参数与稳定源页键；保留 v21→v22 的小说 imagePayload 迁移。
 v18→v19 新增**超分逐页记录表** `imported_page_sr`（纯新增幂等迁移，详见 `data/CLAUDE.md`）。
 ⚠️ 真值就是 `@Database(...)` 里的 `version` —— **本行已经落后过两次**（17→18、18→19），
 改表之后顺手对一眼，别照着文档里的数字推算下一个迁移号。

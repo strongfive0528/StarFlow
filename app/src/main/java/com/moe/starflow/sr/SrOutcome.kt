@@ -35,30 +35,30 @@ enum class SrFailReason(@StringRes val messageRes: Int) {
      */
     NOT_UPSCALED(R.string.sr_fail_not_upscaled),
 
-    /**
-     * 产物**不比原图大** → 不成其为"更好的底图"，不落盘。
-     *
-     * 与 [NOT_UPSCALED] 的区别：那条是"引擎压根没放大"（只跑了 Anime4K 的 1x）；
-     * 这条是"放大了，但因为喂进去的图被压过，产物仍然不比原图宽"。
-     *
-     * 典型场景：**300 DPI 的 PDF 页**（A4 = 2480×3508）—— 输入被压到短边 1080 后 2× 只有 2160px，
-     * 比原图 2480px **窄**。以前这种产物照落盘，而显示侧 `srBaseFor` 会丢弃它 →
-     * 面板写着「完成」、画面却一直是原图（用户 2026-10 反馈的「超分显示完成但没作用」）。
-     * 现在产出侧就拦住，让用户看到**具体原因**，而不是一个假的完成态。
-     */
-    NOT_LARGER_THAN_SOURCE(R.string.sr_fail_not_larger_than_source),
-
     /** 一次都没选过模型（`sr_active_model_key` 为空） */
     NO_MODEL_SELECTED(R.string.sr_fail_no_model),
 
     /** 选了模型但文件不在/是空的（没下载完、被删、被系统清理） */
     MODEL_FILE_MISSING(R.string.sr_fail_model_missing),
+    MODEL_CORRUPT(R.string.sr_fail_model_corrupt),
+    OUT_OF_MEMORY(R.string.sr_fail_out_of_memory),
+    CANCELLED(R.string.sr_fail_cancelled),
 
     /** 模型文件在，但 ONNX Runtime 加载会话失败（文件损坏 / 算子不支持 / halo 不合法） */
     ENGINE_INIT_FAILED(R.string.sr_fail_engine_init),
 
     /** 源图超过超分模型的输入像素上限（不是"尺寸太大"这种含糊说法，会带上实际数字） */
     SOURCE_TOO_LARGE(R.string.sr_fail_source_too_large),
+
+    /**
+     * 源图超过**用户设定的跳过阈值**（`SrOptions.skipMaxWidth/Height`，0 = 不限制）。
+     *
+     * 与 [SOURCE_TOO_LARGE] 的区别：那条是**引擎吃不下**（必须换模型或放弃）；
+     * 这条是**用户自己划的线**（对齐 mihon_img_upscale 的 `skip_max_size_*`）——
+     * 大页跑超分本来就没有收益（产物不会比原图清晰），提前跳过省掉几秒推理。
+     * 文案要引导他"要么调高阈值、要么这本就别开超分"。
+     */
+    OVER_SKIP_LIMIT(R.string.sr_fail_over_skip_limit),
 
     /** Anime4K 初始化失败（GLES3 不可用 / 着色器编译失败） */
     ANIME4K_INIT_FAILED(R.string.sr_fail_anime4k_init),

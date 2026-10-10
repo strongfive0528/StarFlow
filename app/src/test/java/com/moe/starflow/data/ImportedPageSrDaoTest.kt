@@ -47,7 +47,7 @@ class ImportedPageSrDaoTest {
     private fun row(page: Int, state: Int = ImportedPageSr.STATE_SUCCESS, key: String? = mangaKey) =
         ImportedPageSr(
             mangaId = mangaId, pageIndex = page, state = state,
-            modelName = "SR_W2X_UP7_ANIME_M1", srcWidth = 1080, srcHeight = 1620, srcBytes = 200_000L,
+            modelName = "SR_REALCUGAN_SE", srcWidth = 1080, srcHeight = 1620, srcBytes = 200_000L,
             outWidth = 1080, outHeight = 1620, outBytes = 150_000L,
             startedAtMs = 1_000L, finishedAtMs = 2_000L, updatedAtMs = 2_000L, mangaKey = key,
         )

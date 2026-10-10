@@ -2325,6 +2325,7 @@ class MangaFloatingService : LifecycleService() {
                 isProcessing = false
                 return
             }
+            val ocrHeartbeat = com.moe.starflow.manga.OcrLock.startHeartbeat(ocrToken)
             var ocrTextBlocks: List<TextBlockInfo>
             try {
                 // 分批渲染：在检测之前尝试分批流程。
@@ -2391,6 +2392,7 @@ class MangaFloatingService : LifecycleService() {
                 }
                 LogCollector.d(TAG, "processMangaScreenshot: Step 1 - OCR done, found ${ocrTextBlocks.size} text blocks")
             } finally {
+                ocrHeartbeat.cancel()
                 com.moe.starflow.manga.OcrLock.release(ocrToken)
             }
 

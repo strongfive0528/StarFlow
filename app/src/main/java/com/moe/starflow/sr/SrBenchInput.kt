@@ -65,6 +65,13 @@ object SrBenchInput {
         bmp = null
     }
 
+    /**
+     * 测试图本体（未回收的共享实例，**调用方不得 recycle**）。
+     * 给 `SrNcnnBench`（ncnn 族基准）用：那套要走 Bitmap→RGB8 的完整产品路径，
+     * 而不是 [fill] 的 NCHW 缓冲。
+     */
+    fun bitmap(): Bitmap? = bmp
+
     fun align16(v: Int) = ((v + 15) / 16) * 16
 
     /** 按当前测试图填 NCHW 缓冲（fp32 / fp16）。 */
@@ -96,7 +103,7 @@ object SrBenchInput {
         }
     }
 
-    /** IEEE754 半精度编码（与 `AnimeJaNaiEngine` 同一实现） */
+    /** IEEE754 半精度编码 */
     private fun floatToHalf(f: Float): Short {
         val bits = java.lang.Float.floatToIntBits(f)
         val sign = (bits ushr 16) and 0x8000

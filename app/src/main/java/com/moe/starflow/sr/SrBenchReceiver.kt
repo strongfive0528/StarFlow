@@ -26,7 +26,19 @@ class SrBenchReceiver : BroadcastReceiver() {
         if (intent.action != ACTION) return
         val filter = intent.getStringExtra("model")
         val threads = intent.getIntExtra("threads", srThreads())
-        SrBenchmark.run(context.applicationContext, filter, threads)
+        // Developer-only benchmark for the current ncnn catalog.
+        run {
+            SrNcnnBench.run(
+                context = context.applicationContext,
+                filter = filter,
+                tile = intent.getIntExtra("tile", 128),
+                fp16a = intent.getBooleanExtra("fp16a", false),
+                mode = intent.getStringExtra("mode") ?: "ours",
+                threads = threads,
+                saveOutput = intent.getBooleanExtra("save", false),
+            )
+            return
+        }
     }
 
     companion object {

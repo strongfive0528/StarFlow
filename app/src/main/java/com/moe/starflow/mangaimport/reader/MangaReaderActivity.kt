@@ -495,6 +495,8 @@ class MangaReaderActivity : AppCompatActivity() {
             if (mode == 2) ViewPager2.ORIENTATION_VERTICAL else ViewPager2.ORIENTATION_HORIZONTAL
         // 预绑定邻页：当前页停住后空闲期即后台解码下一页 → 滑动翻页时邻页图已就位，
         // 消除「翻页瞬间旧页颜色/空白闪烁」（配 loadTo 绑定即清残留，快速连翻不显旧图）
+        // ⚠️ **恒为 1，不跟超分预加载走**（2026-10-05 用户口径）：超分不再做"翻页预加载"，
+        //    多留的邻页只是平白多解码 + 多占内存（曾经跟 `SrOptions.preloadPages`）。
         binding.viewPager.offscreenPageLimit = 1
         // 禁用 RecyclerView 默认 item 动画：notifyItemChanged（翻页落定/三态重绑）会触发 change alpha
         // 淡入淡出 → 刚落定的页「透明渐变、轻微变白/变黑」。分页器无 item 动画需求，直接关掉。
@@ -1419,30 +1421,32 @@ class MangaReaderActivity : AppCompatActivity() {
             notifyUser(getString(R.string.reader_sr_blocked_by_translate), AppNotice.Style.ERROR)
             return
         }
-        // 没选/没下模型时**先拦住**：否则会一页页失败，用户得等一整章才知道原因。
-        // ⚠️ **必须用默认 prefs，不能用本类的 `prefs`**：后者是 `getSharedPreferences("manga_reader")`
-        //    （阅读器自己的模式/动画/背景），而 `sr_active_model_key` 存在
-        //    `PreferenceManager.getDefaultSharedPreferences` 里 —— 读错了文件就永远读不到模型，
-        //    表现为"明明选了模型，点超分本章却提示请先选择模型"，而手动超分（走控制器、
-        //    用的是默认 prefs）完全正常（2026-10 真机踩到）。
-        if (!SuperResolutionEngines.isSrModelUsable(this, PreferenceManager.getDefaultSharedPreferences(this))) {
-            notifyUser(getString(R.string.reader_sr_need_model), AppNotice.Style.ERROR)
-            return
+        val chapter=chapters.getOrNull(chapterIndex) ?: return
+        val all=(chapter.startPage..chapter.endPage).toList()
+        val request=com.moe.starflow.sr.SrRequest.capture(this,PreferenceManager.getDefaultSharedPreferences(this))
+        lifecycleScope.launch {
+            val pick=com.moe.starflow.sr.SrProcessor.preflight(this@MangaReaderActivity,request)
+            if(pick.engine==null) {
+                notifyUser(com.moe.starflow.sr.SrOutcome.fail(pick.reason ?: com.moe.starflow.sr.SrFailReason.ENGINE_INIT_FAILED,pick.detail).message(this@MangaReaderActivity),AppNotice.Style.ERROR)
+                return@launch
+            }
+            val counts=withContext(Dispatchers.IO){controller.srChapterAvailability(all,request)}
+            fun start(redo: Boolean) {
+                if(controller.srBatchBlockedByTranslate() || controller.srChapterJob.value!=null)return
+                val targets=if(redo)all else all.filter {it !in controller.srPages()}
+                if(targets.isEmpty()){notifyUser(getString(R.string.reader_sr_chapter_nothing));return}
+                controller.startSrChapterJob(chapterIndex,targets,request)
+                notifyUser(getString(R.string.reader_sr_chapter_started));pushPanelNow()
+            }
+            if(counts.second>0 || counts.third>0) {
+                androidx.appcompat.app.AlertDialog.Builder(this@MangaReaderActivity)
+                    .setTitle(R.string.reader_sr_chapter_choose_title)
+                    .setMessage(getString(R.string.reader_sr_chapter_choose_msg,all.size,counts.first,counts.second,counts.third,all.size-counts.first-counts.second-counts.third))
+                    .setPositiveButton(R.string.reader_sr_chapter_skip_existing){_,_->start(false)}
+                    .setNeutralButton(R.string.reader_sr_chapter_redo_all){_,_->start(true)}
+                    .setNegativeButton(R.string.cancel,null).show()
+            } else start(false)
         }
-        val chapter = chapters.getOrNull(chapterIndex) ?: return
-        // 只超**还没超成功**的页（已有的结果不白跑 —— 与"同模型不重超"同一条口径）
-        val done = controller.srRecords()
-            .filter { it.state == ImportedPageSr.STATE_SUCCESS }
-            .map { it.pageIndex }
-            .toSet()
-        val targets = (chapter.startPage..chapter.endPage).filter { it !in done }
-        if (targets.isEmpty()) {
-            notifyUser(getString(R.string.reader_sr_chapter_nothing))
-            return
-        }
-        controller.startSrChapterJob(chapterIndex, targets)
-        notifyUser(getString(R.string.reader_sr_chapter_started))
-        pushPanelNow()
     }
 
     /** 超分章卡片的**次按钮**：清除本章超分（**二次确认** —— 所有删除都要确认）。 */
@@ -1546,7 +1550,7 @@ class MangaReaderActivity : AppCompatActivity() {
      * 底图/排版输入变了 → 作废渲染缓存并重渲染当前页。
      *
      * ⚠️ 两处共用（字号变更 / Anime4K 档位变更）：它们改的都不是「译文」而是**渲染的输入**
-     * —— 字号影响排版，Anime4K 影响底图（`SrPageEnhancer` 会按设置指纹自动作废增强缓存）。
+     * —— 字号影响排版，Anime4K 影响底图（控制器会按显示设置作废增强缓存）。
      * 不作废的话屏幕上还是旧档/旧字号的图。
      */
     private fun invalidateRenderInputsAndReRender() {

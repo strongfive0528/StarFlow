@@ -231,27 +231,11 @@ class ModelDownloadService : LifecycleService() {
         ModelKey.PP_OCR_V5_REC_RU -> "PP-OCRv5 REC RU"
         ModelKey.PP_OCR_V6_MEDIUM_DET -> "PP-OCRv6 DET (medium)"
         ModelKey.PP_OCR_V6_MEDIUM_REC -> "PP-OCRv6 REC (medium)"
-        // ⚠️ 超分 11 档的显示名**不能在这里硬编码**（这里曾写死英文：中文界面下下载通知是
-        //    "waifu2x upconv_7 Anime · No denoise"，而且 N3 = 极强降噪被写成 "Light denoise" 错档）。
-        //    统一走 `SrModelManager.nameResOf` —— 它是「ModelKey → 显示名」的唯一映射，
-        //    与模型管理页的行标题共用 `sr_model_*`（中英各一份）。分支仍然逐条列全，
-        //    这样新增模型忘了补这里会**编译不过**（保留下面的穷尽 when 安全网）。
-        ModelKey.SR_W2X_UP7_ANIME_M1 -> getString(SrModelManager.nameResOf(this))
-        ModelKey.SR_W2X_UP7_ANIME_N2 -> getString(SrModelManager.nameResOf(this))
-        ModelKey.SR_W2X_UP7_PHOTO_M1 -> getString(SrModelManager.nameResOf(this))
-        ModelKey.SR_W2X_UP7_PHOTO_N2 -> getString(SrModelManager.nameResOf(this))
-        ModelKey.SR_W2X_CUNET_M1 -> getString(SrModelManager.nameResOf(this))
-        ModelKey.SR_W2X_CUNET_N1 -> getString(SrModelManager.nameResOf(this))
-        ModelKey.SR_W2X_CUNET_N2 -> getString(SrModelManager.nameResOf(this))
-        ModelKey.SR_SRMD_X2 -> getString(SrModelManager.nameResOf(this))
-        ModelKey.SR_SRMD_NF_X2 -> getString(SrModelManager.nameResOf(this))
-        ModelKey.SR_REALCUGAN_CONSERVATIVE -> getString(SrModelManager.nameResOf(this))
-        ModelKey.SR_REALCUGAN_DENOISE3X -> getString(SrModelManager.nameResOf(this))
-        ModelKey.SR_REALCUGAN_NODENOISE -> getString(SrModelManager.nameResOf(this))
-        ModelKey.SR_REALCUGAN_PRO_NODENOISE -> getString(SrModelManager.nameResOf(this))
-        ModelKey.SR_REALCUGAN_PRO_CONSERVATIVE -> getString(SrModelManager.nameResOf(this))
-        ModelKey.SR_REALCUGAN_PRO_DENOISE3X -> getString(SrModelManager.nameResOf(this))
-        ModelKey.SR_REALESRGAN_ANIME6B -> getString(SrModelManager.nameResOf(this))
+        ModelKey.SR_REALCUGAN_SE, ModelKey.SR_REALCUGAN_PRO, ModelKey.SR_REALCUGAN_NOSE, ModelKey.SR_WAIFU2X_CUNET,
+        ModelKey.SR_WAIFU2X_FAST, ModelKey.SR_REALESRGAN, ModelKey.SR_W2XEX_UNIVERSAL_FAST,
+        ModelKey.SR_W2XEX_OMNI_MINI_V2, ModelKey.SR_W2XEX_PHOTO_SMALL, ModelKey.SR_SUDO_ULTRA_COMPACT,
+        ModelKey.SR_SPAN_NOMOSUNI ->
+            getString(SrModelManager.nameResOf(this))
     }
 
     private fun formatBytes(bytes: Long): String {
@@ -591,17 +575,13 @@ class ModelDownloadService : LifecycleService() {
         ModelKey.PP_OCR_V5_DET, ModelKey.PP_OCR_V5_REC_ZH,
         ModelKey.PP_OCR_V5_REC_EN, ModelKey.PP_OCR_V5_REC_KO,
         ModelKey.PP_OCR_V5_REC_RU -> File(applicationContext.getExternalFilesDir(null), "ppocrv5")
+        ModelKey.SR_REALCUGAN_SE, ModelKey.SR_REALCUGAN_PRO, ModelKey.SR_REALCUGAN_NOSE, ModelKey.SR_WAIFU2X_CUNET,
+        ModelKey.SR_WAIFU2X_FAST, ModelKey.SR_REALESRGAN, ModelKey.SR_W2XEX_UNIVERSAL_FAST,
+        ModelKey.SR_W2XEX_OMNI_MINI_V2, ModelKey.SR_W2XEX_PHOTO_SMALL, ModelKey.SR_SUDO_ULTRA_COMPACT,
+        ModelKey.SR_SPAN_NOMOSUNI ->
+            File(applicationContext.getExternalFilesDir(null), "sr")
         // ⚠️ 与 ModelDownloadRepository.baseDirFor 是**两份必须一致的副本**（都要改）：
         //    这里曾把 SR_W2X_UP7_PHOTO_M1 写了两遍、看着像少一档
-        ModelKey.SR_W2X_UP7_ANIME_M1, ModelKey.SR_W2X_UP7_ANIME_N2,
-        ModelKey.SR_W2X_UP7_PHOTO_M1, ModelKey.SR_W2X_UP7_PHOTO_N2,
-        ModelKey.SR_W2X_CUNET_M1, ModelKey.SR_W2X_CUNET_N1, ModelKey.SR_W2X_CUNET_N2,
-        ModelKey.SR_SRMD_X2, ModelKey.SR_SRMD_NF_X2,
-        ModelKey.SR_REALCUGAN_NODENOISE, ModelKey.SR_REALCUGAN_CONSERVATIVE,
-        ModelKey.SR_REALCUGAN_DENOISE3X,
-        ModelKey.SR_REALCUGAN_PRO_NODENOISE, ModelKey.SR_REALCUGAN_PRO_CONSERVATIVE,
-        ModelKey.SR_REALCUGAN_PRO_DENOISE3X,
-        ModelKey.SR_REALESRGAN_ANIME6B -> File(applicationContext.getExternalFilesDir(null), "sr")
     }
 
     companion object {

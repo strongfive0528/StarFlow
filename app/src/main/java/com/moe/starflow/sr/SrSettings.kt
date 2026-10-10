@@ -35,6 +35,12 @@ object SrSettings {
      */
     const val KEY_AUTO = "sr_reader_auto"
 
+    /**
+     * 超分的可调项（tile / 精度 / fp16 算术 / 跳过阈值 / 性能档）**不在这里** ——
+     * 它们收在 [SrOptions]（对齐 `mihon_img_upscale` 的 `pref_realcugan_*` 一组设置），
+     * 这里只管"开不开"。
+     */
+
     /** 默认 **关**：超分只对真正低分辨率的图源有意义，且更耗电更慢，必须用户显式开启 */
     const val DEFAULT_READER_ENABLED = false
 

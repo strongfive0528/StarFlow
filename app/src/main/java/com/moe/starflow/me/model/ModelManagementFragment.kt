@@ -12,6 +12,8 @@ import android.view.View
 import android.view.ViewGroup
 import android.widget.LinearLayout
 import android.widget.RadioButton
+import android.widget.SeekBar
+import android.widget.Switch
 import android.widget.TextView
 import androidx.fragment.app.Fragment
 import androidx.preference.PreferenceManager
@@ -28,6 +30,8 @@ import com.moe.starflow.manga.config.OcrEngineGroup
 import com.moe.starflow.manga.engine.PPOcrModelFiles
 import com.moe.starflow.manga.engine.RTDetrModelFiles
 import com.moe.starflow.sr.SrModelManager
+import com.moe.starflow.sr.SrOptions
+import com.moe.starflow.sr.SuperResolutionEngines
 import com.moe.starflow.utils.CustomPreference
 import com.moe.starflow.utils.LogCollector
 import com.moe.starflow.utils.OcrEngineManager
@@ -60,6 +64,11 @@ class ModelManagementFragment : Fragment() {
 
     companion object {
         private const val ARG_SHOW_SR = "show_sr_tab"
+
+        /** 参照项目的 `maxSize` 默认值：1600×1600（超分参数面板的"目标分辨率"开关用它） */
+
+        /** 输入像素压缩阈值滑块的默认格点：`mpLimit[3]` = 1.5MP（见 setupSrOptionsPanel） */
+        private const val MP_DEFAULT_INDEX = 3
 
         /**
          * 直接打开「超分」Tab。
@@ -155,34 +164,26 @@ class ModelManagementFragment : Fragment() {
      * （两边各写一份是有意的：XML 管版式、这里管语义；错位了「当前使用」会标到别的族上）。
      */
     private val srFamilies: List<SrFamily> = listOf(
-        SrFamily(R.id.sr_w2x_group_title, R.id.sr_w2x_group_selected, listOf(
-            SrRow(ModelKey.SR_W2X_UP7_ANIME_M1, R.id.sr_w2x_anime_m1_row, R.id.sr_w2x_anime_m1_radio, R.id.sr_w2x_anime_m1_title),
-            SrRow(ModelKey.SR_W2X_UP7_ANIME_N2, R.id.sr_w2x_anime_n2_row, R.id.sr_w2x_anime_n2_radio, R.id.sr_w2x_anime_n2_title),
-            // 照片族（同一族、另一套权重）：用户口径 2026-10「upconv 的照片放大模型丢了，
-            // 需要加到 upconv 的那个组里面，一共 4 个才对」
-            SrRow(ModelKey.SR_W2X_UP7_PHOTO_M1, R.id.sr_w2x_photo_m1_row, R.id.sr_w2x_photo_m1_radio, R.id.sr_w2x_photo_m1_title),
-            SrRow(ModelKey.SR_W2X_UP7_PHOTO_N2, R.id.sr_w2x_photo_n2_row, R.id.sr_w2x_photo_n2_radio, R.id.sr_w2x_photo_n2_title),
-        )),
-        SrFamily(R.id.sr_cunet_group_title, R.id.sr_cunet_group_selected, listOf(
-            SrRow(ModelKey.SR_W2X_CUNET_M1, R.id.sr_cunet_m1_row, R.id.sr_cunet_m1_radio, R.id.sr_cunet_m1_title),
-            SrRow(ModelKey.SR_W2X_CUNET_N1, R.id.sr_cunet_n1_row, R.id.sr_cunet_n1_radio, R.id.sr_cunet_n1_title),
-            SrRow(ModelKey.SR_W2X_CUNET_N2, R.id.sr_cunet_n2_row, R.id.sr_cunet_n2_radio, R.id.sr_cunet_n2_title),
-        )),
-        SrFamily(R.id.sr_srmd_group_title, R.id.sr_srmd_group_selected, listOf(
-            SrRow(ModelKey.SR_SRMD_X2, R.id.sr_srmd_x2_row, R.id.sr_srmd_x2_radio, R.id.sr_srmd_x2_title),
-            SrRow(ModelKey.SR_SRMD_NF_X2, R.id.sr_srmd_nf_x2_row, R.id.sr_srmd_nf_x2_radio, R.id.sr_srmd_nf_x2_title),
-        )),
         SrFamily(R.id.sr_cugan_group_title, R.id.sr_cugan_group_selected, listOf(
-            SrRow(ModelKey.SR_REALCUGAN_NODENOISE, R.id.sr_cugan_dn_row, R.id.sr_cugan_dn_radio, R.id.sr_cugan_dn_title),
-            SrRow(ModelKey.SR_REALCUGAN_CONSERVATIVE, R.id.sr_cugan_cons_row, R.id.sr_cugan_cons_radio, R.id.sr_cugan_cons_title),
-            SrRow(ModelKey.SR_REALCUGAN_DENOISE3X, R.id.sr_cugan_d3_row, R.id.sr_cugan_d3_radio, R.id.sr_cugan_d3_title),
-            // Real-CUGAN Pro：同族、只换权重（PC 实测优于 SE；见 ModelKey 注释）
-            SrRow(ModelKey.SR_REALCUGAN_PRO_NODENOISE, R.id.sr_cugan_pro_dn_row, R.id.sr_cugan_pro_dn_radio, R.id.sr_cugan_pro_dn_title),
-            SrRow(ModelKey.SR_REALCUGAN_PRO_CONSERVATIVE, R.id.sr_cugan_pro_cons_row, R.id.sr_cugan_pro_cons_radio, R.id.sr_cugan_pro_cons_title),
-            SrRow(ModelKey.SR_REALCUGAN_PRO_DENOISE3X, R.id.sr_cugan_pro_d3_row, R.id.sr_cugan_pro_d3_radio, R.id.sr_cugan_pro_d3_title),
+            SrRow(ModelKey.SR_REALCUGAN_SE, R.id.sr_cugan_se_row, R.id.sr_cugan_se_radio, R.id.sr_cugan_se_title),
+            SrRow(ModelKey.SR_REALCUGAN_PRO, R.id.sr_cugan_pro_row, R.id.sr_cugan_pro_radio, R.id.sr_cugan_pro_title),
+            SrRow(ModelKey.SR_REALCUGAN_NOSE, R.id.sr_cugan_nose_row, R.id.sr_cugan_nose_radio, R.id.sr_cugan_nose_title),
+        )),
+        SrFamily(R.id.sr_w2x_group_title, R.id.sr_w2x_group_selected, listOf(
+            SrRow(ModelKey.SR_WAIFU2X_CUNET, R.id.sr_w2x_cunet_row, R.id.sr_w2x_cunet_radio, R.id.sr_w2x_cunet_title),
+            SrRow(ModelKey.SR_WAIFU2X_FAST, R.id.sr_w2x_fast_row, R.id.sr_w2x_fast_radio, R.id.sr_w2x_fast_title),
         )),
         SrFamily(R.id.sr_rsrgan_group_title, R.id.sr_rsrgan_group_selected, listOf(
-            SrRow(ModelKey.SR_REALESRGAN_ANIME6B, R.id.sr_rsrgan_a6b_row, R.id.sr_rsrgan_a6b_radio, R.id.sr_rsrgan_a6b_title),
+            SrRow(ModelKey.SR_REALESRGAN, R.id.sr_esrgan_av3_row, R.id.sr_esrgan_av3_radio, R.id.sr_esrgan_av3_title),
+        )),
+        SrFamily(R.id.sr_w2xex_group_title, R.id.sr_w2xex_group_selected, listOf(
+            SrRow(ModelKey.SR_W2XEX_UNIVERSAL_FAST, R.id.sr_w2xex_uf_row, R.id.sr_w2xex_uf_radio, R.id.sr_w2xex_uf_title),
+            SrRow(ModelKey.SR_W2XEX_OMNI_MINI_V2, R.id.sr_w2xex_omni_row, R.id.sr_w2xex_omni_radio, R.id.sr_w2xex_omni_title),
+            SrRow(ModelKey.SR_W2XEX_PHOTO_SMALL, R.id.sr_w2xex_photo_row, R.id.sr_w2xex_photo_radio, R.id.sr_w2xex_photo_title),
+        )),
+        SrFamily(R.id.sr_generic_group_title, R.id.sr_generic_group_selected, listOf(
+            SrRow(ModelKey.SR_SUDO_ULTRA_COMPACT, R.id.sr_sudo_uc_row, R.id.sr_sudo_uc_radio, R.id.sr_sudo_uc_title),
+            SrRow(ModelKey.SR_SPAN_NOMOSUNI, R.id.sr_span_uni_row, R.id.sr_span_uni_radio, R.id.sr_span_uni_title),
         )),
     )
 
@@ -191,22 +192,17 @@ class ModelManagementFragment : Fragment() {
 
     /** 每个超分模型的预估体积文案（仅展示用；真实值以 downloadinfo.json 为准） */
     private fun srExpectedSize(key: ModelKey): String = when (key) {
-        ModelKey.SR_W2X_UP7_ANIME_M1 -> "~1.1MB"
-        ModelKey.SR_W2X_UP7_ANIME_N2 -> "~1.1MB"
-        ModelKey.SR_W2X_UP7_PHOTO_M1 -> "~1.1MB"
-        ModelKey.SR_W2X_UP7_PHOTO_N2 -> "~1.1MB"
-        ModelKey.SR_W2X_CUNET_M1 -> "~2.7MB"
-        ModelKey.SR_W2X_CUNET_N1 -> "~2.7MB"
-        ModelKey.SR_W2X_CUNET_N2 -> "~2.7MB"
-        ModelKey.SR_SRMD_X2 -> "~2.9MB"
-        ModelKey.SR_SRMD_NF_X2 -> "~2.9MB"
-        ModelKey.SR_REALCUGAN_NODENOISE -> "~2.5MB"
-        ModelKey.SR_REALCUGAN_CONSERVATIVE -> "~2.5MB"
-        ModelKey.SR_REALCUGAN_DENOISE3X -> "~2.5MB"
-        ModelKey.SR_REALCUGAN_PRO_NODENOISE -> "~2.5MB"
-        ModelKey.SR_REALCUGAN_PRO_CONSERVATIVE -> "~2.5MB"
-        ModelKey.SR_REALCUGAN_PRO_DENOISE3X -> "~2.5MB"
-        ModelKey.SR_REALESRGAN_ANIME6B -> "~17.1MB"
+        ModelKey.SR_REALCUGAN_SE -> "~2.5MB"
+        ModelKey.SR_REALCUGAN_PRO -> "~2.5MB"
+        ModelKey.SR_REALCUGAN_NOSE -> "~2.4MB"
+        ModelKey.SR_WAIFU2X_CUNET -> "~2.7MB"
+        ModelKey.SR_WAIFU2X_FAST -> "~1.1MB"
+        ModelKey.SR_REALESRGAN -> "~1.2MB"
+        ModelKey.SR_W2XEX_UNIVERSAL_FAST -> "~2.4MB"
+        ModelKey.SR_W2XEX_OMNI_MINI_V2 -> "~0.2MB"
+        ModelKey.SR_W2XEX_PHOTO_SMALL -> "~2.4MB"
+        ModelKey.SR_SUDO_ULTRA_COMPACT -> "~1.2MB"
+        ModelKey.SR_SPAN_NOMOSUNI -> "~1.6MB"
         else -> ""
     }
 
@@ -319,6 +315,124 @@ class ModelManagementFragment : Fragment() {
         // 是同一件事的重复实现，合并时已丢弃）
         refreshSrSelection()
         updateV6TierVisibility()
+        setupSrOptionsPanel()
+    }
+
+    /**
+     * **超分参数折叠面板**（2026-10-10 用户口径：模型管理页要给用户"类似参照项目那样的参数调整"）。
+     *
+     * 逐项与 `mihon_img_upscale` 的设置面对齐（`ReaderPreferences.kt` 的 `pref_realcugan_*`）：
+     * | 这一栏 | 他们的键 | 默认 |
+     * |---|---|---|
+     * | 分块尺寸 | `pref_realcugan_tile_size` | 128（0 = 交给原生按显存自选） |
+     * | 性能档 | `pref_realcugan_performance_mode` | 0 = 快速（块间等待 0/5/15ms） |
+     * | 精度 | `pref_realcugan_precision` | 0 = FP16 存储（我们只提供 FP16/FP32 两档） |
+     * | FP16 算术 | `pref_realcugan_fp16_arithmetic` | false |
+     *
+     * ⚠️ 收口在 [SrOptions]（读写唯一入口）：**这里只写 prefs**，真正生效靠
+     * `SrRequest` 冻结任务配置后由 `SrProcessor`/`SuperResolutionEngines` 使用 —— 改完必须 `releaseSrModel()` 重建引擎
+     * （tile/精度/fp16 都是 net 级、load 时固化）。
+     */
+    private fun setupSrOptionsPanel() {
+        val panel = rootView.findViewById<View>(R.id.sr_opt_panel) ?: return
+        val header = rootView.findViewById<View>(R.id.sr_opt_header) ?: return
+        val prefs = PreferenceManager.getDefaultSharedPreferences(requireContext())
+
+        // 他们的 modelpack 里给的候选：64/96/128/192/256（另加 0 = 自动、384 供大显存尝鲜）
+        val tiles = intArrayOf(0, 32, 64, 96, 128, 192, 256, 384)
+        // 输入像素压缩阈值（MP）：≤阈值直接送模型，超出按比例缩小；0 = 不限用户阈值
+        val mpLimit = floatArrayOf(0.6f, 0.8f, 1.0f, 1.5f, 2.0f, 2.5f, 0f)
+        val tileBar = rootView.findViewById<SeekBar>(R.id.sr_opt_tile_bar)
+        val tileVal = rootView.findViewById<TextView>(R.id.sr_opt_tile_value)
+        val perfBar = rootView.findViewById<SeekBar>(R.id.sr_opt_perf_bar)
+        val perfVal = rootView.findViewById<TextView>(R.id.sr_opt_perf_value)
+        val precBar = rootView.findViewById<SeekBar>(R.id.sr_opt_prec_bar)
+        val precVal = rootView.findViewById<TextView>(R.id.sr_opt_prec_value)
+        val fp16aSw = rootView.findViewById<Switch>(R.id.sr_opt_fp16a_switch)
+
+        val mpBar = rootView.findViewById<SeekBar>(R.id.sr_opt_maxinput_bar)
+        val mpVal = rootView.findViewById<TextView>(R.id.sr_opt_maxinput_value)
+
+
+
+        val arrow = rootView.findViewById<View>(R.id.sr_opt_arrow)
+        header.setOnClickListener {
+            val expand = panel.visibility != View.VISIBLE
+            panel.visibility = if (expand) View.VISIBLE else View.GONE
+            // 折叠时箭头朝下、展开时朝上（用户口径：右侧要有折叠/展开图标）
+            arrow?.animate()?.rotation(if (expand) 180f else 0f)?.setDuration(120)?.start()
+                ?: run { arrow?.rotation = if (expand) 180f else 0f }
+        }
+
+        /** 回填控件（程序化赋值期间不触发写回，否则会自己覆盖自己）。 */
+        var suppress = false
+        fun refresh() {
+            val o = SrOptions.from(prefs)
+            suppress = true
+            tileBar.max = tiles.lastIndex
+            tileBar.progress = tiles.indexOf(o.tileSize).let { if (it >= 0) it else tiles.indexOf(SrOptions.DEFAULT_TILE_SIZE) }
+            tileVal.text = if (o.tileSize <= 0) getString(R.string.sr_opt_tile_auto) else "%d px".format(o.tileSize)
+            // 阈值落在哪个格点：找不到（老值/手改的 prefs）就落在"1.5MP"那一格（= 默认）
+            val mpIdx = mpLimit.indexOfFirst { kotlin.math.abs(it - o.maxInputMegapixels) < 0.01f }
+            mpBar.progress = if (mpIdx >= 0) mpIdx else MP_DEFAULT_INDEX
+            mpVal.text = if (o.maxInputMegapixels <= 0f) getString(R.string.sr_opt_maxinput_none)
+            else "%.1f MP".format(o.maxInputMegapixels)
+            perfBar.progress = o.performanceMode
+            perfVal.text = getString(
+                when (o.performanceMode) {
+                    1 -> R.string.sr_opt_perf_50
+                    2 -> R.string.sr_opt_perf_30
+                    else -> R.string.sr_opt_perf_90
+                }
+            )
+            precBar.progress = o.precision
+            precVal.text = if (o.precision == SrOptions.PRECISION_FP32) "FP32" else "FP16"
+            fp16aSw.isChecked = o.fp16Arithmetic
+            fp16aSw.isEnabled = o.precision == SrOptions.PRECISION_FP16
+
+
+
+            suppress = false
+        }
+
+        /** 改一项 → 落 prefs + 重建引擎（tile/精度/fp16 是 net 级、load 时固化）。 */
+        fun save(transform: (SrOptions) -> SrOptions) {
+            if (suppress) return
+            SrOptions.write(prefs, transform(SrOptions.from(prefs)))
+            SuperResolutionEngines.releaseSrModel()
+            LogCollector.i("ModelMgmt", "超分参数已更新: ${SrOptions.from(prefs)}")
+            refresh()
+        }
+
+        tileBar.setOnSeekBarChangeListener(object : SeekBar.OnSeekBarChangeListener {
+            override fun onProgressChanged(sb: SeekBar?, p: Int, fromUser: Boolean) = save { it.copy(tileSize = tiles[p.coerceIn(0, tiles.size - 1)]) }
+            override fun onStartTrackingTouch(sb: SeekBar?) = Unit
+            override fun onStopTrackingTouch(sb: SeekBar?) = Unit
+        })
+        mpBar.setOnSeekBarChangeListener(object : SeekBar.OnSeekBarChangeListener {
+            override fun onProgressChanged(sb: SeekBar?, p: Int, fromUser: Boolean) =
+                save { it.copy(maxInputMegapixels = mpLimit[p.coerceIn(0, mpLimit.size - 1)]) }
+            override fun onStartTrackingTouch(sb: SeekBar?) = Unit
+            override fun onStopTrackingTouch(sb: SeekBar?) = Unit
+        })
+        perfBar.setOnSeekBarChangeListener(object : SeekBar.OnSeekBarChangeListener {
+            override fun onProgressChanged(sb: SeekBar?, p: Int, fromUser: Boolean) = save { it.copy(performanceMode = p.coerceIn(0, 2)) }
+            override fun onStartTrackingTouch(sb: SeekBar?) = Unit
+            override fun onStopTrackingTouch(sb: SeekBar?) = Unit
+        })
+        precBar.setOnSeekBarChangeListener(object : SeekBar.OnSeekBarChangeListener {
+            override fun onProgressChanged(sb: SeekBar?, p: Int, fromUser: Boolean) = save { it.copy(precision = p.coerceIn(0, 1)) }
+            override fun onStartTrackingTouch(sb: SeekBar?) = Unit
+            override fun onStopTrackingTouch(sb: SeekBar?) = Unit
+        })
+        fp16aSw.setOnCheckedChangeListener { _, checked -> save { it.copy(fp16Arithmetic = checked) } }
+        rootView.findViewById<View>(R.id.sr_opt_reset)?.setOnClickListener {
+            SrOptions.write(prefs, SrOptions())
+            SuperResolutionEngines.releaseSrModel()
+            refresh()
+            UiUtils.showToast(requireContext(), getString(R.string.sr_opt_reset))
+        }
+        refresh()
     }
 
     /** 接线所有浏览器按钮（数据驱动，作用域限定在各自的 [rowRoot]） */
@@ -413,7 +527,10 @@ class ModelManagementFragment : Fragment() {
 
         when (state) {
             DownloadState.Idle, is DownloadState.Partial -> {
-                statusText.text = getString(R.string.model_status_undownloaded_format, expectedSize)
+                val validationError=if(modelKey in SrModelManager.allKeys && state is DownloadState.Partial)SrModelManager.validationError(requireContext(),modelKey) else null
+                statusText.text = if(validationError!=null && !validationError.contains("missing"))
+                    getString(R.string.sr_fail_model_corrupt)+"\n"+validationError
+                    else getString(R.string.model_status_undownloaded_format, expectedSize)
                 actionBtn.text = getString(R.string.model_download)
                 setButtonDeleteStyle(actionBtn, false)
                 actionBtn.setOnClickListener {

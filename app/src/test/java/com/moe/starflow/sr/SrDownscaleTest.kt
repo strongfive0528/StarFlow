@@ -3,6 +3,7 @@ package com.moe.starflow.sr
 import android.graphics.Bitmap
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
+import org.junit.Assert.assertNotNull
 import org.junit.Assert.assertNull
 import org.junit.Assert.assertTrue
 import org.junit.Test
@@ -10,14 +11,10 @@ import org.junit.runner.RunWith
 import org.robolectric.RobolectricTestRunner
 
 /**
- * 大图超分前的**压缩计划**（用户口径 2026-10）：
+ * 大图超分前的**输入像素阈值压缩计划**：输入不超过有效上限时直送模型，超过时等比例缩小。
  *
- * > 「对较大尺寸的图片进行超分，短边压缩对齐到 1080p 再超分……减轻超分模型的压力，
- * >  同时可以快速通过超分模型放大尺寸」
- * > 「**短边超过 1080 的压缩尺寸后给超分的图片**，体积不能超过原来的像素和大小」
- *
- * ⚠️ 注意这条只约束**喂进引擎的那张压缩图**。**产物原样落盘、不做任何额外缩放**
- * （「超分后肯定比原图大啊」）—— 见 `SrDownscale` 类注释与
+ * ⚠️ 注意这条只约束**喂进引擎的那张压缩图**。产物原样落盘、不做任何额外缩放，
+ * 与原图尺寸无关 —— 见 `SrDownscale` 类注释与
  * `SrReaderWiringTest.theUpscaledProductIsStoredAsIs`。
  *
  * ⚠️ Robolectric 的 Canvas **不真正栅格化**（见 `manga/CLAUDE.md`），所以这里只断言
@@ -30,39 +27,62 @@ class SrDownscaleTest {
 
     private fun px(w: Int, h: Int): Long = w.toLong() * h
 
+    /** 输入像素压缩阈值：只调整送入模型的尺寸。 */
+    @Test
+    fun inputThresholdShrinksFeedWithoutDecidingOutputStorage() {
+        // 960x1367（1.31MP）→ 按显式 1.0MP 阈值压缩；plan 只生成输入尺寸，不负责判断产物去留。
+        val p = SrDownscale.plan(960, 1367, SrDownscale.DEFAULT_MAX_FEED_PIXELS, 1.0f)!!
+        assertTrue(
+            "喂进引擎的像素必须 ≤ 预算：${p.width}x${p.height}",
+            p.width.toLong() * p.height <= 1_000_000L,
+        )
+        assertTrue("输入超过阈值时宽高都按比例压缩", p.width < 960 && p.height < 1367)
+        // 本来就小、像素总量不超 → 不压（阈值不制造无意义的缩放）
+        assertNull(
+            "0.58MP 的页在 1.0MP 阈值下不该被压",
+            SrDownscale.plan(632, 912, SrDownscale.DEFAULT_MAX_FEED_PIXELS, 1.0f),
+        )
+        // 0 = 不限 → 与旧行为完全一致
+        assertEquals(
+            "阈值=0 时只受模型硬输入上限约束",
+            SrDownscale.plan(2000, 3000, SrDownscale.DEFAULT_MAX_FEED_PIXELS),
+            SrDownscale.plan(2000, 3000, SrDownscale.DEFAULT_MAX_FEED_PIXELS, 0f),
+        )
+        // 大图照样**给方案**（不返回 null = 不跳过），只是喂得更小
+        val big = SrDownscale.plan(2480, 3508, SrDownscale.DEFAULT_MAX_FEED_PIXELS, 1.0f)
+        assertNotNull("大图不许跳过：必须给压缩方案", big)
+    }
+
     @Test
     fun smallPageNeedsNoDownscale() {
-        assertNull("短边 912、0.58MP → 两个约束都满足，走原路（普通漫画页零行为变化）",
+        assertNull("0.58MP 输入低于有效上限时直接走原路",
             SrDownscale.plan(632, 912))
-        assertNull("短边正好 1080、1.75MP 也吃得下（引擎输入上限 2.5MP）", SrDownscale.plan(1080, 1620))
+        assertNull("1.75MP 输入低于 2.5MP 模型上限时直接走原路", SrDownscale.plan(1080, 1620))
         assertNull("非法尺寸不压", SrDownscale.plan(0, 100))
         assertNull("非法尺寸不压（负）", SrDownscale.plan(-5, 100))
     }
 
     /**
-     * ⚠️ 这条是**实测出来的设计依据**：`NcnnSrEngine.maxInputPixels = 10MP / scale²`（2x → 2.5MP）。
-     * 2000x3000 = 6MP **今天就已经超限**，引擎直接判「图太大」——用户看到的"图太大无法超分"就是它。
+     * 大图：只按有效输入像素上限压缩，不对短边单独设限。
+     * 断言不变式而不是具体数字：产物像素 ≤ 上限、长宽比保住。
      */
     @Test
-    fun aPageThatWouldBlowTheEngineCapGetsCompressed() {
+    fun bigPageIsShrunkToThePixelCapOnly() {
         val p = SrDownscale.plan(2000, 3000)!!
-        assertEquals("短边（宽）对齐到 1080", 1080, p.width)
-        assertEquals("长边等比缩放", 1620, p.height)
         assertTrue(
-            "压缩后必须落进引擎的 2.5MP 输入上限，否则超分照样出不来",
-            px(p.width, p.height) <= SrDownscale.DEFAULT_MAX_FEED_PIXELS,
+            "产物像素必须 ≤ 引擎上限：${p.width}x${p.height}",
+            p.width.toLong() * p.height <= SrDownscale.DEFAULT_MAX_FEED_PIXELS,
         )
-        assertTrue(
-            "压缩图**必须比原图小**（用户口径：给超分的压缩图不超过原来的像素）",
-            px(p.width, p.height) < px(2000, 3000),
-        )
-        // 横过来：按高对齐
+        assertEquals("长宽比要保住", 2000.0 / 3000.0, p.width.toDouble() / p.height, 0.01)
         val q = SrDownscale.plan(3000, 2000)!!
-        assertEquals(1620, q.width)
-        assertEquals(1080, q.height)
+        assertTrue(
+            "转置后同样 ≤ 上限：${q.width}x${q.height}",
+            q.width.toLong() * q.height <= SrDownscale.DEFAULT_MAX_FEED_PIXELS,
+        )
+        assertEquals("长宽比要保住", 3000.0 / 2000.0, q.width.toDouble() / q.height, 0.01)
     }
 
-    /** 短边本来就 ≤ 1080、但像素数仍然超上限的长条：**要按上限继续缩**，不能只看短边。 */
+    /** 长条图片同样按总像素数限制，不能只依据某一条边。 */
     @Test
     fun pixelCapStillAppliesWhenTheShortSideIsAlreadySmall() {
         val p = SrDownscale.plan(1080, 2592)!!          // 2.8MP > 2.5MP
@@ -81,16 +101,16 @@ class SrDownscaleTest {
             "4x 引擎的 0.625MP 上限也要满足（否则 Real-ESRGAN 永远报图太大）",
             px(p.width, p.height) <= 625_000L,
         )
-        assertTrue("比 2x 引擎压得更狠", p.width < 1080)
+        val p2x = SrDownscale.plan(2000, 3000, 2_500_000L)!!
+        assertTrue("4x 模型的较低输入上限会压得更小", p.width < p2x.width)
     }
 
     @Test
     fun extremeAspectIsStillBroughtUnderThePixelCap() {
-        // 20000x300 的短边只有 300（不触发"短边 1080"那一条），但 6MP 超了引擎的 2.5MP 上限 ——
-        // 所以**仍然要压**，只是压的依据换成像素上限。压出来还是 66:1 的长条，但吃得下。
+        // 20000x300 的长宽比很极端，但总像素超过模型上限，因此仍按同一规则压缩。
         val p = SrDownscale.plan(20000, 300)!!
         assertTrue(
-            "超过引擎上限就必须压（哪怕短边很小）",
+            "超过引擎上限就必须压",
             px(p.width, p.height) <= SrDownscale.DEFAULT_MAX_FEED_PIXELS,
         )
         assertTrue("长宽比要保住（不能被压成正方形）", p.width > p.height * 50)
@@ -123,8 +143,11 @@ class SrDownscaleTest {
     fun applyHandlesAMultiStepDownscale() {
         val src = bmp(4000, 3000)
         val plan = SrDownscale.plan(4000, 3000)!!
-        assertEquals(1440, plan.width)
-        assertEquals(1080, plan.height)
+        assertTrue(
+            "产物必须 ≤ 上限：${plan.width}x${plan.height}",
+            plan.width.toLong() * plan.height <= SrDownscale.DEFAULT_MAX_FEED_PIXELS,
+        )
+        assertTrue("倍率 > 2 → 确实走分步减半路径", 4000 > plan.width * 2)
         val out = SrDownscale.apply(src, plan)
         assertEquals(plan.width, out.width)
         assertEquals(plan.height, out.height)

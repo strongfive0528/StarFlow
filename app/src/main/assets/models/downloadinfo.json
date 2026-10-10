@@ -1,4 +1,4 @@
-{
+﻿{
   "version": "1.0",
   "models": [
     {
@@ -206,354 +206,274 @@
       ]
     },
     {
-      "model_key": "SR_W2X_UP7_ANIME_M1",
-      "browser_url": "https://github.com/nihui/waifu2x-ncnn-vulkan",
-      "family": "waifu2x",
-      "scale": 2,
-      "noise": -1,
-      "prepad": 7,
-      "files": [
-        {
-          "file_name": "w2x_up7_anime_m1.param",
-          "download_url": "https://raw.githubusercontent.com/nihui/waifu2x-ncnn-vulkan/master/models/models-upconv_7_anime_style_art_rgb/scale2.0x_model.param",
-          "file_size": 1047,
-          "checksum": "d731ed12a5334c0a895b580052ed8c52"
-        },
-        {
-          "file_name": "w2x_up7_anime_m1.bin",
-          "download_url": "https://raw.githubusercontent.com/nihui/waifu2x-ncnn-vulkan/master/models/models-upconv_7_anime_style_art_rgb/scale2.0x_model.bin",
-          "file_size": 1106248,
-          "checksum": "e3d3f363494b6f2cdd877c4612149445"
-        }
-      ]
-    },
-    {
-      "model_key": "SR_W2X_UP7_ANIME_N2",
-      "browser_url": "https://github.com/nihui/waifu2x-ncnn-vulkan",
-      "family": "waifu2x",
-      "scale": 2,
-      "noise": 2,
-      "prepad": 7,
-      "files": [
-        {
-          "file_name": "w2x_up7_anime_n2.param",
-          "download_url": "https://raw.githubusercontent.com/nihui/waifu2x-ncnn-vulkan/master/models/models-upconv_7_anime_style_art_rgb/noise2_scale2.0x_model.param",
-          "file_size": 1047,
-          "checksum": "d731ed12a5334c0a895b580052ed8c52"
-        },
-        {
-          "file_name": "w2x_up7_anime_n2.bin",
-          "download_url": "https://raw.githubusercontent.com/nihui/waifu2x-ncnn-vulkan/master/models/models-upconv_7_anime_style_art_rgb/noise2_scale2.0x_model.bin",
-          "file_size": 1106248,
-          "checksum": "7af270450a82687208a13af37ee52b54"
-        }
-      ]
-    },
-    {
-      "model_key": "SR_W2X_UP7_PHOTO_M1",
-      "browser_url": "https://github.com/nihui/waifu2x-ncnn-vulkan",
-      "family": "waifu2x",
-      "scale": 2,
-      "noise": -1,
-      "prepad": 7,
-      "files": [
-        {
-          "file_name": "w2x_up7_photo_m1.param",
-          "download_url": "https://raw.githubusercontent.com/nihui/waifu2x-ncnn-vulkan/master/models/models-upconv_7_photo/scale2.0x_model.param",
-          "file_size": 1047,
-          "checksum": "d731ed12a5334c0a895b580052ed8c52"
-        },
-        {
-          "file_name": "w2x_up7_photo_m1.bin",
-          "download_url": "https://raw.githubusercontent.com/nihui/waifu2x-ncnn-vulkan/master/models/models-upconv_7_photo/scale2.0x_model.bin",
-          "file_size": 1106248,
-          "checksum": "cd1b4ff2bff94e3a95c39c7b0d3cdbde"
-        }
-      ]
-    },
-    {
-      "model_key": "SR_W2X_UP7_PHOTO_N2",
-      "browser_url": "https://github.com/nihui/waifu2x-ncnn-vulkan",
-      "family": "waifu2x",
-      "scale": 2,
-      "noise": 2,
-      "prepad": 7,
-      "files": [
-        {
-          "file_name": "w2x_up7_photo_n2.param",
-          "download_url": "https://raw.githubusercontent.com/nihui/waifu2x-ncnn-vulkan/master/models/models-upconv_7_photo/noise2_scale2.0x_model.param",
-          "file_size": 1047,
-          "checksum": "d731ed12a5334c0a895b580052ed8c52"
-        },
-        {
-          "file_name": "w2x_up7_photo_n2.bin",
-          "download_url": "https://raw.githubusercontent.com/nihui/waifu2x-ncnn-vulkan/master/models/models-upconv_7_photo/noise2_scale2.0x_model.bin",
-          "file_size": 1106248,
-          "checksum": "dc7f412e46937d74d673e0bb9b0765f8"
-        }
-      ]
-    },
-    {
-      "model_key": "SR_W2X_CUNET_M1",
-      "browser_url": "https://github.com/nihui/waifu2x-ncnn-vulkan",
-      "family": "waifu2x",
-      "scale": 2,
-      "noise": -1,
-      "prepad": 18,
-      "files": [
-        {
-          "file_name": "w2x_cunet_m1.param",
-          "download_url": "https://raw.githubusercontent.com/nihui/waifu2x-ncnn-vulkan/master/models/models-cunet/scale2.0x_model.param",
-          "file_size": 7249,
-          "checksum": "cfdf971ec16707dd9b0f9212a52f73e0"
-        },
-        {
-          "file_name": "w2x_cunet_m1.bin",
-          "download_url": "https://raw.githubusercontent.com/nihui/waifu2x-ncnn-vulkan/master/models/models-cunet/scale2.0x_model.bin",
-          "file_size": 2776400,
-          "checksum": "6981a3fe7868571eb0d9c5d16bd9b723"
-        }
-      ]
-    },
-    {
-      "model_key": "SR_W2X_CUNET_N1",
-      "browser_url": "https://github.com/nihui/waifu2x-ncnn-vulkan",
-      "family": "waifu2x",
-      "scale": 2,
-      "noise": 1,
-      "prepad": 18,
-      "files": [
-        {
-          "file_name": "w2x_cunet_n1.param",
-          "download_url": "https://raw.githubusercontent.com/nihui/waifu2x-ncnn-vulkan/master/models/models-cunet/noise1_scale2.0x_model.param",
-          "file_size": 7249,
-          "checksum": "cfdf971ec16707dd9b0f9212a52f73e0"
-        },
-        {
-          "file_name": "w2x_cunet_n1.bin",
-          "download_url": "https://raw.githubusercontent.com/nihui/waifu2x-ncnn-vulkan/master/models/models-cunet/noise1_scale2.0x_model.bin",
-          "file_size": 2776400,
-          "checksum": "d0ed40c587453999b308d7b4af9e56f5"
-        }
-      ]
-    },
-    {
-      "model_key": "SR_W2X_CUNET_N2",
-      "browser_url": "https://github.com/nihui/waifu2x-ncnn-vulkan",
-      "family": "waifu2x",
-      "scale": 2,
-      "noise": 2,
-      "prepad": 18,
-      "files": [
-        {
-          "file_name": "w2x_cunet_n2.param",
-          "download_url": "https://raw.githubusercontent.com/nihui/waifu2x-ncnn-vulkan/master/models/models-cunet/noise2_scale2.0x_model.param",
-          "file_size": 7249,
-          "checksum": "cfdf971ec16707dd9b0f9212a52f73e0"
-        },
-        {
-          "file_name": "w2x_cunet_n2.bin",
-          "download_url": "https://raw.githubusercontent.com/nihui/waifu2x-ncnn-vulkan/master/models/models-cunet/noise2_scale2.0x_model.bin",
-          "file_size": 2776400,
-          "checksum": "5f8e0757c46f2f10c4b8b7b0e0991a47"
-        }
-      ]
-    },
-    {
-      "model_key": "SR_SRMD_X2",
-      "browser_url": "https://github.com/nihui/srmd-ncnn-vulkan",
-      "family": "srmd",
-      "scale": 2,
-      "noise": 3,
-      "prepad": 12,
-      "files": [
-        {
-          "file_name": "srmd_x2.param",
-          "download_url": "https://raw.githubusercontent.com/nihui/srmd-ncnn-vulkan/master/models/models-srmd/srmd_x2.param",
-          "file_size": 1230,
-          "checksum": "764301069861c15d78fd8d5dd67de5a0"
-        },
-        {
-          "file_name": "srmd_x2.bin",
-          "download_url": "https://raw.githubusercontent.com/nihui/srmd-ncnn-vulkan/master/models/models-srmd/srmd_x2.bin",
-          "file_size": 3026272,
-          "checksum": "b26f5268a2157924d0b8c5cd5b826ebe"
-        }
-      ]
-    },
-    {
-      "model_key": "SR_SRMD_NF_X2",
-      "browser_url": "https://github.com/nihui/srmd-ncnn-vulkan",
-      "family": "srmd",
-      "scale": 2,
-      "noise": -1,
-      "prepad": 12,
-      "files": [
-        {
-          "file_name": "srmd_nf_x2.param",
-          "download_url": "https://raw.githubusercontent.com/nihui/srmd-ncnn-vulkan/master/models/models-srmd/srmdnf_x2.param",
-          "file_size": 1230,
-          "checksum": "5294b2f98482521b15edc77dc0a137a4"
-        },
-        {
-          "file_name": "srmd_nf_x2.bin",
-          "download_url": "https://raw.githubusercontent.com/nihui/srmd-ncnn-vulkan/master/models/models-srmd/srmdnf_x2.bin",
-          "file_size": 3023968,
-          "checksum": "b68550807850b7754637084067e8915a"
-        }
-      ]
-    },
-    {
-      "model_key": "SR_REALCUGAN_NODENOISE",
+      "model_key": "SR_REALCUGAN_SE",
       "browser_url": "https://github.com/nihui/realcugan-ncnn-vulkan",
       "family": "realcugan",
       "scale": 2,
-      "noise": -1,
+      "noise": 0,
       "prepad": 18,
+      "fp16Arithmetic": true,
       "files": [
         {
-          "file_name": "up2x_no_denoise.param",
-          "download_url": "https://raw.githubusercontent.com/nihui/realcugan-ncnn-vulkan/master/models/models-se/up2x-no-denoise.param",
+          "file_name": "cugan_se_2x_nodenoise.param",
+          "download_url": "https://raw.githubusercontent.com/nihui/realcugan-ncnn-vulkan/395302c5c70f1bff604c974e92e0a87e45c9f9ee/models/models-se/up2x-no-denoise.param",
           "file_size": 4761,
           "checksum": "f3bf9e723cba9871d0df9054c5a9bb04"
         },
         {
-          "file_name": "up2x_no_denoise.bin",
-          "download_url": "https://raw.githubusercontent.com/nihui/realcugan-ncnn-vulkan/master/models/models-se/up2x-no-denoise.bin",
+          "file_name": "cugan_se_2x_nodenoise.bin",
+          "download_url": "https://raw.githubusercontent.com/nihui/realcugan-ncnn-vulkan/395302c5c70f1bff604c974e92e0a87e45c9f9ee/models/models-se/up2x-no-denoise.bin",
           "file_size": 2573648,
           "checksum": "81a327b7f80c8d15c9b52328b5a22a7d"
         }
       ]
     },
     {
-      "model_key": "SR_REALCUGAN_CONSERVATIVE",
+      "model_key": "SR_REALCUGAN_PRO",
       "browser_url": "https://github.com/nihui/realcugan-ncnn-vulkan",
       "family": "realcugan",
       "scale": 2,
       "noise": 0,
       "prepad": 18,
+      "fp16Arithmetic": true,
       "files": [
         {
-          "file_name": "up2x_conservative.param",
-          "download_url": "https://raw.githubusercontent.com/nihui/realcugan-ncnn-vulkan/master/models/models-se/up2x-conservative.param",
-          "file_size": 4761,
-          "checksum": "f3bf9e723cba9871d0df9054c5a9bb04"
-        },
-        {
-          "file_name": "up2x_conservative.bin",
-          "download_url": "https://raw.githubusercontent.com/nihui/realcugan-ncnn-vulkan/master/models/models-se/up2x-conservative.bin",
-          "file_size": 2573648,
-          "checksum": "3de8407e5082f062a196673829741e00"
-        }
-      ]
-    },
-    {
-      "model_key": "SR_REALCUGAN_DENOISE3X",
-      "browser_url": "https://github.com/nihui/realcugan-ncnn-vulkan",
-      "family": "realcugan",
-      "scale": 2,
-      "noise": 3,
-      "prepad": 18,
-      "files": [
-        {
-          "file_name": "up2x_denoise3x.param",
-          "download_url": "https://raw.githubusercontent.com/nihui/realcugan-ncnn-vulkan/master/models/models-se/up2x-denoise3x.param",
-          "file_size": 4761,
-          "checksum": "f3bf9e723cba9871d0df9054c5a9bb04"
-        },
-        {
-          "file_name": "up2x_denoise3x.bin",
-          "download_url": "https://raw.githubusercontent.com/nihui/realcugan-ncnn-vulkan/master/models/models-se/up2x-denoise3x.bin",
-          "file_size": 2573648,
-          "checksum": "e9a231882130309b0e523eba102d8c7a"
-        }
-      ]
-    },
-    {
-      "model_key": "SR_REALCUGAN_PRO_NODENOISE",
-      "browser_url": "https://github.com/nihui/realcugan-ncnn-vulkan",
-      "family": "realcugan",
-      "scale": 2,
-      "noise": -1,
-      "prepad": 18,
-      "files": [
-        {
-          "file_name": "up2x_pro_no_denoise.param",
-          "download_url": "https://raw.githubusercontent.com/nihui/realcugan-ncnn-vulkan/master/models/models-pro/up2x-no-denoise.param",
+          "file_name": "cugan_pro_2x_nodenoise.param",
+          "download_url": "https://raw.githubusercontent.com/nihui/realcugan-ncnn-vulkan/395302c5c70f1bff604c974e92e0a87e45c9f9ee/models/models-pro/up2x-no-denoise.param",
           "file_size": 4765,
           "checksum": "5c17892838c3b4a1e484c278694a4c2a"
         },
         {
-          "file_name": "up2x_pro_no_denoise.bin",
-          "download_url": "https://raw.githubusercontent.com/nihui/realcugan-ncnn-vulkan/master/models/models-pro/up2x-no-denoise.bin",
+          "file_name": "cugan_pro_2x_nodenoise.bin",
+          "download_url": "https://raw.githubusercontent.com/nihui/realcugan-ncnn-vulkan/395302c5c70f1bff604c974e92e0a87e45c9f9ee/models/models-pro/up2x-no-denoise.bin",
           "file_size": 2573648,
           "checksum": "04ce2955f98775e57e664e06c2b4d773"
         }
       ]
     },
     {
-      "model_key": "SR_REALCUGAN_PRO_CONSERVATIVE",
+      "model_key": "SR_REALCUGAN_NOSE",
       "browser_url": "https://github.com/nihui/realcugan-ncnn-vulkan",
       "family": "realcugan",
       "scale": 2,
       "noise": 0,
       "prepad": 18,
+      "fp16Arithmetic": true,
+      "blobIn": "in0",
+      "blobOut": "out0",
+      "bgr": false,
       "files": [
         {
-          "file_name": "up2x_pro_conservative.param",
-          "download_url": "https://raw.githubusercontent.com/nihui/realcugan-ncnn-vulkan/master/models/models-pro/up2x-conservative.param",
-          "file_size": 4765,
-          "checksum": "5c17892838c3b4a1e484c278694a4c2a"
+          "file_name": "cugan_nose_2x_nodenoise.param",
+          "download_url": "https://raw.githubusercontent.com/nihui/realcugan-ncnn-vulkan/395302c5c70f1bff604c974e92e0a87e45c9f9ee/models/models-nose/up2x-no-denoise.param",
+          "file_size": 3309,
+          "checksum": "94fe05f0d88558dff402168c6c33f864"
         },
         {
-          "file_name": "up2x_pro_conservative.bin",
-          "download_url": "https://raw.githubusercontent.com/nihui/realcugan-ncnn-vulkan/master/models/models-pro/up2x-conservative.bin",
-          "file_size": 2573648,
-          "checksum": "1f6824820c04bd61a8ddc9c0b4ef4f68"
+          "file_name": "cugan_nose_2x_nodenoise.bin",
+          "download_url": "https://raw.githubusercontent.com/nihui/realcugan-ncnn-vulkan/395302c5c70f1bff604c974e92e0a87e45c9f9ee/models/models-nose/up2x-no-denoise.bin",
+          "file_size": 2551408,
+          "checksum": "a0a02d39c5990e967b7766f256157516"
         }
-      ]
+      ],
+      "syncGap": 0
     },
     {
-      "model_key": "SR_REALCUGAN_PRO_DENOISE3X",
-      "browser_url": "https://github.com/nihui/realcugan-ncnn-vulkan",
-      "family": "realcugan",
+      "model_key": "SR_WAIFU2X_CUNET",
+      "browser_url": "https://github.com/nihui/waifu2x-ncnn-vulkan",
+      "family": "waifu2x",
       "scale": 2,
-      "noise": 3,
+      "noise": 2,
       "prepad": 18,
+      "fp16Arithmetic": true,
       "files": [
         {
-          "file_name": "up2x_pro_denoise3x.param",
-          "download_url": "https://raw.githubusercontent.com/nihui/realcugan-ncnn-vulkan/master/models/models-pro/up2x-denoise3x.param",
-          "file_size": 4765,
-          "checksum": "5c17892838c3b4a1e484c278694a4c2a"
+          "file_name": "w2x_cunet_n2.param",
+          "download_url": "https://raw.githubusercontent.com/nihui/waifu2x-ncnn-vulkan/64914665c45893135c9e50c1c296170a121b9f77/models/models-cunet/noise2_scale2.0x_model.param",
+          "file_size": 7249,
+          "checksum": "cfdf971ec16707dd9b0f9212a52f73e0"
         },
         {
-          "file_name": "up2x_pro_denoise3x.bin",
-          "download_url": "https://raw.githubusercontent.com/nihui/realcugan-ncnn-vulkan/master/models/models-pro/up2x-denoise3x.bin",
-          "file_size": 2573648,
-          "checksum": "de65a912b80fca965f7f33656e49b41b"
+          "file_name": "w2x_cunet_n2.bin",
+          "download_url": "https://raw.githubusercontent.com/nihui/waifu2x-ncnn-vulkan/64914665c45893135c9e50c1c296170a121b9f77/models/models-cunet/noise2_scale2.0x_model.bin",
+          "file_size": 2776400,
+          "checksum": "5f8e0757c46f2f10c4b8b7b0e0991a47"
         }
       ]
     },
     {
-      "model_key": "SR_REALESRGAN_ANIME6B",
-      "browser_url": "https://huggingface.co/HNoise7676/RealESRGAN_x4plus_anime_6B_NCNN",
+      "model_key": "SR_WAIFU2X_FAST",
+      "browser_url": "https://github.com/nihui/waifu2x-ncnn-vulkan",
+      "family": "waifu2x",
+      "scale": 2,
+      "noise": 2,
+      "prepad": 7,
+      "fp16Arithmetic": true,
+      "files": [
+        {
+          "file_name": "w2x_up7_fast_n2.param",
+          "download_url": "https://raw.githubusercontent.com/nihui/waifu2x-ncnn-vulkan/64914665c45893135c9e50c1c296170a121b9f77/models/models-upconv_7_anime_style_art_rgb/noise2_scale2.0x_model.param",
+          "file_size": 1047,
+          "checksum": "d731ed12a5334c0a895b580052ed8c52"
+        },
+        {
+          "file_name": "w2x_up7_fast_n2.bin",
+          "download_url": "https://raw.githubusercontent.com/nihui/waifu2x-ncnn-vulkan/64914665c45893135c9e50c1c296170a121b9f77/models/models-upconv_7_anime_style_art_rgb/noise2_scale2.0x_model.bin",
+          "file_size": 1106248,
+          "checksum": "7af270450a82687208a13af37ee52b54"
+        }
+      ]
+    },
+    {
+      "model_key": "SR_REALESRGAN",
+      "browser_url": "https://github.com/xinntao/Real-ESRGAN",
       "family": "realesrgan",
-      "scale": 4,
+      "scale": 2,
       "noise": -1,
       "prepad": 10,
+      "fp16Arithmetic": true,
       "files": [
         {
-          "file_name": "realesrgan_anime6b_x4.param",
-          "download_url": "https://huggingface.co/HNoise7676/RealESRGAN_x4plus_anime_6B_NCNN/resolve/main/RealESRGAN_x4plus_anime_6B.param",
-          "file_size": 43719,
-          "checksum": "b246f6e05751d7b764950c088d4b8676"
+          "file_name": "esrgan_av3_x2.param",
+          "download_url": "https://raw.githubusercontent.com/HaoweiLi97/mihon_img_upscale/053c33caf2e2b8286d6d0426f1b7ad01cf9e11c7/app/src/main/assets/realesrgan-models/v3-anime/x2.param",
+          "file_size": 3173,
+          "checksum": "b80b641cfe03afdea5c5ad3119388eb8"
         },
         {
-          "file_name": "realesrgan_anime6b_x4.bin",
-          "download_url": "https://huggingface.co/HNoise7676/RealESRGAN_x4plus_anime_6B_NCNN/resolve/main/RealESRGAN_x4plus_anime_6B.bin",
-          "file_size": 17871500,
-          "checksum": "620ebe3363900ed67354aef10b725ba4"
+          "file_name": "esrgan_av3_x2.bin",
+          "download_url": "https://raw.githubusercontent.com/HaoweiLi97/mihon_img_upscale/053c33caf2e2b8286d6d0426f1b7ad01cf9e11c7/app/src/main/assets/realesrgan-models/v3-anime/x2.bin",
+          "file_size": 1247368,
+          "checksum": "3d0f8e0531ae348443b91268342b2f41"
+        }
+      ]
+    },
+    {
+      "model_key": "SR_W2XEX_UNIVERSAL_FAST",
+      "browser_url": "https://huggingface.co/randomblock1/W2xEX-ESRGAN",
+      "family": "generic",
+      "scale": 2,
+      "noise": 0,
+      "prepad": 18,
+      "fp16Arithmetic": true,
+      "blobIn": "data",
+      "blobOut": "output",
+      "bgr": true,
+      "files": [
+        {
+          "file_name": "w2xex_universal_fast.param",
+          "download_url": "https://huggingface.co/randomblock1/W2xEX-ESRGAN/resolve/8df3832255644c69e52e28d14f56177459fc9511/Universal-Fast-W2xEX.param",
+          "file_size": 3886,
+          "checksum": "153849f1db108984b48b0a94f7e9bbf8"
+        },
+        {
+          "file_name": "w2xex_universal_fast.bin",
+          "download_url": "https://huggingface.co/randomblock1/W2xEX-ESRGAN/resolve/8df3832255644c69e52e28d14f56177459fc9511/Universal-Fast-W2xEX.bin",
+          "file_size": 2402680,
+          "checksum": "2084461a6f4042aad4501933640fdad5"
+        }
+      ]
+    },
+    {
+      "model_key": "SR_W2XEX_OMNI_MINI_V2",
+      "browser_url": "https://huggingface.co/randomblock1/W2xEX-ESRGAN",
+      "family": "generic",
+      "scale": 2,
+      "noise": 0,
+      "prepad": 10,
+      "fp16Arithmetic": true,
+      "blobIn": "data",
+      "blobOut": "output",
+      "bgr": true,
+      "files": [
+        {
+          "file_name": "w2xex_omni_mini_v2.param",
+          "download_url": "https://huggingface.co/randomblock1/W2xEX-ESRGAN/resolve/8df3832255644c69e52e28d14f56177459fc9511/Omni-MiniV2-W2xEX.param",
+          "file_size": 1689,
+          "checksum": "2841ac544616417f27a27c3288452531"
+        },
+        {
+          "file_name": "w2xex_omni_mini_v2.bin",
+          "download_url": "https://huggingface.co/randomblock1/W2xEX-ESRGAN/resolve/8df3832255644c69e52e28d14f56177459fc9511/Omni-MiniV2-W2xEX.bin",
+          "file_size": 180664,
+          "checksum": "f2837bd9b27208a5cf0007ba8ca2fbe3"
+        }
+      ]
+    },
+    {
+      "model_key": "SR_W2XEX_PHOTO_SMALL",
+      "browser_url": "https://huggingface.co/randomblock1/W2xEX-ESRGAN",
+      "family": "generic",
+      "scale": 2,
+      "noise": 0,
+      "prepad": 18,
+      "fp16Arithmetic": true,
+      "blobIn": "data",
+      "blobOut": "output",
+      "bgr": true,
+      "files": [
+        {
+          "file_name": "w2xex_photo_small.param",
+          "download_url": "https://huggingface.co/randomblock1/W2xEX-ESRGAN/resolve/8df3832255644c69e52e28d14f56177459fc9511/Photo-Small-W2xEX.param",
+          "file_size": 3886,
+          "checksum": "153849f1db108984b48b0a94f7e9bbf8"
+        },
+        {
+          "file_name": "w2xex_photo_small.bin",
+          "download_url": "https://huggingface.co/randomblock1/W2xEX-ESRGAN/resolve/8df3832255644c69e52e28d14f56177459fc9511/Photo-Small-W2xEX.bin",
+          "file_size": 2402680,
+          "checksum": "e458f0849741b30c1975d32a49cb8a0d"
+        }
+      ]
+    },
+    {
+      "model_key": "SR_SUDO_ULTRA_COMPACT",
+      "browser_url": "https://github.com/HaoweiLi97/mihon_img_upscale",
+      "family": "generic",
+      "scale": 2,
+      "noise": 0,
+      "prepad": 10,
+      "fp16Arithmetic": true,
+      "blobIn": "input",
+      "blobOut": "output",
+      "bgr": false,
+      "files": [
+        {
+          "file_name": "sudo_ultracompact.param",
+          "download_url": "https://raw.githubusercontent.com/HaoweiLi97/mihon_img_upscale/053c33caf2e2b8286d6d0426f1b7ad01cf9e11c7/app/src/main/assets/sudo-ultracompact/2x-sudo-UltraCompact/2x-sudo-UltraCompact.param",
+          "file_size": 1833,
+          "checksum": "b7ff950f07fa82f68f71fd4b3765a8e7"
+        },
+        {
+          "file_name": "sudo_ultracompact.bin",
+          "download_url": "https://raw.githubusercontent.com/HaoweiLi97/mihon_img_upscale/053c33caf2e2b8286d6d0426f1b7ad01cf9e11c7/app/src/main/assets/sudo-ultracompact/2x-sudo-UltraCompact/2x-sudo-UltraCompact.bin",
+          "file_size": 1218904,
+          "checksum": "2939b2354685e9411090849bb6c19e3d"
+        }
+      ]
+    },
+    {
+      "model_key": "SR_SPAN_NOMOSUNI",
+      "browser_url": "https://openmodeldb.info/models/2x-NomosUni-span-multijpg-ldl",
+      "family": "generic",
+      "scale": 2,
+      "noise": 0,
+      "prepad": 24,
+      "fp16Arithmetic": true,
+      "blobIn": "in0",
+      "blobOut": "out0",
+      "bgr": true,
+      "files": [
+        {
+          "file_name": "span_nomosuni.param",
+          "download_url": "https://raw.githubusercontent.com/HaoweiLi97/mihon_img_upscale/053c33caf2e2b8286d6d0426f1b7ad01cf9e11c7/app/src/main/assets/span-nomosuni/2x-NomosUni-SPAN-multijpg-ldl/2x-NomosUni-SPAN-multijpg-ldl.param",
+          "file_size": 6046,
+          "checksum": "69a93e1206f9be6153787ecc3284026d"
+        },
+        {
+          "file_name": "span_nomosuni.bin",
+          "download_url": "https://raw.githubusercontent.com/HaoweiLi97/mihon_img_upscale/053c33caf2e2b8286d6d0426f1b7ad01cf9e11c7/app/src/main/assets/span-nomosuni/2x-NomosUni-SPAN-multijpg-ldl/2x-NomosUni-SPAN-multijpg-ldl.bin",
+          "file_size": 1642900,
+          "checksum": "04fc96676ff20cd958af50a49cc0b7c5"
         }
       ]
     }

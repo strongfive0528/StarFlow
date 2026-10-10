@@ -35,43 +35,24 @@ object SrModelManager {
      * 新增模型时**同时**要加：`ModelKey`、`downloadinfo.json`、以及本列表。
      */
     val allKeys: List<ModelKey> = listOf(
-        ModelKey.SR_W2X_UP7_ANIME_M1,
-        ModelKey.SR_W2X_UP7_ANIME_N2,
-        ModelKey.SR_W2X_UP7_PHOTO_M1,
-        ModelKey.SR_W2X_UP7_PHOTO_N2,
-        ModelKey.SR_W2X_CUNET_M1,
-        ModelKey.SR_W2X_CUNET_N1,
-        ModelKey.SR_W2X_CUNET_N2,
-        ModelKey.SR_SRMD_X2,
-        ModelKey.SR_SRMD_NF_X2,
-        ModelKey.SR_REALCUGAN_NODENOISE,
-        ModelKey.SR_REALCUGAN_CONSERVATIVE,
-        ModelKey.SR_REALCUGAN_DENOISE3X,
-        ModelKey.SR_REALCUGAN_PRO_NODENOISE,
-        ModelKey.SR_REALCUGAN_PRO_CONSERVATIVE,
-        ModelKey.SR_REALCUGAN_PRO_DENOISE3X,
-        ModelKey.SR_REALESRGAN_ANIME6B,
+        ModelKey.SR_REALCUGAN_SE,
+        ModelKey.SR_REALCUGAN_PRO,
+        ModelKey.SR_REALCUGAN_NOSE,
+        ModelKey.SR_WAIFU2X_CUNET,
+        ModelKey.SR_WAIFU2X_FAST,
+        ModelKey.SR_REALESRGAN,
+        ModelKey.SR_W2XEX_UNIVERSAL_FAST,
+        ModelKey.SR_W2XEX_OMNI_MINI_V2,
+        ModelKey.SR_W2XEX_PHOTO_SMALL,
+        ModelKey.SR_SUDO_ULTRA_COMPACT,
+        ModelKey.SR_SPAN_NOMOSUNI
     )
 
-    /**
-     * 老版本存过的档位名 → 现行档位（sr_active_model_key 里存的是 [ModelKey.name]）。
-     *
-     * ⚠️ **照片族的键已经回归**（`SR_W2X_UP7_PHOTO_M1` / `_N2` 都在 [allKeys] 里）——
-     * 所以**不许**再把它们重定向到动漫键：那会让"选了照片模型"的用户静默跑成动漫模型
-     * （照片/彩页/网点重的图源用动漫权重会明显更糊），而且用户完全看不出来。
-     * 这里只剩两条真正"键已不存在"的迁移：动漫 N3（改档为 N2）与照片 N3（改档为 N2）。
-     */
-    private val LEGACY_KEY_MAP = mapOf(
-        "SR_W2X_UP7_ANIME_N3" to ModelKey.SR_W2X_UP7_ANIME_N2,
-        "SR_W2X_UP7_PHOTO_N3" to ModelKey.SR_W2X_UP7_PHOTO_N2,
-    )
-
-    /** 当前启用的模型；未选 / 存了非法值 → null（旧档位名先按 [LEGACY_KEY_MAP] 迁移并回写）。 */
-    fun getActiveKey(prefs: SharedPreferences): ModelKey? {
-        val raw = prefs.getString(PREF_ACTIVE_KEY, null) ?: return null
-        runCatching { ModelKey.valueOf(raw) }.getOrNull()?.takeIf { it in allKeys }?.let { return it }
-        return LEGACY_KEY_MAP[raw]?.takeIf { it in allKeys }?.also { setActive(prefs, it) }
-    }
+    /** Only the current, unpublished catalog is accepted. */
+    fun getActiveKey(prefs: SharedPreferences): ModelKey? =
+        prefs.getString(PREF_ACTIVE_KEY, null)?.let { raw ->
+            runCatching { ModelKey.valueOf(raw) }.getOrNull()?.takeIf { it in allKeys }
+        }
 
     /**
      * 模型展示名（字符串资源）。
@@ -80,22 +61,18 @@ object SrModelManager {
      * 两处各写一套必然漂移（改了一个忘了另一个 → 同一个模型两个名字）。
      */
     fun nameResOf(key: ModelKey): Int = when (key) {
-        ModelKey.SR_W2X_UP7_ANIME_M1 -> R.string.sr_model_w2x_up7_anime_m1
-        ModelKey.SR_W2X_UP7_ANIME_N2 -> R.string.sr_model_w2x_up7_anime_n2
-        ModelKey.SR_W2X_UP7_PHOTO_M1 -> R.string.sr_model_w2x_up7_photo_m1
-        ModelKey.SR_W2X_UP7_PHOTO_N2 -> R.string.sr_model_w2x_up7_photo_n2
-        ModelKey.SR_W2X_CUNET_M1 -> R.string.sr_model_w2x_cunet_m1
-        ModelKey.SR_W2X_CUNET_N1 -> R.string.sr_model_w2x_cunet_n1
-        ModelKey.SR_W2X_CUNET_N2 -> R.string.sr_model_w2x_cunet_n2
-        ModelKey.SR_SRMD_X2 -> R.string.sr_model_srmd_x2
-        ModelKey.SR_SRMD_NF_X2 -> R.string.sr_model_srmd_nf_x2
-        ModelKey.SR_REALCUGAN_NODENOISE -> R.string.sr_model_cugan_dn
-        ModelKey.SR_REALCUGAN_CONSERVATIVE -> R.string.sr_model_cugan_cons
-        ModelKey.SR_REALCUGAN_DENOISE3X -> R.string.sr_model_cugan_d3
-        ModelKey.SR_REALCUGAN_PRO_NODENOISE -> R.string.sr_model_cugan_pro_dn
-        ModelKey.SR_REALCUGAN_PRO_CONSERVATIVE -> R.string.sr_model_cugan_pro_cons
-        ModelKey.SR_REALCUGAN_PRO_DENOISE3X -> R.string.sr_model_cugan_pro_d3
-        ModelKey.SR_REALESRGAN_ANIME6B -> R.string.sr_model_rsrgan_a6b
+        ModelKey.SR_REALCUGAN_SE -> R.string.sr_model_realcugan_se
+        ModelKey.SR_REALCUGAN_PRO -> R.string.sr_model_realcugan_pro
+        ModelKey.SR_REALCUGAN_NOSE -> R.string.sr_model_realcugan_nose
+        ModelKey.SR_WAIFU2X_CUNET -> R.string.sr_model_waifu2x_cunet
+        ModelKey.SR_WAIFU2X_FAST -> R.string.sr_model_waifu2x_fast
+        ModelKey.SR_REALESRGAN -> R.string.sr_model_realesrgan_av3
+        ModelKey.SR_W2XEX_UNIVERSAL_FAST -> R.string.sr_model_w2xex_uf
+        ModelKey.SR_W2XEX_OMNI_MINI_V2 -> R.string.sr_model_w2xex_omni
+        ModelKey.SR_W2XEX_PHOTO_SMALL -> R.string.sr_model_w2xex_photo
+        ModelKey.SR_SUDO_ULTRA_COMPACT -> R.string.sr_model_sudo_uc
+        ModelKey.SR_SPAN_NOMOSUNI -> R.string.sr_model_span_nomosuni
+        // 非超分档位（OCR/翻译模型）不在本表里：调用方只用它对超分档位取文案
         else -> 0
     }
 
@@ -119,7 +96,7 @@ object SrModelManager {
         return info.files.map { File(dir, it.fileName) }
     }
 
-    /** 某模型的第一个文件（AnimeJaNai ONNX 单文件模型用；保留旧语义） */
+    /** 某模型的第一个文件（仅用于文件展示；推理须使用 ncnnPair） */
     fun modelFile(context: Context, key: ModelKey): File? = modelFiles(context, key).firstOrNull()
 
     /**
@@ -136,7 +113,37 @@ object SrModelManager {
         return param to bin
     }
 
-    /** 该模型是否已下载（**所有**文件都存在且非空） */
-    fun isDownloaded(context: Context, key: ModelKey): Boolean =
-        modelFiles(context, key).let { it.isNotEmpty() && it.all { f -> f.isFile && f.length() > 0L } }
+    private data class Validation(val signature: String, val error: String?)
+    private val validations = java.util.concurrent.ConcurrentHashMap<ModelKey, Validation>()
+    private fun fileSignature(context: Context, key: ModelKey): String =
+        modelFiles(context, key).joinToString("|") { "${it.absolutePath}:${it.length()}:${it.lastModified()}" }
+
+    /** Hashing is performed on IO at startup, model-page refresh and before inference. */
+    fun validate(context: Context, key: ModelKey): String? {
+        val signature = fileSignature(context, key)
+        validations[key]?.takeIf { it.signature == signature }?.let { return it.error }
+        val info = ModelDownloadRepository.getInstance(context).getModelInfo(key)
+        val files = modelFiles(context, key)
+        val error = if(info == null || files.isEmpty()) "model manifest is missing" else
+            info.files.zip(files).firstNotNullOfOrNull { (entry, file) ->
+                when {
+                    !file.isFile || file.length() == 0L -> "model file missing: ${file.name}"
+                    entry.fileSize > 0 && file.length() != entry.fileSize -> "model size mismatch: ${file.name}"
+                    !com.moe.starflow.download.ChecksumHelper.verifyChecksum(file, entry.checksum) -> "model checksum mismatch: ${file.name}"
+                    else -> null
+                }
+            }
+        validations[key] = Validation(signature, error)
+        return error
+    }
+    fun validationError(context: Context, key: ModelKey): String? =
+        validations[key]?.takeIf { it.signature == fileSignature(context, key) }?.error
+
+    /** Cheap UI predicate; no hashes on the main thread. */
+    fun isDownloaded(context: Context, key: ModelKey): Boolean {
+        val files = modelFiles(context, key)
+        if(files.isEmpty() || files.any { !it.isFile || it.length()==0L }) return false
+        val known = validations[key]?.takeIf { it.signature == fileSignature(context, key) }
+        return known?.error == null && known != null
+    }
 }

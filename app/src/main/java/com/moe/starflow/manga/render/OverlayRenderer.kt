@@ -197,7 +197,7 @@ object OverlayRenderer {
          * - 输出 = 坐标空间 × [renderScale]
          * - 底图铺满输出：`baseScale == renderScale` 时**恰好 1:1 落上去、零重采样**
          *
-         * ⚠️ **为什么必须是"精确"的倍率**：超分图的尺寸由 [com.moe.starflow.sr.AnimeJaNaiEngine]
+         * ⚠️ **为什么必须是"精确"的倍率**：超分图的尺寸由 [com.moe.starflow.sr.NcnnSrEngine]
          * 的硬契约保证（`out.width == src.width * 2`，靠补边 + 精确裁剪，不是"大约 2 倍"）。
          * 模型原始输出其实比 2x 少 72px（cunet）/ 32px（swin），直接按同一个倍率去映射会
          * **整体平移**；所以契约必须由引擎兜住，这里才敢用纯缩放。
