@@ -173,8 +173,9 @@ class NovelShelfFragment : Fragment() {
     private fun showImportDialog() {
         val view = LayoutInflater.from(requireContext())
             .inflate(R.layout.dialog_import_manga, null, false)
-        // 与漫画共用同一份布局，各自填自己的选项文案（措辞对齐 koto）
-        view.findViewById<TextView>(R.id.btn_import_file).setText(R.string.import_manga_option_files)
+        // 与漫画共用同一份布局，各自填自己的选项文案（⚠️ 按钮文案也必须各用各的 key：
+        // 复用 `import_manga_option_files` 会让文本导入写着「导入文件（zip/cbz/cbr/7z）」）
+        view.findViewById<TextView>(R.id.btn_import_file).setText(R.string.import_novel_option_files)
         view.findViewById<TextView>(R.id.btn_import_single_dir)
             .setText(R.string.import_option_dir_novel_single)
         view.findViewById<TextView>(R.id.tv_import_file_desc).setText(R.string.import_desc_files_novel)

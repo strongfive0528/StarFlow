@@ -24,7 +24,32 @@ interface NovelBatchTranslator {
         targetLang: String,
         translatorName: String,
     ): NovelBatchResult
+
+    /**
+     * **中止该引擎实例上所有在飞请求**（阅读器退出 / 打开面板 / 强制退出时用）。
+     *
+     * ⚠️ 与「某一次请求被取消」不同：接口层没有请求句柄，一取消就是取消全部 ——
+     * 这里要的正是全停（退出阅读器 = 这一次自动/增量翻译就此结束）。
+     * 默认空实现：纯逻辑单测的 Fake 不受影响。
+     */
+    fun abortAll() {}
 }
+
+/**
+ * **图片段翻译的宿主钩子**（注入 [NovelChapterTranslator]）。
+ *
+ * 图片段的翻译不是"把文字发出去"，而是「取插图 → OCR → 翻译 → 渲染载荷」——
+ * 这两件事分别属于阅读器（知道图在哪）与图片流水线（知道怎么 OCR）。翻译器只做编排：
+ * 拿到载荷就按普通译文行落库（`translatedText` = 拼接译文、`imagePayload` = 载荷 JSON）。
+ *
+ * ⚠️ **返回 null = 不翻图片**（阅读器按面板开关决定）：关掉开关的机器上一个图片段都不碰。
+ */
+class NovelImageHost(
+    /** 取某段的插图文件；null = 这一段没有可用的图（回落成"跳过"）。 */
+    val fileOf: suspend (book: ImportedNovel, chapterIndex: Int, paraIndex: Int) -> java.io.File?,
+    /** OCR + 翻译一张插图（真实实现在 [NovelImagePipeline]）。 */
+    val translate: suspend (file: java.io.File, sourceLang: String, targetLang: String) -> NovelImageOutcome,
+)
 
 /**
  * 章翻译编排：引擎产出 + 状态机写库。
@@ -53,6 +78,34 @@ class NovelChapterTranslator(
      * null = 不预警（纯逻辑单测与不关心预警的老调用方）。
      */
     private val warnGate: NovelBatchWarnGate? = null,
+    /**
+     * 图片段翻译的宿主（**返回 null = 不翻图片**，见 [NovelImageHost]）。
+     *
+     * ⚠️ 用 lambda 而不是直接传实例：阅读器是**按值缓存**这份 translator 的，而面板上的
+     * 「同时翻译图片」开关随时会变 —— 传值的话开关要重启阅读器才生效。
+     */
+    private val imageHost: (() -> NovelImageHost?)? = null,
+    /**
+     * 批内插图的**进度上报**：`(chapterIndex, 第几张(1 起), 共几张)`。
+     *
+     * 用户口径 2026-10-04：「由于 ocr 串行，**提示系统要显示当前正在翻译的图片状态**」——
+     * 一批里三张图要一张张 OCR，界面必须说得出"现在是第 2 张"，否则用户只看到一段很长的
+     * "翻译中"却不知道在等什么。null = 不上报（纯逻辑单测 / 不关心进度的调用方）。
+     */
+    private val onImageProgress: ((Int, Int, Int) -> Unit)? = null,
+    /**
+     * **一个请求单位翻完并落库**时上报：`(chapterIndex, 这一单位翻出来的段号)`。
+     *
+     * 用户口径 2026-10-04：「当前多张图片的结果**一起出现**，应该是**先 ocr 完成返回的就先显示结果**，
+     * 而不是非要等到整个批次都完成再一起显示」—— 一批现在可以发好几个请求
+     * （见 `NovelBatchPlanner.requestRuns`：连续文本合并、每张插图各自一个），
+     * 每落库一个就报一次，阅读器立刻把那一段/那张图上屏。
+     *
+     * ⚠️ 报的是「**已经写进库**」的段：调用方直接去库里读，不需要另传译文文本
+     * （图片要的是载荷，不是文本；统一从库里读才不会出现"两处各存一份"）。
+     * ⚠️ 失败的段**不上报**（它们的红底由失败明细那条路报），所以这个回调里拿到的段永远是成功的。
+     */
+    private val onUnitSettled: ((Int, List<Int>) -> Unit)? = null,
 ) : NovelBatchTranslator {
 
     private companion object {
@@ -76,10 +129,20 @@ class NovelChapterTranslator(
         translatorName: String,
         sourceLang: String,
         targetLang: String,
+        /**
+         * 把**图片段**也建成行（分母里算上它）。
+         *
+         * ⚠️ 只在「同时翻译图片」开着时为 true：关着的时候图片段按设计不翻译，
+         * 算进分母会让"已翻 x/y"永远差着那几张图（用户会以为漏翻了）。
+         */
+        includeImages: Boolean = false,
     ): List<NovelParagraphTranslation> {
         val now = System.currentTimeMillis()
         return paragraphs
-            .filter { it.type == NovelParagraphType.TEXT && it.originalText.isNotBlank() }
+            .filter {
+                (it.type == NovelParagraphType.TEXT && it.originalText.isNotBlank()) ||
+                    (includeImages && it.type == NovelParagraphType.IMAGE)
+            }
             .map { p ->
                 NovelParagraphTranslation(
                     novelId = book.id,
@@ -109,8 +172,8 @@ class NovelChapterTranslator(
      */
     private val ensuredChapters: MutableSet<String> = java.util.concurrent.ConcurrentHashMap.newKeySet()
 
-    private fun ensureKey(book: ImportedNovel, chapterIndex: Int) =
-        "${book.id}:${book.translationKey}:$chapterIndex:$splitVersion"
+    private fun ensureKey(book: ImportedNovel, chapterIndex: Int, includeImages: Boolean = false) =
+        "${book.id}:${book.translationKey}:$chapterIndex:$splitVersion${if (includeImages) ":img" else ""}"
 
     /**
      * 把该章**所有可翻译段**先落成 IDLE 行（`insertIgnore`：已有行一个字段都不动）。
@@ -130,15 +193,26 @@ class NovelChapterTranslator(
         translatorName: String,
         sourceLang: String,
         targetLang: String,
+        includeImages: Boolean = false,
+        /**
+         * 要不要把"本章已补齐"记进 [ensuredChapters]。
+         *
+         * ⚠️ **只传了单段时必须是 false**（长按翻译一张图那条路）：否则那一章会被标成
+         * "分母已补齐"，而库里其实只有那一段的行 —— 后面整章翻译再也不补分母，
+         * 章行显示「已翻 1/1」却还有几十段没翻。
+         */
+        markEnsured: Boolean = true,
     ) {
-        val key = ensureKey(book, chapterIndex)
-        if (!ensuredChapters.add(key)) return
+        val key = ensureKey(book, chapterIndex, includeImages)
+        if (markEnsured && !ensuredChapters.add(key)) return
         try {
-            val rows = idleRows(book, chapterIndex, paragraphs, translatorName, sourceLang, targetLang)
+            val rows = idleRows(
+                book, chapterIndex, paragraphs, translatorName, sourceLang, targetLang, includeImages,
+            )
             if (rows.isNotEmpty()) dao.insertIgnore(rows)
         } catch (e: Exception) {
             // 写失败就把标记退回去：否则这次失败会让该章的分母**永久**缺失
-            ensuredChapters.remove(key)
+            if (markEnsured) ensuredChapters.remove(key)
             throw e
         }
     }
@@ -162,10 +236,19 @@ class NovelChapterTranslator(
         translatorName: String,
         sourceLang: String,
         targetLang: String,
+        includeImages: Boolean = false,
+        /** 见 [ensureChapterRows] 的 `markEnsured`（单段调用必须传 false）。 */
+        markEnsured: Boolean = true,
     ) {
-        ensureChapterRows(book, chapterIndex, paragraphs, translatorName, sourceLang, targetLang)
+        ensureChapterRows(
+            book, chapterIndex, paragraphs, translatorName, sourceLang, targetLang, includeImages,
+            markEnsured,
+        )
         val inBatch = batch
-            .filter { it.type == NovelParagraphType.TEXT && it.originalText.isNotBlank() }
+            .filter {
+                (it.type == NovelParagraphType.TEXT && it.originalText.isNotBlank()) ||
+                    (includeImages && it.type == NovelParagraphType.IMAGE)
+            }
             .map { it.index }
         if (inBatch.isEmpty()) return
         dao.markTranslatingRows(
@@ -226,10 +309,27 @@ class NovelChapterTranslator(
     }
 
     /**
+     * 只把残留的「翻译中」复位成 IDLE（**不动**别的版本的行）。
+     *
+     * 用途：**强制退出在途翻译**（停队列 / 打开面板 / 切后台）时那一批被 cancel，
+     * 写 SUCCESS/FAILED 的代码根本不会执行 → 库里留下 TRANSLATING，面板会把它永远显示成
+     * "翻译中"（用户看到的是"卡住了"）。这里当场复位，不等下次进阅读器的 [resetStale]。
+     */
+    suspend fun resetTranslating(book: ImportedNovel) {
+        dao.resetTranslating(book.id, book.translationKey)
+    }
+
+    /** 见 [NovelBatchTranslator.abortAll]：整批任务/阅读器退出时把在途请求真的掐掉。 */
+    override fun abortAll() {
+        engine.abortInFlight()
+    }
+
+    /**
      * 翻**一批**并落库（[paraIndexes] 来自 `NovelBatchPlanner.nextBatch`）。
      *
-     * **只发一次请求、只写这一批的库** —— 队列靠它实现「点一次翻一批」和「增量配额 x 批」；
-     * 要翻整章是 `NovelTranslationQueue.translateWholeChapter` 一批批地调它。
+     * **一批 = 若干次请求**（见 `NovelBatchPlanner.requestRuns` 与用户口径）：连续的文本段合成**一次**
+     * 请求，**每张插图各占一次**请求（OCR + 翻译），批内**串行**发出。批仍是进度/高亮/配额的单位
+     * —— 所以「每批 3 段」遇到三张图就是三个请求、三张图同时黄、OCR 完一张就先显示一张。
      *
      * 这一批里没拿到的段标 `FAILED`（带 failCode）—— **绝不写空译文**：
      * 空串会被读回路径当成「已成功翻译」而永不重试（见 [persist] 的说明）。
@@ -244,43 +344,116 @@ class NovelChapterTranslator(
         translatorName: String,
     ): NovelBatchResult {
         if (paraIndexes.isEmpty()) return NovelBatchResult(emptyMap())
-        val wanted = paraIndexes.toSet()
-        val mine = paragraphs.filter {
-            it.index in wanted && it.type == NovelParagraphType.TEXT && it.originalText.isNotBlank()
-        }
-        if (mine.isEmpty()) return NovelBatchResult(emptyMap())
+        val host = imageHost?.invoke()
+        val includeImages = host != null
+        // ── 批内**请求单位**（用户口径 2026-10-04，见 `NovelBatchPlanner.requestRuns`）──
+        // 连续文本合并成一个请求、**每张插图独占一个请求**；批本身不拆
+        //（「图片算段落的一段！每批 3 段，哪怕三张都是图片，也要先后翻译三张图片」）。
+        // ⚠️ 顺序原样保留：`[文本, 图片, 文本]` 就是三次请求，不是"文本先合并、图片后跑"。
+        val runs = NovelBatchPlanner.requestRuns(paragraphs, paraIndexes, includeImages)
+        if (runs.isEmpty()) return NovelBatchResult(emptyMap())
+        val textIndexes = runs.filter { !it.isImage }.flatMap { it.paraIndexes }
+        val imageRuns = runs.filter { it.isImage }
+        val byIndex = paragraphs.associateBy { it.index }
 
         // **单批超长预警**：合并文本估算超过用户设的阈值 → 由宿主弹窗问「继续 / 取消这次翻译」。
-        // 用户取消 → 这一批**不发请求、不写库**（不写 FAILED：那些行保持 IDLE，用户可以改大阈值或
+        // 用户取消 → 这一批的**文本**不发请求、不写库（不写 FAILED：那些行保持 IDLE，用户可以改大阈值或
         // 直接重来），只回一个空结果，由调用方按"没翻成"处理（队列会记账跳过、不无限重试）。
+        // ⚠️ 估算口径仍按「这一批的**全部**文本段之和」（拆请求前后一致 —— 一批纯文本时它就等于那一个
+        // 请求的正文；混合批里略微保守，属于刻意：宁可早问一次也别把整章正文塞进一次上下文）。
+        var textDeclined = false
         val gate = warnGate
-        if (gate != null) {
+        if (gate != null && textIndexes.isNotEmpty()) {
             val threshold = gate.threshold()
-            val estimate = NovelBatchWarning.estimateOf(mine.map { it.originalText })
+            val estimate = NovelBatchWarning.estimateOf(
+                textIndexes.mapNotNull { byIndex[it]?.originalText },
+            )
             if (NovelBatchWarning.shouldWarn(estimate, threshold)) {
                 val go = gate.confirm(estimate, threshold)
                 LogCollector.w(
                     TAG,
                     "第 $chapterIndex 章一批内容约 $estimate tokens（阈值 $threshold），用户选择继续=$go",
                 )
-                if (!go) return NovelBatchResult(emptyMap())
+                // ⚠️ 只跳过**文本**那一半：图片本来就不走超长预警（OCR 出来的短句不可能超），
+                // 用户选择"取消本次翻译"时不该把同一批里的插图也一起吞掉
+                if (!go) textDeclined = true
             }
         }
 
-        // 落库前的两步准备工作合在一处（顺序敏感，见下）
-        prepareChapterForBatch(book, chapterIndex, paragraphs, mine, translatorName, sourceLang, targetLang)
-        val result = engine.translateBatch(paragraphs, mine.map { it.index }, sourceLang, targetLang)
-        val got = result.translations
-        persist(
-            book = book,
-            chapterIndex = chapterIndex,
-            paragraphs = paragraphs,
-            translations = got,
-            translatorName = translatorName,
-            sourceLang = sourceLang,
-            targetLang = targetLang,
-        )
-        val missed = mine.map { it.index }.filter { it !in got }
+        // 这一批的段**一起标成「翻译中」**（分母 + 状态）：三张图也要同时显示黄色状态
+        //（用户口径：「这三张图片都要显示黄色状态」），而不是按请求一个个标。
+        // 落库前的两步准备工作合在一处（顺序敏感，见 prepareChapterForBatch 的说明）。
+        if (textDeclined) {
+            // 用户取消了这一批的**文本**：一个字的库都不写（老行为 —— 那几段保持 IDLE 可重来），
+            // 只把同一批里的插图准备一下（它们本就不走超长预警，不该被一起吞掉）。
+            // ⚠️ 这里只喂插图段：喂整章 `paragraphs` 会把整章的分母行建出来，等于"取消"还写了库。
+            if (imageRuns.isNotEmpty()) {
+                val imgParas = imageRuns.mapNotNull { byIndex[it.paraIndexes.first()] }
+                prepareChapterForBatch(
+                    book, chapterIndex, imgParas, imgParas, translatorName, sourceLang, targetLang,
+                    includeImages = true, markEnsured = false,
+                )
+            }
+        } else {
+            prepareChapterForBatch(
+                book, chapterIndex, paragraphs,
+                runs.flatMap { run -> run.paraIndexes.mapNotNull { byIndex[it] } },
+                translatorName, sourceLang, targetLang, includeImages,
+            )
+        }
+
+        val got = LinkedHashMap<Int, String>()
+        var error: String? = null
+
+        // ── 逐个请求单位串行发出 ──
+        // 批内的请求是**串行**的：插图 OCR 是单例引擎（`OcrLock`），文本与插图也没必要抢带宽。
+        // 跨批的并发仍由队列的「最大同时请求数」管 —— 所以同时飞出去的请求数**不会**因为拆请求而变多。
+        var imageDone = 0
+        for (run in runs) {
+            if (!run.isImage) {
+                if (textDeclined) continue
+                val result = engine.translateBatch(paragraphs, run.paraIndexes, sourceLang, targetLang)
+                got.putAll(result.translations)
+                if (result.error != null && error == null) error = result.error
+                persist(
+                    book = book,
+                    chapterIndex = chapterIndex,
+                    paragraphs = paragraphs,
+                    translations = result.translations,
+                    translatorName = translatorName,
+                    sourceLang = sourceLang,
+                    targetLang = targetLang,
+                )
+                // **落库即上报**：阅读器马上把这几段上屏（不必等这一批剩下的请求跑完）
+                // ⚠️ 排一下序：`result.translations` 是引擎按**回文顺序**建的（模型可能逆序回包），
+                // 上报顺序跟着它走会让日志/断言随模型脾气变 —— 这里要的是"段号集合"，排一下更稳。
+                if (result.translations.isNotEmpty()) {
+                    onUnitSettled?.invoke(chapterIndex, result.translations.keys.sorted())
+                }
+            } else {
+                val para = byIndex[run.paraIndexes.first()] ?: continue
+                // 批内插图进度：`i/N` 里的 N 是**这一批的插图数**（用户口径「提示系统要显示
+                // 当前正在翻译的图片状态」）
+                imageDone++
+                onImageProgress?.invoke(chapterIndex, imageDone, imageRuns.size)
+                val one = translateOneImage(
+                    book, chapterIndex, para, host!!, sourceLang, targetLang, translatorName,
+                )
+                if (one.first != null) {
+                    got[para.index] = one.first!!
+                    // **OCR 完一张就先显示一张**（用户口径：先完成先显示，不等整批）
+                    onUnitSettled?.invoke(chapterIndex, listOf(para.index))
+                } else {
+                    one.second?.let { if (error == null) error = it }
+                }
+            }
+        }
+        // 这一批的插图跑完了（或本来就没有）→ 清掉"第 i/N 张"的提示，别让它挂到下一批
+        if (imageRuns.isNotEmpty()) onImageProgress?.invoke(chapterIndex, 0, imageRuns.size)
+
+        val missed = (textIndexes + imageRuns.map { it.paraIndexes.first() })
+            // 用户主动取消的那一半文本**不标失败**（保持 IDLE，改大阈值就能重来）
+            .filter { it !in got && !(textDeclined && it in textIndexes) }
         if (missed.isNotEmpty()) {
             dao.markFailed(
                 novelId = book.id,
@@ -290,12 +463,114 @@ class NovelChapterTranslator(
                 paraIndexes = missed,
                 // ⚠️ failCode 存**原始原因**（异常类型 + message 整条链 / 模型到底回了什么），
                 // 不是一句"失败"：用户在章行展开里看到的就是它，含糊的文案等于没报错。
-                failCode = result.error ?: FAIL_CODE_EMPTY,
+                failCode = error ?: FAIL_CODE_EMPTY,
                 now = System.currentTimeMillis(),
             )
-            LogCollector.w(TAG, "第 $chapterIndex 章有 ${missed.size} 段没拿到译文：${result.error}")
+            LogCollector.w(TAG, "第 $chapterIndex 章有 ${missed.size} 段没拿到译文：$error")
         }
-        return result
+        return NovelBatchResult(got, error)
+    }
+
+    /**
+     * 翻**一张插图**：取图 → OCR + 翻译（[NovelImageHost.translate]）→ 落库（带载荷）。
+     *
+     * 返回 `(拼接译文, 错误原因)`：译文非 null = 成功；两个都是 null = 没有可翻的图（跳过）。
+     *
+     * ⚠️ 载荷里有**矩形与 OCR 原文**，所以三态切换、重新渲染都不用重跑 OCR；
+     * `translatedText` 同时写一份，导出/进度/「已翻」判据都复用它。
+     *
+     * ⚠️ 「翻译中」的行状态由**调用方**（[translateBatch]）在这一批开跑前统一标好
+     * （整批一起标：三张图要同时黄）。这里不再重复标一次 —— 那只是每张图多两条 SQL。
+     */
+    private suspend fun translateOneImage(
+        book: ImportedNovel,
+        chapterIndex: Int,
+        para: NovelParagraph,
+        host: NovelImageHost,
+        sourceLang: String,
+        targetLang: String,
+        translatorName: String,
+    ): Pair<String?, String?> {
+        val file = runCatching { host.fileOf(book, chapterIndex, para.index) }.getOrNull()
+            ?: return null to "这一段没有可用的插图"
+        val outcome = runCatching { host.translate(file, sourceLang, targetLang) }
+            .onFailure { LogCollector.e(TAG, "第 $chapterIndex 章插图（段 ${para.index}）翻译失败", it) }
+            .getOrElse { e -> NovelImageOutcome(null, "${e.javaClass.simpleName}: ${e.message.orEmpty()}") }
+        val payload = outcome.payload
+        if (payload == null) {
+            // error == null 表示"用户取消/中止" —— 不标失败，让下一轮重挑
+            return null to outcome.error
+        }
+        dao.upsert(
+            NovelParagraphTranslation(
+                novelId = book.id,
+                novelKey = book.translationKey,
+                chapterIndex = chapterIndex,
+                paraIndex = para.index,
+                sourceText = payload.sourceText,
+                translatedText = payload.translatedText,
+                state = NovelParagraphTranslation.STATE_SUCCESS,
+                translatorName = translatorName,
+                sourceLang = sourceLang,
+                targetLang = targetLang,
+                splitVersion = splitVersion,
+                updatedAt = System.currentTimeMillis(),
+                imagePayload = NovelImagePayloadCodec.encode(payload),
+            ),
+        )
+        LogCollector.i(
+            TAG,
+            "第 $chapterIndex 章插图（段 ${para.index}）翻译完成：${payload.blocks.size} 块",
+        )
+        return payload.translatedText to null
+    }
+
+    /**
+     * 把**一张插图的译文载荷**落库（长按单张翻译那条路用）。
+     *
+     * 与批量路径写的是同一套字段：`translatedText` = 拼接译文（导出/进度/「已翻」判据都吃它）、
+     * `sourceText` = OCR 原文、`imagePayload` = 载荷 JSON、`state` = SUCCESS。
+     * 走 [NovelChapterTranslator] 而不是阅读器直接写 DAO，是为了让"怎么算一条成功的图片译文"
+     * 只有一个实现 —— 两条路各写一份，迟早一条改了另一条没改。
+     */
+    suspend fun saveImageTranslation(
+        book: ImportedNovel,
+        chapterIndex: Int,
+        paraIndex: Int,
+        payload: NovelImageTranslation,
+        sourceLang: String,
+        targetLang: String,
+        translatorName: String,
+    ) {
+        // 分母：图片段也要有行（否则面板的 x/y 里没有它，翻完了也看不出来）
+        // ⚠️ `markEnsured = false`：长按单张图只拿到这一段，不能宣布"本章分母已补齐"
+        ensureChapterRows(
+            book = book,
+            chapterIndex = chapterIndex,
+            paragraphs = listOf(NovelParagraph(paraIndex, NovelParagraphType.IMAGE, payload.sourceText)),
+            translatorName = translatorName,
+            sourceLang = sourceLang,
+            targetLang = targetLang,
+            includeImages = true,
+            markEnsured = false,
+        )
+        dao.upsert(
+            NovelParagraphTranslation(
+                novelId = book.id,
+                novelKey = book.translationKey,
+                chapterIndex = chapterIndex,
+                paraIndex = paraIndex,
+                sourceText = payload.sourceText,
+                translatedText = payload.translatedText,
+                state = NovelParagraphTranslation.STATE_SUCCESS,
+                translatorName = translatorName,
+                sourceLang = sourceLang,
+                targetLang = targetLang,
+                splitVersion = splitVersion,
+                updatedAt = System.currentTimeMillis(),
+                imagePayload = NovelImagePayloadCodec.encode(payload),
+            ),
+        )
     }
 
     /**
@@ -339,6 +614,21 @@ class NovelChapterTranslator(
         dao.forChapter(book.id, book.translationKey, chapterIndex, splitVersion)
             .filter { it.state == NovelParagraphTranslation.STATE_SUCCESS && it.translatedText.isNotEmpty() }
             .associate { it.paraIndex to it.translatedText }
+
+    /**
+     * 本章**图片段**的译文载荷：`paraIndex -> 载荷`（解析不出来 / 没有载荷的行直接跳过）。
+     *
+     * ⚠️ 与 [loadTranslations] 各读各的：后者给的是"这段显示什么文字"（导出、三态、进度都用它），
+     * 这里给的是"这张图怎么画"（矩形 + OCR 原文 + 译文）。两张表都以 `state == SUCCESS` 为准。
+     */
+    suspend fun loadImageTranslations(
+        book: ImportedNovel,
+        chapterIndex: Int,
+    ): Map<Int, NovelImageTranslation> =
+        dao.forChapter(book.id, book.translationKey, chapterIndex, splitVersion)
+            .filter { it.state == NovelParagraphTranslation.STATE_SUCCESS && !it.imagePayload.isNullOrBlank() }
+            .mapNotNull { row -> NovelImagePayloadCodec.decode(row.imagePayload)?.let { row.paraIndex to it } }
+            .toMap()
 
     /** 章状态聚合（目录徽章 / 队列判断用）。 */
     suspend fun chapterStats(book: ImportedNovel): Map<Int, NovelChapterStat> =

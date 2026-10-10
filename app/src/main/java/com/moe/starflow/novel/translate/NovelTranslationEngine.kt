@@ -3,6 +3,8 @@ package com.moe.starflow.novel.translate
 import com.moe.starflow.translate.TranslationResult
 import com.moe.starflow.translate.TranslationTextAPI
 import com.moe.starflow.utils.LogCollector
+import translationapi.TranslatorFactory
+import kotlinx.coroutines.withTimeoutOrNull
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.suspendCancellableCoroutine
 import kotlinx.coroutines.withContext
@@ -42,12 +44,34 @@ fun interface NovelTextTranslator {
     fun cancel() {}
 
     val name: String get() = ""
+
+    /**
+     * 是否**本地离线引擎**（NLLB / LlamaCpp）。
+     *
+     * ⚠️ 只影响**超时策略**：本地推理单批可以跑几分钟，绝不能加总时长超时（会砍掉正常推理）；
+     * 远端 API 必须有终态 —— 回调永远不来时不能让那一批永久挂起（见 [NovelTranslationEngine.requestOnce]）。
+     */
+    val isLocal: Boolean get() = false
+
+    /**
+     * 中止该引擎实例上**所有在飞请求**（真正掐掉 HTTP）。
+     *
+     * ⚠️ 与 [cancel] 的分工别搞混：
+     * - [cancel] = 「**这一次**请求的调用方不要结果了」→ 远端 API **刻意不动它**，
+     *   免得连带取消同实例上其它并发批（那些批等的是回调，回调不来就永久挂起）；
+     * - 本方法 = 「**这个引擎的全部在途请求都作废**」（退出阅读器 / 停任务）→ 必须真的取消。
+     */
+    fun abortInFlight() {
+        cancel()
+    }
 }
 
 /** 把既有 [TranslationTextAPI] 适配成 [NovelTextTranslator]。 */
 class TranslationTextApiAdapter(private val api: TranslationTextAPI) : NovelTextTranslator {
 
     override val name: String get() = api.modelName.ifEmpty { api::class.java.simpleName }
+
+    override val isLocal: Boolean get() = TranslatorFactory.isLocal(api)
 
     override fun translate(
         prompt: String,
@@ -56,7 +80,24 @@ class TranslationTextApiAdapter(private val api: TranslationTextAPI) : NovelText
         callback: (TranslationResult) -> Unit,
     ) = api.getTranslation(prompt, sourceLang, targetLang, callback)
 
-    override fun cancel() = api.cancelTranslation()
+    /**
+     * ⚠️ **只对本地引擎真的去取消**。
+     *
+     * [TranslationTextAPI] 没有「请求句柄」，`cancelTranslation()` 的语义是**取消该实例上所有在飞请求**，
+     * 而小说/漫画都是同一实例并发 N 批：某一次批级取消（协程被取消）如果直接转成引擎取消，
+     * 会把同实例上**其它批**的请求一起杀掉 —— 那些批等的是回调（回调不会再来）→ 永久挂起
+     * （2026-10 真机事故的同族问题，见 `translationapi.InFlightRequests` 注释）。
+     * 远端请求交给它自己完成/超时，结果由 [NovelTranslationEngine.requestOnce] 的 `cont.isActive` 守卫丢弃。
+     * 本地引擎（NLLB / LlamaCpp）必须真取消：它占着 native 互斥锁，不取消就一直白等。
+     */
+    override fun cancel() {
+        if (TranslatorFactory.isLocal(api)) api.cancelTranslation()
+    }
+
+    /** ⚠️ 这里**必须**真的取消（与 [cancel] 相反）：走到这里 = 整个阅读器/任务要停了。 */
+    override fun abortInFlight() {
+        api.cancelTranslation()
+    }
 }
 
 /**
@@ -86,6 +127,26 @@ class NovelTranslationEngine(private val translator: NovelTextTranslator) {
          */
         const val NUMBERING_INSTRUCTION =
             "逐条翻译下面的段落，保持每条的 [编号] 前缀与顺序不变，只输出译文："
+
+        /**
+         * 远端 API 单次请求的**总时长上限**：超时 = 终态失败（报原始原因、释放并发槽位）。
+         *
+         * ⚠️ 存在的理由（2026-10 真机事故的第二个成因）：`TranslationTextAPI` 是**回调式**接口，
+         * 服务端挂住/网关吞连接时回调永远不来，而小说链路原来**没有任何总超时**
+         * （项目里的 35s 超时只在漫画/游戏那条 `TranslateUtils` 链上）→ 那一批永久挂起、
+         * 并发槽位再也放不出来、界面一直显示「翻译中」。
+         *
+         * ⚠️ 本地引擎（NLLB / LlamaCpp）**不设总时长**：单批可以跑几分钟，一刀切会把正常推理砍掉。
+         * 60s 取的是「比 35s 宽松（小说单批比漫画单气泡长）、又不足以让用户以为卡死」。
+         */
+        const val REMOTE_REQUEST_TIMEOUT_MS = 60_000L
+
+        /**
+         * 超时文案里的固定片段：[NovelTranslationEngine.requestBatch] 靠它把「超时」与
+         * 「内容性失败（审查/解析不出编号）」区分开 —— 超时不该降级逐段重试（那会把一次超时
+         * 放大成 N 次、每次又等满 60s）。
+         */
+        const val TIMEOUT_ERROR_MARK = "没有响应"
     }
 
     /**
@@ -108,6 +169,9 @@ class NovelTranslationEngine(private val translator: NovelTextTranslator) {
         if (batch.isEmpty()) return NovelBatchResult(emptyMap())
         return requestBatch(units, batch, sourceLang, targetLang)
     }
+
+    /** 中止该引擎实例上**所有在飞请求**（阅读器退出/强制退出用）。 */
+    fun abortInFlight() = translator.abortInFlight()
 
     /** 只保留可翻译的段（TEXT 且非空白），并绑死 `paraIndex`（见 [NovelUnit] 的说明）。 */
     private fun asUnits(paragraphs: List<NovelParagraph>): List<NovelUnit> = paragraphs
@@ -133,6 +197,13 @@ class NovelTranslationEngine(private val translator: NovelTextTranslator) {
         )
         if (parsed.isNotEmpty() || batch.size <= 1) {
             return NovelBatchResult(parsed, if (parsed.isEmpty()) lastError else null)
+        }
+
+        // ⚠️ **超时不降级逐段重试**：一次超时会被放大成 N 次（每次都等满 60s），
+        // 用户看到「翻译中」好几分钟却什么都没出来。超时本身就是终态 → 直接失败、把原因报上去。
+        if (lastError?.contains(TIMEOUT_ERROR_MARK) == true) {
+            LogCollector.w(TAG, "整批超时（${batch.size} 段），不再逐段重试：$lastError")
+            return NovelBatchResult(emptyMap(), lastError)
         }
 
         LogCollector.w(TAG, "整批失败（${batch.size} 段），降级逐段重试：$lastError")
@@ -185,37 +256,59 @@ class NovelTranslationEngine(private val translator: NovelTextTranslator) {
         return chain.ifBlank { e.javaClass.simpleName }
     }
 
-    /** 一次请求；失败/取消返回 null。 */
+    /**
+     * 一次请求；失败/取消返回 null。
+     *
+     * ⚠️ **远端 API 必须有终态**（[REMOTE_REQUEST_TIMEOUT_MS]）：回调永远不来时原来会**永久挂起** ——
+     * 那一批既不入库也不报错，队列的并发槽位再也放不出来，界面一直显示「翻译中」。
+     * 本地引擎不设总时长（单批可以跑几分钟）。
+     */
     private suspend fun requestOnce(
         prompt: String,
         sourceLang: String,
         targetLang: String,
         onError: (String) -> Unit = {},
-    ): String? = withContext(Dispatchers.IO) {
-        suspendCancellableCoroutine { cont ->
-            var resumed = false
-            translator.translate(prompt, sourceLang, targetLang) { result ->
-                if (resumed) return@translate
-                resumed = true
-                when (result) {
-                    is TranslationResult.Success -> {
-                        if (cont.isActive) {
-                            if (result.translatedText.isBlank()) onError("返回为空（HTTP 200 但内容为空）")
-                            cont.resume(result.translatedText.takeIf { it.isNotBlank() })
+    ): String? {
+        // 区分「超时」与「回调返回了空」：超时时 withTimeoutOrNull 也返回 null
+        val answered = java.util.concurrent.atomic.AtomicBoolean(false)
+        val waitForCallback: suspend () -> String? = {
+            suspendCancellableCoroutine { cont ->
+                var resumed = false
+                translator.translate(prompt, sourceLang, targetLang) { result ->
+                    if (resumed) return@translate
+                    resumed = true
+                    answered.set(true)
+                    when (result) {
+                        is TranslationResult.Success -> {
+                            if (cont.isActive) {
+                                if (result.translatedText.isBlank()) onError("返回为空（HTTP 200 但内容为空）")
+                                cont.resume(result.translatedText.takeIf { it.isNotBlank() })
+                            }
+                        }
+                        is TranslationResult.Error -> {
+                            val why = describe(result.error)
+                            LogCollector.w(TAG, "请求失败：$why")
+                            onError(why)
+                            if (cont.isActive) cont.resume(null)
                         }
                     }
-                    is TranslationResult.Error -> {
-                        val why = describe(result.error)
-                        LogCollector.w(TAG, "请求失败：$why")
-                        onError(why)
-                        if (cont.isActive) cont.resume(null)
-                    }
+                }
+                cont.invokeOnCancellation {
+                    // 取消时通知底层中断在途请求（网络 API 取消后回调不会再来，必须主动中断）
+                    runCatching { translator.cancel() }
                 }
             }
-            cont.invokeOnCancellation {
-                // 取消时通知底层中断在途请求（网络 API 取消后回调不会再来，必须主动中断）
-                runCatching { translator.cancel() }
+        }
+        val reply = if (translator.isLocal) {
+            withContext(Dispatchers.IO) { waitForCallback() }
+        } else {
+            withTimeoutOrNull(REMOTE_REQUEST_TIMEOUT_MS) {
+                withContext(Dispatchers.IO) { waitForCallback() }
             }
         }
+        if (!answered.get()) {
+            onError("超过 ${REMOTE_REQUEST_TIMEOUT_MS / 1000}s $TIMEOUT_ERROR_MARK（已中止等待）")
+        }
+        return reply
     }
 }

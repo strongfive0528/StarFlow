@@ -35,6 +35,13 @@ class StarFlowApplication : Application() {
         // 都读应用上下文资源，必须进程级应用，否则它们一直显示系统默认语言中文）
         com.moe.starflow.utils.LanguageManager.applyLanguage(applicationContext)
 
+        // 翻译进度通知通道（必须在 applyLanguage **之后**建，通道名才会用上用户选的语言）。
+        // ⚠️ 两条通知路径（整章任务的 TranslationJobService / 阅读器队列的 ReaderTranslationNotify）
+        // 都会各自 `ensure`，但**都在"真的开始翻译"之后**才跑 —— 落到 MIUI 的通知设置里就是
+        // "应用从没建过这条通道"，用户想提前检查/放开通知也没地方点。启动时先建一次，
+        // 幂等、无副作用（只在 O+ 生效）。
+        runCatching { com.moe.starflow.translate.batch.TranslationNotifyChannel.ensure(this) }
+
         // Java 层未捕获异常 → 把堆栈写入 starflow.log（进程死亡前落盘），便于排查闪退。
         // 不打断系统默认处理：先写日志，再交给原 default handler（结束进程 + 系统崩溃报告）。
         val prevHandler = Thread.getDefaultUncaughtExceptionHandler()

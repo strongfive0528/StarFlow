@@ -7,6 +7,47 @@ import org.junit.Test
 
 class NovelBatchPlannerTest {
 
+    // ===== 插图成批（用户口径 2026-10-04：「图片算段落的一段！每批 3 段，哪怕三张都是图片，
+    //       也要先后翻译三张图片」）=====
+
+    /**
+     * ⚠️ **插图不拆批**：批永远按「每批段数」切，一批里可以混着文本与插图。
+     *
+     * 老实现把插图拆成独占批，用户实测的后果正是「每批段数的设置遇到图片就中断，遇到图片就
+     * 只会单独翻译图片」。批内的插图由 `NovelChapterTranslator` **串行** OCR（它自己拿 OCR 锁），
+     * 所以"一张一张来"这件事不靠拆批实现。
+     */
+    @Test
+    fun `插图不拆批仍按每批段数切`() {
+        val chapter = listOf(0, 1, 2, 3, 4, 5)
+        val plan = NovelBatchPlanner.planBatches(
+            chapterParaIndexes = chapter,
+            translated = emptySet(),
+            batchSize = 3,
+        )
+        assertEquals(listOf(listOf(0, 1, 2), listOf(3, 4, 5)), plan)
+        assertEquals("顺序必须完全不变（否则译文会与段号错位）", chapter, plan.flatten())
+    }
+
+    /** **三张连续的图就是一批三张**（用户点名要的场景）。 */
+    @Test
+    fun `三张连续插图同属一批`() {
+        val chapter = listOf(10, 11, 12, 13)
+        val plan = NovelBatchPlanner.planBatches(chapter, emptySet(), batchSize = 3)
+        assertEquals(listOf(listOf(10, 11, 12), listOf(13)), plan)
+    }
+
+    /** 有译文的段照样跳过并补足数量（与文本批同一条规则）。 */
+    @Test
+    fun `跳过已翻译的段并补足每批段数`() {
+        val chapter = (0..9).toList()
+        val translated = setOf(0, 1)
+        assertEquals(
+            chapter.filter { it !in translated }.chunked(3),
+            NovelBatchPlanner.planBatches(chapter, translated, 3),
+        )
+    }
+
     // 章内段落号 0..9；「当前页」是第 3~5 段
     private val chapter = (0..9).toList()
     private val page = listOf(3, 4, 5)
@@ -50,6 +91,50 @@ class NovelBatchPlannerTest {
         assertEquals(
             null,
             NovelBatchPlanner.anchorForMode(NovelTranslateMode.AHEAD, tail, chapter, (0..9).toSet()),
+        )
+    }
+
+    /**
+     * ⚠️ **本页一个可翻译段都没有**（图片页 / 整页都是 <4 字的短行 / 段落都在别页）时，
+     * 增量**不能**直接停住：那时窗口起点由「当前页全部段」给出（`aheadStartPara`），从它往后接着翻。
+     *
+     * 原来的 `pageParaIndexes.maxOrNull() ?: return null` 会让增量永远停在
+     * 「已向后翻完 0 批 · 翻页继续」，用户不翻页就一动不动
+     * （2026-10 用户报的「当前页段数不足时增量/自动无法翻译、始终 0 批」）。
+     */
+    @Test
+    fun `增量在本页无可翻译段时从窗口起点继续向后`() {
+        val emptyPage = emptyList<Int>()
+        assertEquals(
+            4,
+            NovelBatchPlanner.anchorForMode(
+                NovelTranslateMode.AHEAD, emptyPage, chapter, setOf(0, 1, 2, 3),
+                aheadLimitPara = 8, aheadStartPara = 4,
+            ),
+        )
+        // 自动模式不受影响：本页没得翻就停（等用户翻页）—— 既有口径没变
+        assertNull(
+            NovelBatchPlanner.anchorForMode(
+                NovelTranslateMode.AUTO, emptyPage, chapter, setOf(0, 1, 2, 3),
+                aheadLimitPara = 8, aheadStartPara = 4,
+            ),
+        )
+    }
+
+    /** 空页且窗口内没有未翻段 / 起点已在右边界之外 → 仍然停下（章末与窗口尾即停，不越界）。 */
+    @Test
+    fun `增量在空页且窗口内没有未翻段时停下`() {
+        assertNull(
+            NovelBatchPlanner.anchorForMode(
+                NovelTranslateMode.AHEAD, emptyList(), chapter, (4..7).toSet(),
+                aheadLimitPara = 8, aheadStartPara = 4,
+            ),
+        )
+        assertNull(
+            NovelBatchPlanner.anchorForMode(
+                NovelTranslateMode.AHEAD, emptyList(), chapter, setOf(0, 1, 2, 3),
+                aheadLimitPara = 8, aheadStartPara = 9,
+            ),
         )
     }
 
@@ -167,5 +252,80 @@ class NovelBatchPlannerTest {
         )
         assertTrue(NovelBatchPlanner.planBatches((0..4).toList(), setOf(0, 1, 2, 3, 4), 3).isEmpty())
         assertTrue(NovelBatchPlanner.planBatches(emptyList(), emptySet(), 3).isEmpty())
+    }
+
+    // ===== 批内拆「请求单位」（用户口径 2026-10-04）=====
+    //
+    // 「图片虽然属于某个批次的一个段落，但是他应该是**单独发送一个 api 请求**，不要和前面的文本或者
+    // 其他图片识别结果放到一起发送出去；例如一个批次：**文本，图片，文本**，三个段落全部变黄，
+    // 但是要**分三次 api 请求**；如果是**文本，文本，图片**的批次，则前两个作为一次请求，
+    // 图片识别的结果单独一个 api 请求」
+
+    /** 段 0..4：0/2/4 正文、1/3 插图、5 过短段。 */
+    private val mixed = listOf(
+        NovelParagraph(0, NovelParagraphType.TEXT, "第一段"),
+        NovelParagraph(1, NovelParagraphType.IMAGE, "📷 [图片]"),
+        NovelParagraph(2, NovelParagraphType.TEXT, "第二段"),
+        NovelParagraph(3, NovelParagraphType.IMAGE, "📷 [图片]"),
+        NovelParagraph(4, NovelParagraphType.TEXT, "第三段"),
+        NovelParagraph(5, NovelParagraphType.SKIP, "……"),
+    )
+
+    private fun runs(vararg indexes: Int, includeImages: Boolean = true) =
+        NovelBatchPlanner.requestRuns(mixed, indexes.toList(), includeImages)
+
+    /** **文本，图片，文本 → 三次请求**（用户点名的场景）。 */
+    @Test
+    fun `文图文拆成三次请求`() {
+        val r = runs(0, 1, 2)
+        assertEquals(3, r.size)
+        assertEquals(listOf(listOf(0), listOf(1), listOf(2)), r.map { it.paraIndexes })
+        assertEquals(listOf(false, true, false), r.map { it.isImage })
+    }
+
+    /** **文本，文本，图片 → 两次请求**（前两个合并，图片单独）。 */
+    @Test
+    fun `文文图拆成两次请求`() {
+        val r = runs(0, 2, 3)
+        assertEquals("两个请求：前两段文本合并 + 图片独占", 2, r.size)
+        assertEquals("按文档顺序：先是那两段文本、再是插图", listOf(false, true), r.map { it.isImage })
+        assertEquals("连续的文本要合并成一个请求", listOf(0, 2), r.first().paraIndexes)
+        assertEquals(listOf(3), r.last().paraIndexes)
+    }
+
+    /** 连续的插图**各自独立**成请求（一张一次 OCR），批本身照旧不拆。 */
+    @Test
+    fun `连续的插图各自独立成请求`() {
+        val r = NovelBatchPlanner.requestRuns(mixed, listOf(1, 3), includeImages = true)
+        assertEquals(listOf(listOf(1), listOf(3)), r.map { it.paraIndexes })
+        assertTrue("两张图各自独立，绝不合并", r.all { it.isImage })
+    }
+
+    /** 一批纯文本 → **一次请求**（老行为零回归）。 */
+    @Test
+    fun `纯文本批仍是一次请求`() {
+        val r = runs(0, 2, 4)
+        assertEquals(1, r.size)
+        assertEquals(listOf(0, 2, 4), r.single().paraIndexes)
+    }
+
+    /** 开关关着（不翻图片）→ 插图段直接不出现在请求里。 */
+    @Test
+    fun `不翻图片时插图不进请求`() {
+        val r = runs(0, 1, 2, includeImages = false)
+        assertEquals(listOf(listOf(0, 2)), r.map { it.paraIndexes })
+    }
+
+    /** 过短段（SKIP）既不进文本请求也不独自成请求。 */
+    @Test
+    fun `过短段不进任何请求`() {
+        assertTrue(runs(5).isEmpty())
+        assertEquals(listOf(listOf(0, 4)), runs(0, 5, 4).map { it.paraIndexes })
+    }
+
+    /** 空批 → 空（调用方据此早退，不发任何请求）。 */
+    @Test
+    fun `空批没有请求`() {
+        assertTrue(NovelBatchPlanner.requestRuns(mixed, emptyList(), includeImages = true).isEmpty())
     }
 }

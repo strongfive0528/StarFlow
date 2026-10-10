@@ -3,6 +3,7 @@ package com.moe.starflow.novel.reader
 import android.content.Context
 import android.content.SharedPreferences
 import org.junit.Assert.assertEquals
+import org.junit.Assert.assertFalse
 import org.junit.Assert.assertTrue
 import org.junit.Before
 import org.junit.Test
@@ -204,14 +205,55 @@ class NovelPanelStyleTest {
 
     // ===== 翻译：批段数 / 增量配额 / 模式（用户明确要求的口径） =====
 
-    /** 每批段数：默认 **3**，范围 1–10（原来是 8 / 1–20）。 */
+    /** 每批段数：默认 **2**（2026-10-03 用户口径，原 3），范围 1–10。 */
     @Test
-    fun `批段数默认 3 且范围 1 到 10`() {
-        assertEquals(3, NovelPanelStyle.batchSize(prefs))
+    fun `批段数默认 2 且范围 1 到 10`() {
+        assertEquals(2, NovelPanelStyle.batchSize(prefs))
         NovelPanelStyle.setBatchSize(prefs, 99)
         assertEquals("上限必须是 10", NovelPanelStyle.BATCH_MAX, NovelPanelStyle.batchSize(prefs))
         NovelPanelStyle.setBatchSize(prefs, 0)
         assertEquals("下限必须是 1", NovelPanelStyle.BATCH_MIN, NovelPanelStyle.batchSize(prefs))
+    }
+
+    /**
+     * **每批段数 3 → 2、单批预警 4096 → 2048 的一次性迁移**（用户口径 2026-10-03）。
+     *
+     * 与行距/并发同一套：**只挪"还停在旧默认值"的人**，自己拖过滑块的不动；
+     * 版本键保证只跑一次（第二次读不会再改用户的值）。
+     */
+    @Test
+    fun `旧默认值一次性挪到新默认值且不覆盖用户设置`() {
+        // 还停在旧默认的：3 / 4096 → 2 / 2048
+        prefs.edit()
+            .putInt("novel_translate_batch", 3)
+            .putInt("novel_translate_batch_warn", 4096)
+            .commit()
+        assertEquals(2, NovelPanelStyle.batchSize(prefs))
+        assertEquals(2048, NovelPanelStyle.batchWarnThreshold(prefs))
+        // 版本键已置位：之后再放回旧值也不会被"迁移"（用户显式设的 3 要留住）
+        prefs.edit().putInt("novel_translate_batch", 3).commit()
+        assertEquals("迁移只跑一次，不再动用户的值", 3, NovelPanelStyle.batchSize(prefs))
+
+        // 全新的一份 prefs（没跑过迁移）里，用户自己设过的值不能被改
+        val fresh = RuntimeEnvironment.getApplication()
+            .getSharedPreferences("novel_panel_style_migrate_probe", Context.MODE_PRIVATE)
+        fresh.edit()
+            .putInt("novel_translate_batch", 7)
+            .putInt("novel_translate_batch_warn", 8192)
+            .commit()
+        assertEquals(7, NovelPanelStyle.batchSize(fresh))
+        assertEquals(8192, NovelPanelStyle.batchWarnThreshold(fresh))
+    }
+
+    /** 单批预警阈值：默认 **2048**，越界/非档位值一律收敛到档位。 */
+    @Test
+    fun `单批预警阈值默认 2048 且收敛到档位`() {
+        assertEquals(2048, NovelPanelStyle.batchWarnThreshold(prefs))
+        NovelPanelStyle.setBatchWarnThreshold(prefs, 999_999)
+        assertEquals(
+            com.moe.starflow.novel.translate.NovelBatchWarning.tiers.last(),
+            NovelPanelStyle.batchWarnThreshold(prefs),
+        )
     }
 
     /**
@@ -229,11 +271,54 @@ class NovelPanelStyleTest {
         assertEquals(NovelQuota.MIN, NovelPanelStyle.aheadBatches(prefs))
     }
 
+    /**
+     * **同时翻译图片**：默认**关**（每张图 = 一次 OCR 几秒 + 一次翻译请求），开完要能读回来。
+     *
+     * 用户口径 2026-10：翻译面板要多一个「同时翻译图片」开关，插图当一个段落一起翻。
+     */
+    @Test
+    fun `同时翻译图片默认关且能持久化`() {
+        assertFalse("默认必须是关（OCR 与请求都有代价，得让用户自己开）", NovelPanelStyle.translateImages(prefs))
+        NovelPanelStyle.setTranslateImages(prefs, true)
+        assertTrue(NovelPanelStyle.translateImages(prefs))
+        NovelPanelStyle.setTranslateImages(prefs, false)
+        assertFalse(NovelPanelStyle.translateImages(prefs))
+    }
+
     /** 旧键留在盘上也不该被当成批数读进来。 */
     @Test
     fun `旧的章数键不影响新的批配额`() {
         prefs.edit().putInt("novel_translate_ahead", 9).commit()
         assertEquals("新键缺失时必须用默认 5，而不是旧键的 9", 5, NovelPanelStyle.aheadBatches(prefs))
+    }
+
+    /**
+     * **启动延迟（防抖）默认 1200ms、范围 200–5000ms**（2026-10-04 用户口径修）。
+     *
+     * 用户真机反馈「防抖完全没用……根本没等」——旧的默认 500ms 夹在"一批要翻 4~8 秒"中间
+     * 几乎看不出来。这里钉住三件事：新默认、新范围、以及"还停在旧默认 500 的人一次性挪过来"。
+     */
+    @Test
+    fun `启动延迟默认 1200 毫秒且旧默认一次性迁移`() {
+        assertEquals("DEBOUNCE_DEFAULT 必须是 1200", 1200, NovelPanelStyle.DEBOUNCE_DEFAULT)
+        assertEquals(200, NovelPanelStyle.DEBOUNCE_MIN)
+        assertEquals(5000, NovelPanelStyle.DEBOUNCE_MAX)
+        // 空 prefs（没存过）→ 直接给新默认
+        assertEquals(1200, NovelPanelStyle.debounceMs(prefs))
+        // 越界夹取
+        NovelPanelStyle.setDebounceMs(prefs, 99_999)
+        assertEquals(NovelPanelStyle.DEBOUNCE_MAX, NovelPanelStyle.debounceMs(prefs))
+        NovelPanelStyle.setDebounceMs(prefs, 0)
+        assertEquals(NovelPanelStyle.DEBOUNCE_MIN, NovelPanelStyle.debounceMs(prefs))
+
+        // 还停在旧默认 500 的人（迁移没跑过）→ 一次性挪到 1200
+        val fresh = RuntimeEnvironment.getApplication()
+            .getSharedPreferences("novel_panel_style_debounce_probe", Context.MODE_PRIVATE)
+        fresh.edit().putInt("novel_translate_debounce", 500).commit()
+        assertEquals(1200, NovelPanelStyle.debounceMs(fresh))
+        // 迁移只跑一次：之后再放回 500（用户自己拖上去的）不再被改
+        fresh.edit().putInt("novel_translate_debounce", 500).commit()
+        assertEquals("迁移只跑一次，用户显式设的值要留住", 500, NovelPanelStyle.debounceMs(fresh))
     }
 
     /**

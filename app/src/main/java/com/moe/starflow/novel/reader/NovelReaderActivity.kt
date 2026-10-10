@@ -37,6 +37,7 @@ import com.moe.starflow.mangaimport.reader.ReaderAnimationState
 import com.moe.starflow.mangaimport.reader.SimulationTransformer
 import com.moe.starflow.me.settings.SettingPageActivity
 import com.moe.starflow.novel.data.ImportedNovel
+import com.moe.starflow.novel.data.NovelStorageDir
 import com.moe.starflow.novel.data.NovelStore
 import com.moe.starflow.novel.translate.NovelBatchTranslator
 import com.moe.starflow.novel.translate.NovelBatchWarnGate
@@ -44,8 +45,13 @@ import com.moe.starflow.novel.translate.NovelBatchWarning
 import com.moe.starflow.novel.translate.NovelChapterJobHost
 import com.moe.starflow.novel.translate.NovelChapterTranslator
 import com.moe.starflow.novel.translate.NovelEngineConfig
+import com.moe.starflow.novel.translate.NovelImageHost
+import com.moe.starflow.novel.translate.NovelImagePipeline
+import com.moe.starflow.novel.translate.NovelImageTranslation
+import com.moe.starflow.novel.translate.NovelImageVisual
 import com.moe.starflow.novel.translate.NovelOversizeConfirmer
 import com.moe.starflow.novel.translate.NovelParagraphSplitter
+import com.moe.starflow.novel.translate.NovelParagraphType
 import com.moe.starflow.novel.translate.NovelQuota
 import com.moe.starflow.novel.translate.NovelTranslateMode
 import com.moe.starflow.novel.translate.NovelQueuePhase
@@ -56,6 +62,7 @@ import com.moe.starflow.novel.translate.NovelTranslationQueue
 import com.moe.starflow.novel.translate.TranslationTextApiAdapter
 import com.moe.starflow.translate.TranslationStatusOverlay
 import com.moe.starflow.translate.batch.ChapterJobState
+import com.moe.starflow.translate.batch.ReaderTranslationNotify
 import com.moe.starflow.translate.batch.TranslationJobService
 import com.moe.starflow.utils.CustomPreference
 import com.moe.starflow.utils.LogCollector
@@ -110,6 +117,14 @@ class NovelReaderActivity : AppCompatActivity() {
 
         /** 滚动模式按比例跳转时最多补齐几次（估算值会漂、一次 scrollBy 未必吃到目标，见 [seekScrollTo]）。 */
         private const val MAX_SEEK_PASSES = 60
+
+        /**
+         * 菜单按钮补充点击区向外扩多少 dp（见 [inMenuZone]）。
+         *
+         * ⚠️ **这是替代「右上角 28%×22%」那套屏幕百分比的**：那块区域十倍于按钮本身，
+         * 用户在按钮下方老远点一下也会弹出面板（用户口径 2026-10-04）。
+         */
+        private const val MENU_ZONE_PAD_DP = 6f
 
         private const val KEY_ROTATE = "reader_rotate_mode"
         private const val KEY_AUTO_TURN = "reader_auto_turn"
@@ -250,6 +265,9 @@ class NovelReaderActivity : AppCompatActivity() {
      */
     private var activeBatch: Set<Int> = emptySet()
 
+    /** 本批**翻失败**的段（淡红高亮底）—— 由 [refreshFailedHighlight] 从失败明细同步。 */
+    private var failedBatch: Set<Int> = emptySet()
+
     /** 最近一次分页用的视口尺寸（px）。尺寸变了必须重排，否则页边界对不上真实视口。 */
     private var pagedWidth = 0
     private var pagedHeight = 0
@@ -290,6 +308,68 @@ class NovelReaderActivity : AppCompatActivity() {
      */
     private val selectedPara = linkedSetOf<Int>()
     private var selecting = false
+
+    // ===== 图片翻译（epub 插图）=====
+
+    /** 本章图片段的译文载荷（`段号 -> 载荷`）：长按翻译 / 队列翻完都会刷新它。 */
+    private var imageTranslations: Map<Int, NovelImageTranslation> = emptyMap()
+
+    /**
+     * 每张图的显示态（`段号 -> 三态`）。**会话级内存态**，默认译文态。
+     *
+     * ⚠️ 刻意不落库（与漫画一致：翻页重置为译文）：它是"我这一刻想看什么"，
+     * 不是译文本身的数据。落库会让下次打开阅读器仍停在上次随手切的"原图"上，
+     * 用户以为译文丢了。
+     */
+    private val imageVisuals = HashMap<Int, NovelImageVisual>()
+
+    /**
+     * **上一次翻译完成的那几段**（用户口径 2026-10-04：「上一次翻译完成的段落，不管是对比还是
+     * 原文模式，都要换一个背景色用来提示刚刚翻译的是哪一段，4 种翻译模式都要有这个机制」）。
+     *
+     * ⚠️ 只留**最后一次**（不是累积的集合）：语义是"刚刚翻的是哪几段"，用来在译文到达引起的
+     * 重排之后重新对上阅读位置。它在原文/双语/译文三种显示模式下都画（高亮按**段号**算，
+     * 与显示文本无关），4 种翻译模式（手动/自动/增量/整章）共用 [onUnitSettled] 这一条接线。
+     * 换章时清空（下一条见 [loadChapter]），别的章翻完不影响当前章的高亮。
+     */
+    private var recentPara: Set<Int> = emptySet()
+
+    /**
+     * 当前**聚焦的那张插图**（长按选中）：只有它显示右下角那排按钮
+     * （三态 / 重翻 / 删除，见 [NovelImageControls]）。点别处、翻页、切章都清掉。
+     */
+    private var focusedImagePara: Int? = null
+
+    /** 在途的图片翻译（长按触发那次）；切章/退出要取消。⚠️ `@Volatile`：队列线程会读它判"这张图在翻"。 */
+    @Volatile
+    private var imageJob: Job? = null
+
+    /**
+     * **插图全屏查看器**（点一下插图打开，见 [NovelImageViewer]）。
+     *
+     * 同一时刻最多一个；`onStop`/`onDestroy` 必须收掉（Dialog 持有 window token，留着即泄漏）。
+     */
+    private var imageViewer: NovelImageViewer? = null
+
+    /**
+     * 「正在识别插图 第 i/N 张」的浮层文案；null = 没有插图在跑（用队列的默认文案）。
+     *
+     * 由 [NovelChapterTranslator] 的 `onImageProgress` 上报（批内插图串行，OCR 一张要几秒），
+     * 是用户口径「提示系统要显示当前正在翻译的图片状态」的落点。
+     */
+    @Volatile
+    private var imageStageText: String? = null
+
+    /** 队列最近一次状态（插图进度上报时要据此判断"现在确实在翻"，用默认文案兜底）。 */
+    @Volatile
+    private var queueState: NovelQueueState = NovelQueueState()
+
+    /** [imageStageText] 属于哪一章（`-1` = 没有；用来决定"整章芯片"要不要显示它）。 */
+    @Volatile
+    private var imageStageChapter: Int = -1
+
+    /** 图片流水线（懒建：它自己要持有翻译引擎）。 */
+    private var imagePipeline: NovelImagePipeline? = null
 
     private val tapDetector by lazy {
         GestureDetector(this, object : GestureDetector.SimpleOnGestureListener() {
@@ -338,7 +418,10 @@ class NovelReaderActivity : AppCompatActivity() {
         book = loaded
         chapterCount = loaded.chapterCount
 
-        repository = NovelChapterRepository()
+        // ⚠️ 传 `novel_import/` 作为插图落盘根目录：epub 里的插图在这一层解出来，
+        // 落到 `novel_import/<书 id>/images/`（删书时跟着一起清掉，不会留孤儿文件）。
+        // 不传的话图片段就永远是占位文本 `📷 [图片]`（阅读器是唯一需要真图的地方）
+        repository = NovelChapterRepository(imagesRoot = NovelStorageDir.root(this))
         pageAdapter = NovelPageAdapter()
         scrollAdapter = NovelScrollAdapter()
         binding.novelPager.adapter = pageAdapter
@@ -382,7 +465,7 @@ class NovelReaderActivity : AppCompatActivity() {
         jobFinishedListener = finished
         chapterHost?.addJobFinishedListener(finished)
         // 任务状态一变就把整份宿主状态推给面板（暂停/继续/取消也要立刻反映到卡片按钮上）
-        lifecycleScope.launch { chapterHost?.chapterJobs?.collect { pushPanelState() } }
+        lifecycleScope.launch { chapterHost?.chapterJobs?.collect { pushPanelState(); refreshChapterJobChips() } }
 
         setupOverlays()
         applyBackground()
@@ -409,6 +492,11 @@ class NovelReaderActivity : AppCompatActivity() {
         // ⚠️ 只覆盖顶距、不动用户的 `Status_Position` 设置；离开阅读器恢复（onStop）。
         pushNoticeTopBelowPill()
         updateAutoTurn()
+        // ⚠️ **整章任务在阅读器关掉时也能跑**，所以它的插图进度回调必须**进出阅读器时挂/摘**：
+        // 不摘就是「宿主（应用级）持着已销毁的 Activity」—— 泄漏 + 往死掉的界面刷 UI。
+        chapterHost?.onImageStage = { ch, i, n -> onImageStage(ch, i, n) }
+        // 同一个理由：整章任务每落库一个请求单位也要**实时上屏**（否则插图要等整批跑完才出现）
+        chapterHost?.onUnitSettled = { ch, paras -> onUnitSettled(ch, paras) }
         // 从设置页返回必须重建：字号/字距等是在 Activity 创建时读进缓存、并已由渲染结果固化的，
         // 就地刷新既漏项又容易只改一半（与漫画同一套理由）。
         if (returnedFromSettings) {
@@ -419,6 +507,9 @@ class NovelReaderActivity : AppCompatActivity() {
         // ⚠️ onStop 会把队列停掉（后台不该继续翻），回前台必须自己接回来 ——
         // 没有这一步，「自动/增量」模式切后台再回来就永久停在原地了
         restartQueueIfNeeded()
+        // 回到前台时**整章任务可能还在跑**（那是应用级宿主）→ 把它的进度芯片补回来
+        // （`onStop` 的 `dismiss()` 会收走所有非 sticky 芯片，StateFlow 不会再发一次）
+        refreshChapterJobChips()
     }
 
     /**
@@ -447,36 +538,55 @@ class NovelReaderActivity : AppCompatActivity() {
         super.onStop()
         autoTurnJob?.cancel()
         autoTurnJob = null
+        // 摘掉整章任务的插图进度回调（宿主是应用级的，挂着就是泄漏 + 往死界面刷 UI）
+        chapterHost?.onImageStage = null
+        chapterHost?.onUnitSettled = null
+        imageStageText = null
+        imageStageChapter = -1
         // ⚠️ 用户口径：「打开菜单或者**退出阅读器**自动暂停回退手动，但我发现这个暂停没有
         // app 的提示信息」—— 提示要在 `onStop` 里发（`isFinishing` = 真的在关掉），
         // 那一刻窗口还在、看得见；`onDestroy` 里弹的 Toast 常被系统直接吞掉。
-        // ⚠️ 文案用 `novel_translate_paused_background`：退出阅读器**只暂停、不改模式**
-        // （回来按原模式接着翻），写成「回退到手动」就是假话。
         // ⚠️ 提示必须**最后**发：下面的 `TranslationStatusOverlay.dismiss()` 会清掉浮层上
         // 所有堆叠消息，先发就被它自己抹掉了。
         wasQueueRunning = queueRunning
-        val notifyPause = isFinishing &&
-            NovelPanelStyle.translateMode(prefs) != NovelTranslateMode.MANUAL
+        // ⚠️ **离开阅读器（返回键/关掉）与切后台（home/息屏）现在是**同一套**（用户口径 2026-10-04）**：
+        // 「切后台只暂停什么意思？？且后台就直接关闭当前翻译进程，回退到手动模式！（本章翻译除外）」
+        // —— 之前切后台只暂停 + 保留模式（2026-09 的旧口径），现在一律：
+        // 停队列 + 中止在途请求 + **回退手动** + 给提示。回来想继续就自己再点一次。
+        // ⚠️ **整章任务（应用级宿主）例外**：它继续跑（用户明确"本章翻译除外"）。
+        val wasTranslating = NovelPanelStyle.translateMode(prefs) != NovelTranslateMode.MANUAL
+        val notifyPause = wasTranslating
         if (notifyPause) pausedToManualNotified = true
         // 手动翻一批 / 按选择翻也要停：它们持有 OcrLock（挡住别的翻译），跑完还会往
         // **进程级系统浮层**上写字 —— 用户已经在别的应用里了也会看到芯片
         translationJob?.cancel()
-        translationJob = null        // 切后台必须暂停队列：lifecycleScope 不因 onStop 取消，否则翻译会在后台整段跑，
-        // 且常驻状态芯片（系统窗口）会一直盖在别的应用上
+        translationJob = null
+        // 长按翻译一张插图也在途（它持 OcrLock、几秒钟）：退出/切后台同样掐掉
+        imageJob?.cancel()
+        imageJob = null
+        // 插图全屏查看器也要收（Dialog 持 window token，切后台还开着就是窗口泄漏）
+        imageViewer?.dismiss()
+        imageViewer = null
+        focusedImagePara = null
         queue?.stop()
         queueRunning = false
-        // 退出阅读器**只暂停，不改模式**：用户说的是「退出阅读器自动暂停」——
-        // 回来时 `onStart → restartQueueIfNeeded()` 会按**原来那个模式**接着翻。
-        // ⚠️ 早先这里顺手把模式也回退成手动了（多做的），结果是「切个后台/息屏回来，
-        // 自动翻译就没了，还得重新选」—— 那才是"老是暂停"的来源。
-        //
+        // 队列停了 → 通知栏那条"正在翻译"立刻收掉（后台也一样：队列已停，别留假进度）
+        ReaderTranslationNotify.clear(this)
+        // 把模式回退成手动：chip 显示与实际一致，要再翻就显式点一次。
+        // ⚠️ 只回退**模式**，不动 `pendingAnchor`/阅读位置。
+        if (wasTranslating) {
+            NovelPanelStyle.setTranslateMode(prefs, NovelTranslateMode.MANUAL)
+        }
         // ⚠️ **章批量任务（应用级宿主）不受影响**：用户要求它「除非清后台否则继续翻」，
         // 进度走前台服务通知栏，回到阅读器时译文已经写库、`refreshTranslations` 直接读到。
+        // 它的引擎是**另一个实例**，上面的 `queue.stop() → abortAll()` 掐不到它。
         TranslationStatusOverlay.getInstance(this@NovelReaderActivity).dismiss()
         // ⚠️ **不复位顶距**（用户口径 2026-10-03）：提示系统全应用固定在同一个位置，
         //    复位就等于回到"两条链路两个位置"。
+        // `dismiss()` 已经把整章任务的进度芯片一起收走（`showRunning` 的不进 sticky）→ 句柄作废
+        chapterJobChips.clear()
         // ⚠️ 提示放在 `dismiss()` **之后**：浮层是共享单例，dismiss 会清掉所有堆叠消息
-        if (notifyPause) showPausedNotice(R.string.novel_translate_paused_background)
+        if (notifyPause) showPausedNotice(R.string.reader_translate_force_stopped_to_manual)
         // 离开阅读器清掉选择集：它是「长按多选」的临时状态，回到阅读器时不该还亮着
         exitSelection()
     }
@@ -543,17 +653,24 @@ class NovelReaderActivity : AppCompatActivity() {
         jobFinishedListener = null
         chapterHost?.unbindUi()
         chapterHost = null
+        // 兜底：`onStop` 没走到时（进程被杀之类）也别把查看器窗口留在系统里
+        imageViewer?.dismiss()
+        imageViewer = null
         book?.let { NovelTranslationHub.releaseIfIdle(it.id) }
         if (::repository.isInitialized) repository.evictAll()
         // ⚠️ 状态浮层是**进程级 TYPE_APPLICATION_OVERLAY 系统窗口**，不清会挂在桌面/别的应用上
         TranslationStatusOverlay.getInstance(this@NovelReaderActivity).dismiss()
+        // 通知栏那条阅读器进度同理：随队列一起收（`onStop` 已收过一次，这里兜底）
+        ReaderTranslationNotify.clear(this)
         // 兜底：`onStop` 没发过（进程被杀 / 没走 onStop 的路径）而当时确实在自动翻 → 补一次。
-        // ⚠️ 但 `onDestroy` 里的 Toast 经常被系统吞掉，所以正常路径靠 onStop 那条。
+        // ⚠️ 文案是「强制退出，回退手动」—— 切后台现在也是**终止**（用户口径 2026-10-04），
+        // 不再是"暂停、回来继续"。`onDestroy` 里的 Toast 常被系统吞掉，正常路径靠 onStop 那条。
         if (!pausedToManualNotified &&
             NovelPanelStyle.translateMode(prefs) != NovelTranslateMode.MANUAL &&
             wasQueueRunning
         ) {
-            UiUtils.showToast(this, getString(R.string.novel_translate_paused_background))
+            NovelPanelStyle.setTranslateMode(prefs, NovelTranslateMode.MANUAL)
+            UiUtils.showToast(this, getString(R.string.reader_translate_force_stopped_to_manual))
         }
         super.onDestroy()
     }
@@ -576,18 +693,135 @@ class NovelReaderActivity : AppCompatActivity() {
             threshold = { NovelPanelStyle.batchWarnThreshold(prefs) },
             confirm = { estimate, threshold -> oversizeConfirmer.confirm(estimate, threshold) },
         ),
+        // 图片段：**开关关着时返回 null**（那时图片段按设计不翻译）。
+        // ⚠️ 走 lambda：这份 translator 是按值缓存的，开关随时会变。
+        imageHost = { imageHostOrNull() },
+        // 批内插图串行 OCR，一张几秒：浮层要说得出"现在是第几张"（用户口径 2026-10-04）
+        onImageProgress = { ch, index, total -> onImageStage(ch, index, total) },
+        // 一个请求单位落库就上报：**先完成先显示**（不等整批跑完），同时点亮"刚翻完的是哪几段"
+        onUnitSettled = { ch, paras -> onUnitSettled(ch, paras) },
     )
+
+    /**
+     * 插图进度上报（在翻译协程里被调，**可能在 IO 线程**）→ 只写一个 `@Volatile` 文案 +
+     * 在主线程刷新浮层。`index = 0` = 这一批的插图跑完了（清文案）。
+     *
+     * ⚠️ 参数名**不能叫 `chapterIndex`**（会遮蔽 Activity 自己的那个同名属性，
+     * `chapter != chapterIndex` 就永远是 false —— 这种自己跟自己比的写法编译器不报错）。
+     */
+    private fun onImageStage(chapter: Int, index: Int, total: Int) {
+        if (chapter != chapterIndex) return
+        imageStageText = if (index <= 0 || total <= 0) {
+            null
+        } else {
+            getString(R.string.novel_image_translating_progress, index, total)
+        }
+        imageStageChapter = if (imageStageText == null) -1 else chapter
+        runOnUiThread {
+            val st = queueState
+            if (st.phase == NovelQueuePhase.TRANSLATING) {
+                showOverlay(imageStageText ?: queuePositionText(st), autoDismiss = false)
+            }
+            // 整章任务那条路的浮层芯片也要跟上（否则用户在整章翻译时只看到"x/y 批"，
+            // 不知道卡在哪张图上）
+            refreshChapterJobChips()
+            // 通知栏同一条状态（前台队列在跑时才会真的刷）
+            updateReaderTranslationNotify(queueState)
+        }
+    }
+
+    /**
+     * **一个请求单位翻完并落库**（`(chapter, 那几段)`）—— 先完成先显示 + 点亮"刚翻的是哪几段"。
+     *
+     * 用户口径 2026-10-04：「当前多张图片的结果**一起出现**，应该是**先 ocr 完成返回的就先显示结果**，
+     * 而不是非要等到整个批次都完成再一起显示」+「上一次翻译完成的段落（不管是对比还是原文模式）
+     * 都要**换一个背景色**用来提示刚刚翻译的是哪一段，4 种翻译模式都要有」。
+     *
+     * 这个回调被翻译器在**每落库一个请求单位**时调用（见 `NovelChapterTranslator.onUnitSettled`），
+     * 而翻译器是**四条路共用**的：手动一批 / 自动 / 增量（阅读器队列那份实例）、
+     * 整章任务（`NovelChapterJobHost` 那份实例，经它转一手）—— 所以一处接线四种模式全生效。
+     *
+     * ⚠️ 可能在**任意线程**被调（队列的 `Dispatchers.IO`、或章任务的应用级 scope）→ 只写内存态，
+     * UI 与库读取一律切主线程。
+     * ⚠️ 章节号不匹配就整个丢掉（整章任务可能在翻**别的章**；那章的译文由 `loadChapter` 负责）。
+     */
+    private fun onUnitSettled(chapter: Int, paras: List<Int>) {
+        if (chapter != chapterIndex || paras.isEmpty()) return
+        // 高亮只留**最后一次**翻完的那几个段（"刚刚翻译的是哪一段"），随下一次落库自然替换
+        recentPara = paras.toSet()
+        runOnUiThread {
+            refreshRecentHighlight()
+            if (!lifecycle.currentState.isAtLeast(Lifecycle.State.STARTED)) return@runOnUiThread
+            lifecycleScope.launch { applyUnitResult(chapter, paras) }
+        }
+    }
+
+    /**
+     * 把刚落库的那几段**读回来上屏**。
+     *
+     * ⚠️ **插图走轻量路径**（只重读载荷 + 重画）：插图段的高度由图片自身尺寸定，与"有没有译文"
+     * 无关 —— 走 `refreshTranslations → loadChapter` 会白白重排整章，还会把阅读位置掀一下。
+     * 文本段则相反：译文比原文长，**必须重排**并回到同一锚点（那是既有的 `refreshTranslations`）。
+     */
+    private suspend fun applyUnitResult(chapter: Int, paras: List<Int>) {
+        val b = book ?: return
+        if (paras.all { onImageParagraph(it) }) {
+            val map = runCatching { translator().loadImageTranslations(b, chapter) }
+                .getOrDefault(emptyMap())
+            // 读库期间用户可能已经换章：那次结果作废（新章进来时 loadChapter 自己会再取一次）
+            if (chapter != chapterIndex) return
+            imageTranslations = map
+            imageVisuals.keys.retainAll(map.keys)
+            refreshImageChrome()
+            // ⚠️ 浮层组也要跟着重算：插图算「可翻单位」，一张图翻完可能就让这一页"没有待翻段了"
+            // （文本那条路是靠 `loadChapter` 末尾那次刷新，这条轻量路径得自己补）
+            refreshTranslationChrome()
+        } else {
+            refreshTranslations()
+        }
+    }
+
+    /** 「刚翻完」的高亮刷新（两种阅读模式各自的视图都要落到）。 */
+    private fun refreshRecentHighlight() {
+        pageAdapter.setRecentBatch(recentPara)
+        scrollAdapter.setRecentBatch(recentPara)
+    }
+
+    /**
+     * 图片翻译宿主（阅读器侧）：把"图在哪"与"怎么 OCR + 翻译"接给 [NovelChapterTranslator]。
+     *
+     * 返回 null = 面板上的「同时翻译图片」关着 → 图片段一个都不碰（老行为）。
+     */
+    private fun imageHostOrNull(): NovelImageHost? {
+        if (!NovelPanelStyle.translateImages(prefs)) return null
+        val pipeline = imagePipeline ?: NovelImagePipeline(this) {
+            runCatching { TranslatorFactory.createForText(this, CustomPreference.getInstance(this)) }.getOrNull()
+        }.also { imagePipeline = it }
+        return NovelImageHost(
+            fileOf = { b, ch, para -> repository.imagesOf(b, ch)[para]?.file },
+            translate = { file, src, tgt -> pipeline.translate(file, src, tgt) },
+        )
+    }
 
     // ===== chrome（与漫画逐项对齐） =====
 
     private fun setupOverlays() {
-        // 返回键：选择模式下先退出选择（与「点空白处退出」同一件事），否则才退出阅读器。
-        // `isEnabled=false` → 转发一次 → 再打开，是为了把"退出阅读器"这个默认行为交回系统，
-        // 不自己 finish（自绘返回会漏掉系统的一些收尾）。
+        // 返回键：选择模式 / **插图编辑模式**下先退出它们（与「点空白处退出」同一件事），
+        // 否则才退出阅读器。`isEnabled=false` → 转发一次 → 再打开，是为了把"退出阅读器"
+        // 这个默认行为交回系统，不自己 finish（自绘返回会漏掉系统的一些收尾）。
+        //
+        // ⚠️ 插图编辑模式这条是用户报的（2026-10-04）：「选中文本可以通过返回退出编辑，
+        // 为什么选中图片返回直接就退出阅读器？」—— 两处理必须是同一套心智。
         onBackPressedDispatcher.addCallback(this, object : OnBackPressedCallback(true) {
             override fun handleOnBackPressed() {
                 if (selecting) {
                     exitSelection()
+                    return
+                }
+                if (focusedImagePara != null) {
+                    // ⚠️ 只退出编辑模式，**不打断在途翻译**（见 onLongPressImage 的说明）
+                    focusedImagePara = null
+                    refreshImageChrome()
                     return
                 }
                 isEnabled = false
@@ -679,7 +913,54 @@ class NovelReaderActivity : AppCompatActivity() {
             }
         }
         tapDetector.onTouchEvent(e)
+        trackChapterEdgeSwipe(e)
         return false
+    }
+
+    // ── 「滑到章节边界」的提示（用户口径：点击与滑动都要提示）──
+
+    private var edgeStartX = 0f
+    private var edgeStartY = 0f
+    private var edgeNotified = false
+    private val edgeSwipeMinPx by lazy { 24 * resources.displayMetrics.density }
+
+    /**
+     * 观察拖动：方向指向下一章/上一章、而当前**已经在边界上**（或已经滚到底）→ 提示一次。
+     *
+     * ⚠️ 只观察、**绝不消费**事件（[onReaderTouch] 恒返回 false）：消费掉会破坏翻页/滚动手势。
+     * ⚠️ 每次手势最多提示一条（`edgeNotified`），不然拖动过程中会刷一屏。
+     */
+    private fun trackChapterEdgeSwipe(e: MotionEvent) {
+        when (e.actionMasked) {
+            MotionEvent.ACTION_DOWN -> {
+                edgeStartX = e.x
+                edgeStartY = e.y
+                edgeNotified = false
+            }
+            MotionEvent.ACTION_MOVE -> {
+                if (edgeNotified) return
+                val dx = e.x - edgeStartX
+                val dy = e.y - edgeStartY
+                val forward: Boolean
+                val atEdge: Boolean
+                if (isScrollMode()) {
+                    if (kotlin.math.abs(dy) < edgeSwipeMinPx) return
+                    forward = dy < 0
+                    atEdge = if (forward) !binding.novelScroll.canScrollVertically(1)
+                    else !binding.novelScroll.canScrollVertically(-1)
+                } else {
+                    val d = if (isVerticalMode()) dy else dx
+                    if (kotlin.math.abs(d) < edgeSwipeMinPx) return
+                    forward = d < 0
+                    val last = content?.pages?.lastIndex ?: return
+                    atEdge = if (forward) currentPage() >= last else currentPage() <= 0
+                }
+                if (!atEdge) return
+                edgeNotified = true
+                showChapterEdge(if (forward) 1 else -1)
+            }
+            MotionEvent.ACTION_UP, MotionEvent.ACTION_CANCEL -> edgeNotified = false
+        }
     }
 
     private val pageChangeCallback = object : ViewPager2.OnPageChangeCallback() {
@@ -777,7 +1058,14 @@ class NovelReaderActivity : AppCompatActivity() {
         applyChromeVisibility()
     }
 
-    // ===== 点击分区（与漫画同一套九宫格） =====
+    // ===== 点击分区 =====
+    //
+    // ⚠️ **与漫画那套"右上角 28%×22% = 菜单 + 正中一格 = 显隐 UI"已经刻意分叉**（2026-10-04 真机反馈）：
+    // ① 菜单角改成**贴着菜单按钮**算（[inMenuZone]）—— 屏幕百分比那块是按钮的十倍以上，
+    //    在按钮下方老远点一下也弹面板，还吃掉本该翻页/点插图的点击；
+    // ② **插图优先于中格** —— 中格会把落在里面的插图整个吃掉（整张图正好在中格时永远打不开，
+    //    边缘的图也只能点到露出来的两条），用户口径是"整张图片都该能点开"。
+    // 漫画那边没被反馈过、且是另一套内容（位图页没有"插图段落"），暂不动；要统一时两边一起改。
 
     private fun handleTap(x: Float, y: Float) {
         val target: View = if (isScrollMode()) binding.novelScroll else binding.novelPager
@@ -801,7 +1089,52 @@ class NovelReaderActivity : AppCompatActivity() {
             }
             return
         }
-        if (consumeChromeOrMenuTap(x, y, w, h)) return
+        // ── 分区判定的**顺序就是优先级**（2026-10-04 真机反馈后重排，别再改回去）──
+        // ① 编辑模式按钮（用户刚长按唤出来的东西，命中判据最精确，先给它）
+        // ② chrome 隐藏时：**任何一次点击先把 UI 唤回来**（否则整页都是插图的章里，
+        //    用户把 UI 藏起来后就再也调不出来 —— 这是"点图开查看器"必然带来的新口子）
+        // ③ 菜单按钮那一小块（见 [inMenuZone]，**不再是右上角一大片**）
+        // ④ 点插图 = 看全图（**整张图都是触发范围**）
+        // ⑤ 九宫格：中格显隐 UI、上下/左右半屏翻页
+        imageControlAt(x, y)?.let { button ->
+            val para = focusedImagePara
+            if (para != null) {
+                when (button) {
+                    NovelImageButton.TRANSLATE -> translateImageNow(para)
+                    NovelImageButton.TOGGLE -> cycleImageVisual(para)
+                    NovelImageButton.DELETE -> deleteImageTranslation(para)
+                }
+                return
+            }
+        }
+        if (chromeHidden) {
+            toggleChrome()
+            return
+        }
+        if (inMenuZone(x, y)) {
+            showMenu()
+            return
+        }
+        // **点插图本身 = 放大查看全图**（用户口径 2026-10-04：「点击图片应该要可以放大查看全图」）。
+        // ⚠️ 必须排在**中格（显隐 UI）之前**（用户口径 2026-10-04 真机反馈：「滚动模式下图片点击打开的
+        // 位置有问题，触发范围应该都是整张图片才对；有的图片打不开，必须在很刁钻的位置才能打开」）：
+        // 中格占屏幕正中 1/9，落在中格里的插图**一个点都点不到**（整张图正好在中格时永远打不开），
+        // 边缘的图也只能点到露在中格外的上下两条 —— 这就是"很刁钻的位置"。
+        val tapped = paragraphAt(x, y)
+        if (tapped != null && onImageParagraph(tapped)) {
+            openImageViewer(tapped)
+            return
+        }
+        // 点了别的段（不是正在编辑的那张图）→ **退出编辑模式**（按钮跟着收掉），再按九宫格处理。
+        // ⚠️ 点正在编辑的那张图本身已经在上面被"打开查看器"接管了（查看器自带那排按钮）。
+        if (focusedImagePara != null) {
+            focusedImagePara = null
+            refreshImageChrome()
+        }
+        if (inChromeToggleZone(x, y, w, h)) {
+            toggleChrome()
+            return
+        }
         when {
             // 连续滚动：点上下半屏 = 上一段 / 下一段
             isScrollMode() -> scrollByParagraph(if (y >= h / 2f) 1 else -1)
@@ -812,18 +1145,40 @@ class NovelReaderActivity : AppCompatActivity() {
         }
     }
 
-    /** 右上角 22%×28% → 菜单；正中间一格 → 显隐上下 UI。返回 true 表示已消费。 */
-    private fun consumeChromeOrMenuTap(x: Float, y: Float, w: Float, h: Float): Boolean {
-        if (y < h * 0.22f && x > w * 0.72f) {
-            showMenu()
-            return true
-        }
-        if (x >= w / 3f && x < w * 2f / 3f && y >= h / 3f && y < h * 2f / 3f) {
-            toggleChrome()
-            return true
-        }
-        return false
+    /**
+     * **菜单按钮的补充点击区** = 按钮矩形向外扩 [MENU_ZONE_PAD_DP]。
+     *
+     * ⚠️ **不许再用屏幕百分比**（老实现是"右上角 28%×22%"）：那块区域是按钮本身的十倍以上，
+     * 在按钮**下方老远**点一下也会弹出面板（用户口径 2026-10-04：「点击屏幕右上角（菜单按钮的
+     * 下方很大一片区域）都可以打开底部菜单」），还顺手吃掉本该翻页/点插图的点击。
+     * 现在贴着按钮算，尺寸跟着按钮走（`btn_menu` 是 40dp 见方 → 有效区约 52dp）。
+     *
+     * ⚠️ 按钮本身是**可点视图**（`btnMenu.setOnClickListener`），点在按钮上根本到不了这里 ——
+     * 这一块纯粹是给"按在按钮边缘/旁边一点点"兜底的。chrome 隐藏时按钮是 `GONE`，直接不认。
+     */
+    private fun inMenuZone(x: Float, y: Float): Boolean {
+        val v = binding.btnMenu
+        if (v.visibility != View.VISIBLE || v.width <= 0 || v.height <= 0) return false
+        val target: View = if (isScrollMode()) binding.novelScroll else binding.novelPager
+        val vLoc = IntArray(2)
+        v.getLocationOnScreen(vLoc)
+        val tLoc = IntArray(2)
+        target.getLocationOnScreen(tLoc)
+        val pad = MENU_ZONE_PAD_DP * resources.displayMetrics.density
+        val left = vLoc[0] - tLoc[0] - pad
+        val top = vLoc[1] - tLoc[1] - pad
+        return x >= left && x <= left + v.width + 2 * pad &&
+            y >= top && y <= top + v.height + 2 * pad
     }
+
+    /**
+     * 九宫格**中格** = 显隐上下 UI（Koto 式）。
+     *
+     * ⚠️ 它的判定必须排在**插图之后**（见 [handleTap] 的顺序说明）：中格会把落在里面的插图
+     * 整个吃掉，用户点图"没反应"。正文（文字段）照旧走它。
+     */
+    private fun inChromeToggleZone(x: Float, y: Float, w: Float, h: Float): Boolean =
+        x >= w / 3f && x < w * 2f / 3f && y >= h / 3f && y < h * 2f / 3f
 
     // ===== 选择模式（长按多选 → 翻译 / 重翻） =====
 
@@ -837,6 +1192,13 @@ class NovelReaderActivity : AppCompatActivity() {
         lastInteractionMs = SystemClock.elapsedRealtime()
         val para = paragraphAt(x, y)
         if (para == null) return
+        // ── 插图：长按 = 翻这张图（用户口径 2026-10）──
+        // ⚠️ 先判图再判"可翻译段"：插图段按设计 `isTranslatable() == false`，
+        // 顺序反了就会对着插图弹「这段不能翻译」。
+        if (onImageParagraph(para)) {
+            onLongPressImage(para)
+            return
+        }
         if (!isTranslatablePara(para)) {
             showOverlayToast(getString(R.string.novel_select_not_translatable), error = false)
             return
@@ -849,6 +1211,246 @@ class NovelReaderActivity : AppCompatActivity() {
         if (!selectedPara.add(para)) selectedPara.remove(para)
         if (selectedPara.isEmpty()) selecting = false
         refreshSelectionUi()
+    }
+
+    /** 这一段是不是"有图可操作的插图段"（图片翻译功能是否可用与开关无关：长按是显式指令）。 */
+    private fun onImageParagraph(paraIndex: Int): Boolean =
+        content?.images?.containsKey(paraIndex) == true
+
+    /**
+     * 长按插图：**只进编辑模式**（把按钮亮出来），**不自动开翻**。
+     *
+     * 用户口径（2026-10-04 明确纠正）：「长按图片 → 出现翻译按钮，**点击翻译才会 OCR 翻译**」
+     * —— 之前那版长按即开跑，用户还没看清按钮在哪，OCR 与翻译请求就已经发出去了
+     * （几秒 + 一次请求，还可能点错图）。
+     *
+     * ⚠️ 与文本段不同，插图**不进选择模式**：一张图就是一个独立单位，多选没有意义。
+     */
+    private fun onLongPressImage(paraIndex: Int) {
+        exitSelection()
+        focusedImagePara = paraIndex
+        refreshImageChrome()
+        showOverlayToast(getString(R.string.novel_image_edit_hint), error = false)
+    }
+
+    /**
+     * 用户长按手动翻译的那张插图（在途）→ 让队列/其它入口躲开它。
+     *
+     * ⚠️ 库里那张图这时还是 IDLE，不排除的话自动/增量会**再翻一遍同一张图**
+     * （`OcrLock` 只保证不并发，不保证不重复；白花一次 OCR + 一次请求）。
+     */
+    private fun manualImageInFlight(chapter: Int): Set<Int> =
+        if (imageJob?.isActive == true && chapter == manualImageChapter) {
+            manualImagePara?.let { setOf(it) } ?: emptySet()
+        } else {
+            emptySet()
+        }
+
+    /** 正在手动翻的那张图在**哪一章哪一段**（[manualImageInFlight] 用）。 */
+    @Volatile
+    private var manualImagePara: Int? = null
+
+    @Volatile
+    private var manualImageChapter: Int = -1
+
+    /**
+     * 冲突守卫：这张图**正被别处翻**（整章任务 / 前台队列 / 手动那张）时，不要再发一次。
+     *
+     * 用户口径里的"冲突操作"就在这类地方：同一张图被两路同时翻 → OCR 两遍、请求两遍、
+     * 后落库的那次覆盖前一次（用户看到"翻了两次、结果还闪一下"）。
+     */
+    private fun imageInFlightElsewhere(paraIndex: Int): Boolean {
+        if (chapterHost?.inFlightAndWaitingParas(chapterIndex)?.contains(paraIndex) == true) return true
+        val st = queueState
+        if ((st.phase == NovelQueuePhase.TRANSLATING || st.phase == NovelQueuePhase.WAITING_LOCK) &&
+            paraIndex in st.batchParaIndexes
+        ) {
+            return true
+        }
+        return manualImageInFlight(chapterIndex).contains(paraIndex)
+    }
+
+    /**
+     * 翻（或重翻）**一张插图**：`OCR → 翻译 → 落库 → 上屏`。
+     *
+     * ⚠️ 这是**用户对这张图的显式指令**（编辑模式里点「翻译」按钮），不受面板
+     * 「同时翻译图片」开关限制（那个开关管的是自动/增量/整章批量翻译要不要带上插图）。
+     */
+    private fun translateImageNow(paraIndex: Int) {
+        val b = book ?: return
+        val chapter = chapterIndex
+        val file = content?.images?.get(paraIndex)?.file ?: return
+        // ⚠️ 同一张图已经在别处翻（整章/队列/手动上一张）→ 不重复发，告诉用户等一下
+        if (imageInFlightElsewhere(paraIndex)) {
+            showOverlayToast(getString(R.string.novel_image_already_translating), error = false)
+            return
+        }
+        if (runCatching { TranslatorFactory.createForText(this, CustomPreference.getInstance(this)) }.getOrNull() == null) {
+            showOverlayToast(getString(R.string.novel_image_need_config), error = true)
+            return
+        }
+        val pipeline = imagePipeline ?: NovelImagePipeline(this) {
+            runCatching { TranslatorFactory.createForText(this, CustomPreference.getInstance(this)) }.getOrNull()
+        }.also { imagePipeline = it }
+
+        imageJob?.cancel()
+        manualImagePara = paraIndex
+        manualImageChapter = chapter
+        // ⚠️ 用**可堆叠**的 `showRunning` 而不是 `showOverlay`：后者是"替换顶部那一条"，
+        // 而这时队列很可能正在显示「正在翻译 · 第 X/Y 页」，替换会把它抹掉
+        // （用户口径：通知系统本来就支持同时显示多条）
+        val chip = if (canUseOverlay()) {
+            TranslationStatusOverlay.getInstance(this).showRunning(getString(R.string.novel_image_translating))
+        } else {
+            0L
+        }
+        imageJob = lifecycleScope.launch {
+            val outcome = runCatching {
+                pipeline.translate(file, ocrLanguageOf(sourceLang()), targetLang())
+            }.getOrNull()
+            imageJob = null
+            manualImagePara = null
+            manualImageChapter = -1
+            if (chip != 0L) TranslationStatusOverlay.getInstance(this@NovelReaderActivity).removeRunning(chip)
+            if (outcome?.payload == null) {
+                // 取消了（error 为 null）就不报错；真失败带原始原因（与文本翻译同一条纪律）
+                outcome?.error?.let {
+                    showOverlayToast(getString(R.string.novel_image_failed, it), error = true)
+                }
+                return@launch
+            }
+            val payload = outcome.payload
+            // 落库（走翻译器那一份，保证与批量路径写的是同一套字段/状态）
+            runCatching {
+                translator().saveImageTranslation(
+                    book = b,
+                    chapterIndex = chapter,
+                    paraIndex = paraIndex,
+                    payload = payload,
+                    sourceLang = sourceLang(),
+                    targetLang = targetLang(),
+                    translatorName = "novel",
+                )
+            }.onFailure {
+                showOverlayToast(getString(R.string.novel_image_failed, it.message.orEmpty()), error = true)
+                return@launch
+            }
+            if (chapter == chapterIndex) {
+                imageTranslations = imageTranslations + (paraIndex to payload)
+                imageVisuals[paraIndex] = NovelImageVisual.TRANSLATED
+                focusedImagePara = paraIndex
+                // ⚠️ **不 submit 整章内容**（那会把阅读位置一起掀掉）：载荷经
+                // `refreshImageChrome` 单独灌给视图，插图高度与有没有译文无关
+                refreshImageChrome()
+            }
+            refreshChapterStats()
+            showOverlayToast(
+                getString(R.string.novel_image_translated, payload.blocks.size),
+                error = false,
+            )
+        }
+    }
+
+    /** 三态循环（译文 → 识别原文 → 原图 → 译文）。 */
+    private fun cycleImageVisual(paraIndex: Int) {
+        val next = imageVisualOf(paraIndex).next()
+        imageVisuals[paraIndex] = next
+        refreshImageChrome()
+        showOverlayToast(getString(visualLabelRes(next)), error = false)
+    }
+
+    /**
+     * 打开**插图全屏查看器**（点一下正文里的插图）。
+     *
+     * ⚠️ 查看器里的三颗按钮**不另写一份逻辑**：它们回调到这里，走的还是图上那排按钮同一条路
+     * （[translateImageNow] / [cycleImageVisual] / [deleteImageTranslation]）—— 在途去重、
+     * 落库、上屏、提示都只有一份实现。
+     * ⚠️ 与「同时翻译图片」开关**无关**：那开关管的是批量翻译要不要带上插图，
+     * 而"点开看大图 / 对这张图下指令"是用户的显式动作（与长按同一口径）。
+     */
+    private fun openImageViewer(paraIndex: Int) {
+        if (content?.images?.get(paraIndex) == null) return
+        // 已经开着就先收掉（收尾会把自己那份引用清空），避免叠出第二个窗口
+        imageViewer?.dismiss()
+        imageViewer = NovelImageViewer(
+            activity = this,
+            paraIndex = paraIndex,
+            host = object : NovelImageViewer.Host {
+                override fun imageOf(paraIndex: Int): NovelImage? = content?.images?.get(paraIndex)
+                override fun visualOf(paraIndex: Int): NovelImageVisual = imageVisualOf(paraIndex)
+                override fun payloadOf(paraIndex: Int): NovelImageTranslation? = imageTranslations[paraIndex]
+                override fun onTranslateImage(paraIndex: Int) = translateImageNow(paraIndex)
+                override fun onToggleImageVisual(paraIndex: Int) = cycleImageVisual(paraIndex)
+                override fun onDeleteImageTranslation(paraIndex: Int) = deleteImageTranslation(paraIndex)
+                override fun onViewerClosed() {
+                    imageViewer = null
+                }
+            },
+        )
+        imageViewer?.show()
+    }
+
+    /** 删除这一张图的译文（回落原图；与文本段的"清除译文"同一语义）。 */
+    private fun deleteImageTranslation(paraIndex: Int) {
+        val b = book ?: return
+        val chapter = chapterIndex
+        if (!imageTranslations.containsKey(paraIndex)) return
+        // ⚠️ **这张图正在翻**（整章/队列/手动在途）→ 先别删：删了之后那一批落库会把它**写回来**
+        // （用户看到的是"删了又出现"）。让用户等这批结束再删。
+        if (imageInFlightElsewhere(paraIndex)) {
+            showOverlayToast(getString(R.string.novel_image_already_translating), error = false)
+            return
+        }
+        // 与清文本译文同一口径：显式编辑 → 当场停掉前台队列并回退手动（不会"清了个寂寞"）
+        pauseToManual()
+        lifecycleScope.launch {
+            runCatching { translator().clearParagraphs(b, chapter, listOf(paraIndex)) }
+                .onFailure {
+                    showOverlayToast(
+                        getString(R.string.novel_translate_failed_reason, it.message.orEmpty()),
+                        error = true,
+                    )
+                    return@launch
+                }
+            if (chapter == chapterIndex) {
+                imageTranslations = imageTranslations - paraIndex
+                imageVisuals.remove(paraIndex)
+                // 这张图已经不是"刚翻完"了（用户刚把译文删了）
+                if (recentPara.contains(paraIndex)) {
+                    recentPara = recentPara - paraIndex
+                    refreshRecentHighlight()
+                }
+                refreshImageChrome()
+            }
+            refreshChapterStats()
+            showOverlayToast(getString(R.string.novel_image_deleted), error = false)
+        }
+    }
+
+    private fun imageVisualOf(paraIndex: Int): NovelImageVisual =
+        imageVisuals[paraIndex] ?: NovelImageVisual.TRANSLATED
+
+    private fun visualLabelRes(v: NovelImageVisual): Int = when (v) {
+        NovelImageVisual.TRANSLATED -> R.string.novel_image_visual_translated
+        NovelImageVisual.ORIGINAL -> R.string.novel_image_visual_original
+        NovelImageVisual.PLAIN -> R.string.novel_image_visual_plain
+    }
+
+    /**
+     * OCR 用的语言：把"自动"落到一个**具体**语言。
+     *
+     * OCR 引擎没有"自动检测"这一说（引擎组按语言选模型）。用户把源语言设成 auto 时，
+     * 按目标语言猜一个（译成中文 → 图上的字多半是日中英；中文模型对拉丁字母也能认）。
+     *
+     * ⚠️ 猜错只影响识别质量，不会崩：认不出字就报「这张图里没识别到文字」。
+     */
+    private fun ocrLanguageOf(source: String): String {
+        if (source.isNotBlank() && source != "auto") return source
+        val target = targetLang()
+        return when {
+            target.startsWith("zh") || target.startsWith("ja") -> "zh"
+            else -> "en"
+        }
     }
 
     /** 手指下的段号（翻页模式看页内行区间，滚动模式看 item）。 */
@@ -867,6 +1469,28 @@ class NovelReaderActivity : AppCompatActivity() {
 
     private fun isTranslatablePara(paraIndex: Int): Boolean =
         content?.paragraphs?.firstOrNull { it.index == paraIndex }?.isTranslatable() == true
+
+    /**
+     * 聚焦插图（[focusedImagePara]）右下角那排按钮的命中测试。
+     *
+     * ⚠️ 坐标要减掉**页/条目**的 left/top：按钮是画在页内坐标里的（与绘制同一份几何）。
+     * 这也是它必须分模式判的原因 —— 分页看页内坐标，滚动看条目内坐标。
+     */
+    private fun imageControlAt(x: Float, y: Float): NovelImageButton? {
+        val focus = focusedImagePara ?: return null
+        if (isScrollMode()) {
+            val rv = binding.novelScroll
+            val child = rv.findChildViewUnder(x, y) ?: return null
+            val pos = rv.getChildAdapterPosition(child)
+            if (scrollAdapter.paraIndexAt(pos) != focus) return null
+            val v = child as? NovelScrollAdapter.ParagraphView ?: return null
+            return v.imageControlAt(x - child.left, y - child.top)
+        }
+        val rv = binding.novelPager.getChildAt(0) as? RecyclerView ?: return null
+        val child = rv.findChildViewUnder(x, y) ?: return null
+        val vh = rv.findContainingViewHolder(child) as? NovelPageAdapter.VH ?: return null
+        return vh.page.imageControlAt(x - child.left, y - child.top)
+    }
 
     /**
      * 退出选择模式并清空选择。
@@ -894,6 +1518,21 @@ class NovelReaderActivity : AppCompatActivity() {
     private fun refreshActiveHighlight() {
         pageAdapter.setActiveBatch(activeBatch)
         scrollAdapter.setActiveBatch(activeBatch)
+        refreshFailedHighlight()
+    }
+
+    /**
+     * 「翻失败了」的高亮刷新：段号取自 [chapterFailures]（面板章行展开里那份明细）。
+     *
+     * ⚠️ 失败原因在面板里是**原文**，正文里只标底色 —— 用户要能一眼分清
+     * 「还没轮到」和「翻失败了」（用户口径 2026-10-03）。
+     */
+    private fun refreshFailedHighlight() {
+        val failed = chapterFailures[chapterIndex].orEmpty().map { it.paraIndex }.toSet()
+        if (failed == failedBatch) return
+        failedBatch = failed
+        pageAdapter.setFailedBatch(failed)
+        scrollAdapter.setFailedBatch(failed)
     }
 
     // ===== 翻页 / 翻段 / 切章 =====
@@ -907,21 +1546,50 @@ class NovelReaderActivity : AppCompatActivity() {
     private fun currentPage(): Int =
         if (isScrollMode()) firstVisibleScrollItem() else binding.novelPager.currentItem
 
-    /** 翻页；越界则切章（本章末页往后 → 下一章首页，反之上一章末页）。 */
+    /**
+     * 翻页；**到章边界即停并提示**，绝不自动跨章。
+     *
+     * 用户口径（2026-10）：「文本阅读器不支持左右翻页或点击跨章阅读」—— 原先 `target` 越界时
+     * 直接 `gotoChapter(±1)`，于是在**本章最后一页点一下右半屏就跳到下一章**（还没有任何提示）。
+     * 切章只保留**显式入口**：目录、底部胶囊左右按钮、面板章卡片、通知跳章。
+     */
     private fun turnPage(delta: Int) {
-        // 用户点按翻页 = 真的在导航 → 松掉带位锚点
+        // 用户点按翻页 = 真的在导航 → 松掉带位锚点，也**退出插图编辑模式**
+        // （用户口径：「退出编辑模式隐藏相关按钮」；翻页就是离开那张图）
         carryAnchor = null
+        if (focusedImagePara != null) {
+            focusedImagePara = null
+            refreshImageChrome()
+        }
         val pages = content?.pages ?: return
         if (pages.isEmpty()) {
-            gotoChapter(chapterIndex + if (delta > 0) 1 else -1)
+            // ⚠️ 空页表也不许切章（原来这里也是直接 gotoChapter）
+            showChapterEdge(delta)
             return
         }
-        val target = currentPage() + delta
+        // ⚠️ 夹一下 currentItem：页表刷新瞬间 currentItem 可能瞬时大于 lastIndex（见 NovelPageAdapter 注释），
+        // 不夹的话一次右半屏点击会算出越界 target → 变成"并非末页却跳章"
+        val target = currentPage().coerceIn(0, pages.lastIndex) + delta
         when {
-            target in pages.indices -> binding.novelPager.setCurrentItem(target, animationMode != NovelPanelStyle.ANIM_NONE)
-            delta > 0 -> gotoChapter(chapterIndex + 1)
-            else -> gotoChapter(chapterIndex - 1, atLastPage = true)
+            target in pages.indices ->
+                binding.novelPager.setCurrentItem(target, animationMode != NovelPanelStyle.ANIM_NONE)
+            else -> showChapterEdge(delta)
         }
+    }
+
+    /**
+     * 章边界提示：「已是本章最后一页」/「已是本章第一页」。
+     *
+     * 走 [showOverlayToast]（有悬浮窗权限用浮层、否则自动降级系统 Toast）—— 与翻译状态提示同一套，
+     * 权限没给也不会静默失败。**不做频控**：连点就连提示，行为可预期。
+     */
+    private fun showChapterEdge(delta: Int) {
+        showOverlayToast(
+            getString(
+                if (delta > 0) R.string.novel_chapter_last_page else R.string.novel_chapter_first_page
+            ),
+            error = false,
+        )
     }
 
     private fun scrollByParagraph(delta: Int) {
@@ -933,7 +1601,8 @@ class NovelReaderActivity : AppCompatActivity() {
         if (target in 0 until total) {
             smoothScrollTo(target)
         } else {
-            gotoChapter(chapterIndex + if (delta > 0) 1 else -1, atLastPage = delta < 0)
+            // ⚠️ 滚动模式同样**不跨章**：到章首/章末就停并提示（原来直接 gotoChapter）
+            showChapterEdge(delta)
         }
         lastInteractionMs = SystemClock.elapsedRealtime()
     }
@@ -1014,6 +1683,7 @@ class NovelReaderActivity : AppCompatActivity() {
         // 换章：位置由目标章自己决定，不许带上上一章的带位锚点；高亮同理
         carryAnchor = null
         activeBatch = emptySet()
+        failedBatch = emptySet()
         refreshActiveHighlight()
         persistProgress()
         loadChapter(index, atLastPage = atLastPage)
@@ -1166,6 +1836,13 @@ class NovelReaderActivity : AppCompatActivity() {
      */
     private fun loadChapter(index: Int, anchor: NovelAnchor = NovelAnchor(0), atLastPage: Boolean = false) {
         val b = book ?: return
+        // 换章 → 「刚翻的是哪几段」作废（段号在另一章里指向别的内容）。
+        // ⚠️ 判据是**入口处**的 `chapterIndex`（真正换章时它还是旧章）：同一章的译文到达重排
+        // 也会走这里，那时**不能**清 —— 否则刚点亮的高亮立刻被自己抹掉。
+        if (index != chapterIndex && recentPara.isNotEmpty()) {
+            recentPara = emptySet()
+            refreshRecentHighlight()
+        }
         val token = ++loadToken
         lifecycleScope.launch {
             val style = NovelPanelStyle.textStyle(this@NovelReaderActivity, prefs)
@@ -1178,10 +1855,17 @@ class NovelReaderActivity : AppCompatActivity() {
             // 而且分页是在「显示文本」上做的，译文换了就必须重排。
             val map = runCatching { translator().loadTranslations(b, index) }
                 .getOrDefault(translations)
+            // 图片段的译文载荷（矩形 + OCR 原文 + 译文）：**与文本译文分开读**，缺了它插图就画不出覆盖层
+            val imageMap = runCatching { translator().loadImageTranslations(b, index) }
+                .getOrDefault(emptyMap())
             if (token != loadToken) {
                 return@launch
             }
             translations = map
+            imageTranslations = imageMap
+            // 换章后段号对不上：把本章不存在的显示态清掉（否则下章的同一段号会继承上一章的三态）
+            imageVisuals.keys.retainAll(imageMap.keys)
+            focusedImagePara = null
 
             // ⚠️ 分页模式把锚点交给分页器：**锚点必须落在页首**。不给这一步的话，`pageOf`
             // 只能给到"含锚点的那一页"，锚点可能落在页尾 —— 译文比原文短时它会被挤到上一页，
@@ -1189,6 +1873,9 @@ class NovelReaderActivity : AppCompatActivity() {
             val pageAnchor = if (isScrollMode() || atLastPage) null else anchor
             val loaded = repository.load(
                 b, index, translations, NovelPanelStyle.displayMode(prefs), style, w, h, pageAnchor,
+                imageTranslations = imageMap,
+                // 开关开着时插图也算"可翻译段"：否则含插图的页在图还没翻时就变绿（进度条说谎）
+                includeImages = imagesEnabled(),
             )
             if (token != loadToken) {
                 return@launch
@@ -1257,6 +1944,7 @@ class NovelReaderActivity : AppCompatActivity() {
             }
             refreshOverlay()
             refreshTranslationChrome()
+            refreshImageChrome()
             updateChapterTocLabel()
             persistProgress()
             restartQueueIfNeeded()
@@ -1378,16 +2066,26 @@ class NovelReaderActivity : AppCompatActivity() {
             debounceMs = { NovelPanelStyle.debounceMs(prefs) },
             // ⚠️ 两条都只喂**可翻译段**（`isTranslatable`）：图片与 <4 字的短行按设计永不翻译，
             // 混进来会让锚点落在它们身上 → 引擎把整批滤空 → 队列当"一批失败"弹红条（假失败）
-            currentPageParaIndexes = { translatableOnScreen() },
-            chapterParaIndexes = { book2, ch ->
-                repository.paragraphsOf(book2, ch).filter { it.isTranslatable() }.map { it.index }
-            },
+            // ⚠️ 例外：**「同时翻译图片」开着时**插图段也算可翻单位（一张图 = 一个段 = 一次 OCR），
+            // 成批规则由 `NovelBatchPlanner.splitImageUnits` 保证"图片独占一批"（见 isImagePara）。
+            currentPageParaIndexes = { selectableOnScreen() },
+            // 当前视野**全部**段（含不可翻译的图片/短行）—— 只用来给增量窗口定位起点
+            // ⚠️ 这里**不能**用 translatableOnScreen()：本页一个可翻译段都没有时窗口会退化成章首
+            currentPageSpanIndexes = { currentPageParaIndexes() },
+            chapterParaIndexes = { book2, ch -> selectableInChapter(book2, ch) },
             translatedIndexes = { book2, ch -> translations.keys.toSet() },
+            // 图片段判据：队列靠它把插图段拆成"独占一批"并串行化（OCR 单例）
+            isImagePara = { _, para -> isImagePara(para) },
             // ⚠️ 排除「翻译本章」任务已占住的段：那些段在翻完前库里还是 IDLE，
             // 不排除会让自动/增量队列与章任务**同时**对同一段发请求（白烧额度）。
-            excludedParas = { ch -> chapterHost?.inFlightAndWaitingParas(ch) ?: emptySet() },
-            // **并发**：远端 API 由「同时 API 请求数」决定（默认 5），**本地引擎恒 1**（判据在
+            // ⚠️ 也要排除**用户长按手动翻的那张插图**：那张图同样在库里还是 IDLE，
+            // 队列撞上去就是同一张图被 OCR 两遍（`OcrLock` 只保证不并发，不保证不重复）。
+            excludedParas = { ch ->
+                (chapterHost?.inFlightAndWaitingParas(ch) ?: emptySet()) + manualImageInFlight(ch)
+            },
+            // **并发**：远端 API 由「同时 API 请求数」决定（默认 3），**本地引擎恒 1**（判据在
             // TranslationConcurrency 里）→ 本地引擎天然串行，不需要额外分支。
+            // ⚠️ 队列内部还会把**自动模式**夹成 1（用户口径 2026-10-03：自动恒串行，并发只给增量/整章）。
             // 每轮现读 prefs：滑块改完立刻对下一批生效（在飞的那几批不受影响）。
             concurrency = {
                 TranslationConcurrency.novelConcurrency(
@@ -1403,6 +2101,47 @@ class NovelReaderActivity : AppCompatActivity() {
     private fun sourceLang(): String = CustomPreference.getInstance(this).getString("Source_Language", "auto")
 
     private fun targetLang(): String = CustomPreference.getInstance(this).getString("Target_Language", "zh")
+
+    // ===== 图片段（epub 插图）=====
+
+    /**
+     * 「同时翻译图片」开着时，插图段也算**可翻单位**（用户口径：「一张图片算一个文本段落」）。
+     */
+    private fun imagesEnabled(): Boolean = NovelPanelStyle.translateImages(prefs)
+
+    /** 某段是不是**可用的插图段**（段落类型 + 真的解出了图）。 */
+    private fun isImagePara(paraIndex: Int): Boolean =
+        imagesEnabled() && content?.images?.containsKey(paraIndex) == true
+
+    /** 当前视野里要参与翻译的段（文本 + 开关开启时的插图）。 */
+    private fun selectableOnScreen(): List<Int> {
+        val c = content ?: return emptyList()
+        return currentPageParaIndexes().filter { pi ->
+            val p = c.paragraphs.firstOrNull { it.index == pi } ?: return@filter false
+            p.isTranslatable() || (imagesEnabled() && p.type == NovelParagraphType.IMAGE && c.images.containsKey(pi))
+        }
+    }
+
+    /** 整章要参与翻译的段（文本 + 开关开启时的插图）。 */
+    private suspend fun selectableInChapter(book: ImportedNovel, chapterIndex: Int): List<Int> {
+        val include = imagesEnabled()
+        return repository.paragraphsOf(book, chapterIndex)
+            .filter { it.isTranslatable() || (include && it.type == NovelParagraphType.IMAGE) }
+            .map { it.index }
+    }
+
+    /**
+     * 把图片显示态 / 聚焦状态推给两种阅读模式的视图。
+     *
+     * ⚠️ 与 `setSelected` 一样是**只重画不重排**的轻量刷新：三态切换只换覆盖层位图，
+     * 分页几何一点没变（插图高度与显示态无关）。
+     */
+    private fun refreshImageChrome() {
+        pageAdapter.setImageState(imageVisuals.toMap(), focusedImagePara, imageTranslations)
+        scrollAdapter.setImageState(imageVisuals.toMap(), focusedImagePara, imageTranslations)
+        // 查看器开着时也要跟上（在里面点翻译/切换三态/删除，画面上必须立刻变）
+        imageViewer?.refresh()
+    }
 
     private fun onPaged(position: Int) {
         val c = content ?: return
@@ -1471,6 +2210,8 @@ class NovelReaderActivity : AppCompatActivity() {
         lifecycleScope.launch {
             chapterStats = runCatching { translator().chapterStats(b) }.getOrDefault(emptyMap())
             chapterFailures = runCatching { translator().failuresOf(b) }.getOrDefault(emptyMap())
+            // 失败明细变了 → 正文里那几段的「失败」红底跟着变
+            refreshFailedHighlight()
             // 目录开着时也推一份：它和面板用的是同一套判据，不能只更新面板
             tocHandle?.update(chapterStats, chapterTotals.toMap())
             // 这一句里已经把章级状态推给面板了（见 updateChapterTocLabel）
@@ -1501,8 +2242,12 @@ class NovelReaderActivity : AppCompatActivity() {
         val b = book ?: return
         if (chapterTotals.containsKey(index) || !pendingTotalFetches.add(index)) return
         lifecycleScope.launch {
-            val n = runCatching { repository.paragraphCountOf(b, index) }.getOrDefault(0)
+            // ⚠️ 分母要跟着「同时翻译图片」走：开着时插图段也算一个可翻单位（一张图 = 一段），
+            // 否则会出现「已翻 6/5」——库里那几行图片译文算了成功数，分母里却没有它们
+            val includeImages = imagesEnabled()
+            val n = runCatching { repository.paragraphCountOf(b, index, includeImages) }.getOrDefault(0)
             // 字数与分母是同一份解析（段落缓存命中），顺手一起取 —— 章行要显示「本章多少字」
+            // ⚠️ 字数**不含**图片（图上多少字要 OCR 才知道）：分母含图片、字数不含，两者口径不同是刻意的
             val chars = runCatching { repository.charCountOf(b, index) }.getOrDefault(0)
             pendingTotalFetches.remove(index)
             // ⚠️ **0 也要落账**：不落的话章行的「还不知道」判据永远为真，于是每次绑定都再问一次
@@ -1546,6 +2291,7 @@ class NovelReaderActivity : AppCompatActivity() {
             PreferenceManager.getDefaultSharedPreferences(this),
         ),
         batchWarnIndex = NovelBatchWarning.indexOf(NovelPanelStyle.batchWarnThreshold(prefs)),
+        translateImages = NovelPanelStyle.translateImages(prefs),
     )
 
     /**
@@ -1663,8 +2409,10 @@ class NovelReaderActivity : AppCompatActivity() {
             return
         }
         val translated = chromeTranslated()
-        val selectedUntranslated = selectedPara.count { !translations.containsKey(it) }
-        val selectedTranslated = selectedPara.count { translations.containsKey(it) }
+        // ⚠️ 「已翻」判据要把**插图的译文载荷**也算上（`translations` 只装文本段）：
+        // 开关开着时插图能被多选，只认文本的话会出现"选中了一张已翻的插图，却没有清除按钮"。
+        val selectedUntranslated = selectedPara.count { !isUnitTranslated(it) }
+        val selectedTranslated = selectedPara.count { isUnitTranslated(it) }
         val action = if (selectedPara.isNotEmpty()) {
             NovelTranslateChrome.actionForSelection(selectedUntranslated, selectedTranslated)
         } else {
@@ -1730,24 +2478,33 @@ class NovelReaderActivity : AppCompatActivity() {
      * 也别"始终显示翻译按钮"，当前屏翻完了就该收起来。代价是滚动时它会随内容出现/消失 ——
      * 那是他要的行为。
      */
+        /**
+     * 浮层判据：当前视野里**还没翻**的可翻单位数。
+     *
+     * ⚠️ 插图也要按**它自己的载荷**判"翻没翻"（`translations` 只装文本段）——
+     * 只认文本的话，一张已经翻好的插图会被永远算成"没翻"，翻译按钮常驻且点了没反应。
+     */
     private fun chromeUntranslated(): Int =
-        translatableOnScreen().count { !translations.containsKey(it) }
+        translatableOnScreen().count { !isUnitTranslated(it) }
 
     /** 浮层判据：当前视野里已有译文的段数（三态按钮的显示条件）。 */
-    private fun chromeTranslated(): Int = translatableOnScreen().count { translations.containsKey(it) }
+    private fun chromeTranslated(): Int =
+        translatableOnScreen().count { isUnitTranslated(it) }
+
+    /** 这一段有没有译文 —— 文本看 `translations`，插图看**载荷**（另一张表）。 */
+    private fun isUnitTranslated(paraIndex: Int): Boolean =
+        translations.containsKey(paraIndex) || imageTranslations.containsKey(paraIndex)
 
     /**
-     * 当前视野里**可翻译**的段号：翻页模式 = 本页各 segment 的段号，滚动模式 = 可见段。
+     * 当前视野里**可翻**的段号：翻页模式 = 本页各 segment 的段号，滚动模式 = 可见段。
      *
      * ⚠️ 必须滤掉图片与短行（[isTranslatable]）：它们**按设计永远不翻译**，
      * 算进「待翻译」的话含 `……` 的一页永远判不出「整页翻完了」，翻译按钮就常驻且点了没反应。
+     * ⚠️ 例外：**「同时翻译图片」开着**时插图段算可翻单位（一张图 = 一个段）——
+     * 与队列的 `currentPageParaIndexes` 同一份判据（[selectableOnScreen]），
+     * 两边不一致会出现"按钮不亮但队列会翻"或反之。
      */
-    private fun translatableOnScreen(): List<Int> {
-        val c = content ?: return emptyList()
-        return currentPageParaIndexes().filter { pi ->
-            c.paragraphs.firstOrNull { it.index == pi }?.isTranslatable() == true
-        }
-    }
+    private fun translatableOnScreen(): List<Int> = selectableOnScreen()
 
     /**
      * 三态图标（**自绘**，在 `res/drawable/ic_display_*.xml`）。
@@ -1925,6 +2682,8 @@ class NovelReaderActivity : AppCompatActivity() {
         }
         // 没任务 → 「翻译本章」：只翻**没翻成**的段（重翻走长按多选，语义不混）
         oversizeConfirmer.reset()
+        // 反向去重：章任务排批时避开**前台队列正在翻**的段（见 NovelChapterJobHost.queueInFlightParas）
+        host.queueInFlightParas = { queue?.inflightParaIndexes() ?: emptySet() }
         host.startChapter(
             chapterIndex = index,
             label = chapterDisplayTitle(this, index, chaptersCache[index]),
@@ -1968,8 +2727,55 @@ class NovelReaderActivity : AppCompatActivity() {
             refreshChapterStats()
             if (lifecycle.currentState.isAtLeast(Lifecycle.State.STARTED)) refreshTranslations()
             pushPanelState()
+            // ⚠️ **整章任务也要有 app 内的进度提示**（用户口径 2026-10-04：「整章翻译我还是没看到
+            // 通知系统有任何提示……我说的是 app 的通知系统要有提示！！」）—— 这里说的"app 通知系统"
+            // 就是状态浮层（`TranslationStatusOverlay` 的常驻芯片），不是系统的通知栏。
+            refreshChapterJobChips()
         }
     }
+
+    /**
+     * **整章任务**在浮层上的常驻进度芯片（每个在跑的章一条）。
+     *
+     * 用户口径 2026-10-04：整章翻译「不仅要显示在卡片徽章上」，**app 的通知系统（浮层）里也要有**；
+     * 自动/增量/手动同样要（那三条走队列状态，见 [updateReaderTranslationNotify] 旁边的浮层观察）。
+     *
+     * ⚠️ 用 [TranslationStatusOverlay.showRunning] 而不是 `showImmediate`：整章任务常常与
+     * 自动/增量的进度同时存在，`showImmediate` 会把对方**替换**掉；`showRunning` 是**追加**、
+     * 不自动消失、可按句柄精确移除（`removeRunning`），正是为这种并存场景做的。
+     * 浮层总开关关掉时 `showRunning` 返回 0（此时 `removeRunning` 是空操作，无需特判）。
+     */
+    private fun refreshChapterJobChips() {
+        val overlay = TranslationStatusOverlay.getInstance(this)
+        val jobs = chapterHost?.chapterJobs?.value.orEmpty().filter { it.isActive }
+        val alive = mutableSetOf<Int>()
+        jobs.forEach { job ->
+            alive += job.chapterIndex
+            // 这一章正在逐张 OCR 插图 → 芯片报"第 i/N 张"（用户口径：提示系统要显示当前
+            // 正在翻译的图片状态）；否则报批进度。
+            // ⚠️ 优先用**宿主快照里的** stageText：整章任务可以在别的章上跑（甚至阅读器已关），
+            // 那时 Activity 自己那份 `imageStageText` 因为"不是当前章"根本没被写入。
+            val stage = chapterHost?.imageStageTextOf(job.chapterIndex)
+                ?: imageStageText?.takeIf { imageStageChapter == job.chapterIndex }
+            val text = when {
+                stage != null -> stage
+                job.state == ChapterJobState.PAUSED ->
+                    getString(R.string.novel_chapter_overlay_paused, job.chapterIndex + 1, job.done, job.total)
+                else ->
+                    getString(R.string.novel_chapter_overlay_running, job.chapterIndex + 1, job.done, job.total)
+            }
+            chapterJobChips.remove(job.chapterIndex)?.let { overlay.removeRunning(it) }
+            val id = overlay.showRunning(text)
+            if (id != 0L) chapterJobChips[job.chapterIndex] = id
+        }
+        // 已经收尾/取消的章：把它的芯片摘掉
+        chapterJobChips.keys.filter { it !in alive }.forEach { ch ->
+            chapterJobChips.remove(ch)?.let { overlay.removeRunning(it) }
+        }
+    }
+
+    /** 整章任务的浮层芯片句柄（章 → 句柄），见 [refreshChapterJobChips]。 */
+    private val chapterJobChips = mutableMapOf<Int, Long>()
 
     /**
      * 「已暂停」的用户可见提示（用户报过"没有提示"）。
@@ -1980,10 +2786,33 @@ class NovelReaderActivity : AppCompatActivity() {
     private fun showPausedNotice(textRes: Int) {
         val text = getString(textRes)
         if (canUseOverlay()) {
-            TranslationStatusOverlay.getInstance(this).show(text)
+            // ⚠️ 必须走 **showSticky**（用户口径 2026-10-03：「退出阅读器没看到回退提示」）：
+            // 提示在 `onStop` 发，紧跟其后的 `onDestroy` 会调 `dismiss()` 清屏 —— 普通 `show`
+            // 会被当场抹掉（只剩几十毫秒的一闪），而 sticky 的芯片 `dismiss()` 时**保留**，
+            // 它自己按 `Status_Duration` 计时消失。
+            TranslationStatusOverlay.getInstance(this).showSticky(text)
         } else {
             UiUtils.showToast(this, text)
         }
+    }
+
+    /**
+     * **「取消本次翻译」**（单批超长预警的否定按钮）：关掉当前翻译进程并回退手动。
+     *
+     * 用户口径 2026-10-03：「可以取消本次翻译（**关闭当前翻译进程，回退手动**），也可以忽略继续翻译」。
+     * ⚠️ 与旧行为的区别：原来这个按钮只**跳过这一批**，后面的批照翻（用户看到的是"点了取消还在翻"）。
+     * 现在停前台队列（含中止在途请求）+ 模式回退手动 + **当前章**的整章任务一并取消。
+     * （整章任务属于应用级宿主，只有当前章的能这样点到；别的章的任务请从通知/面板取消。）
+     */
+    private fun cancelCurrentTranslation() {
+        pauseToManual()
+        val ch = chapterIndex
+        if (chapterHost?.jobOf(ch)?.isActive == true) {
+            chapterHost?.cancel(ch)
+            book?.let { NovelTranslationHub.releaseIfIdle(it.id) }
+        }
+        showOverlayToast(getString(R.string.novel_translate_oversize_cancelled), error = false)
+        pushPanelState()
     }
 
     /**
@@ -1995,39 +2824,64 @@ class NovelReaderActivity : AppCompatActivity() {
     private suspend fun confirmOversizeOnUi(estimate: Int, threshold: Int): Boolean {
         if (isFinishing || isDestroyed) return true
         return withContext(Dispatchers.Main) {
-            suspendCancellableCoroutine { cont ->
-                if (isFinishing || isDestroyed) {
-                    cont.resume(true)
-                    return@suspendCancellableCoroutine
-                }
+            // ⚠️ **弹窗必须带超时**（用户口径 2026-10-03）：预警是"提示"不是硬闸门 ——
+            // 用户一直不点（或弹窗被系统挡在后面）时，原来那一批会**无限期挂着**：
+            // 状态一直显示「翻译中」、并发槽位不放、后面的批也排不上（仅次于引擎根因的卡点）。
+            // 超时 = 当作"继续翻"放行。
+            val timeoutMs = 60_000L
+            kotlinx.coroutines.coroutineScope {
                 var answered = false
-                // ⚠️ 走共享的 ReaderDialogs（用对应 night 模式的上下文建弹窗）：
-                // 面板/标题/正文/按钮全由主题给色，不再"换底 + 一律刷浅色"（那是白底白字的来源）
-                val dlg = ReaderDialogs.show(
-                    this@NovelReaderActivity,
-                    NovelPanelStyle.isDarkBackground(bgMode),
-                ) {
-                    setTitle(R.string.novel_translate_oversize_title)
-                    setMessage(getString(R.string.novel_translate_oversize_msg, estimate, threshold))
-                    setPositiveButton(R.string.novel_translate_oversize_continue) { _, _ ->
+                var dlg: androidx.appcompat.app.AlertDialog? = null
+                var waiting: kotlinx.coroutines.CancellableContinuation<Boolean>? = null
+                val answer: (Boolean) -> Unit = { go ->
+                    if (!answered) {
                         answered = true
-                        cont.resume(true)
+                        runCatching { dlg?.dismiss() }
+                        waiting?.takeIf { it.isActive }?.resume(go)
                     }
-                    setNegativeButton(R.string.novel_translate_oversize_skip) { _, _ ->
-                        answered = true
+                }
+                val timer = launch {
+                    delay(timeoutMs)
+                    if (!answered) {
                         UiUtils.showToast(
                             this@NovelReaderActivity,
-                            getString(R.string.novel_translate_oversize_skipped),
+                            getString(R.string.novel_translate_oversize_timeout),
                             false,
                         )
-                        cont.resume(false)
-                    }
-                    setOnCancelListener {
-                        answered = true
-                        cont.resume(false)
+                        answer(true)
                     }
                 }
-                cont.invokeOnCancellation { if (!answered) runCatching { dlg.dismiss() } }
+                try {
+                    suspendCancellableCoroutine { cont ->
+                        waiting = cont
+                        if (isFinishing || isDestroyed) {
+                            cont.resume(true)
+                            return@suspendCancellableCoroutine
+                        }
+                        // ⚠️ 走共享的 ReaderDialogs（用对应 night 模式的上下文建弹窗）：
+                        // 面板/标题/正文/按钮全由主题给色，不再"换底 + 一律刷浅色"（那是白底白字的来源）
+                        dlg = ReaderDialogs.show(
+                            this@NovelReaderActivity,
+                            NovelPanelStyle.isDarkBackground(bgMode),
+                        ) {
+                            setTitle(R.string.novel_translate_oversize_title)
+                            setMessage(getString(R.string.novel_translate_oversize_msg, estimate, threshold))
+                            setPositiveButton(R.string.novel_translate_oversize_continue) { _, _ ->
+                                answer(true)
+                            }
+                            setNegativeButton(R.string.novel_translate_oversize_cancel) { _, _ ->
+                                // ⚠️ 先 resume 再收尾：resume 之后这个协程可能当场被取消（stop 会掐在途请求），
+                                // 所以收尾动作必须在 resume **之后**同步做完，不能等协程回来再补。
+                                answer(false)
+                                cancelCurrentTranslation()
+                            }
+                            setOnCancelListener { answer(false) }
+                        }
+                        cont.invokeOnCancellation { if (!answered) runCatching { dlg?.dismiss() } }
+                    }
+                } finally {
+                    timer.cancel()
+                }
             }
         }
     }
@@ -2054,6 +2908,19 @@ class NovelReaderActivity : AppCompatActivity() {
         queueRunning = false
         NovelPanelStyle.setTranslateMode(prefs, NovelTranslateMode.MANUAL)
         showOverlay(null)
+        // ⚠️ **插图进度文案要一起清**：批内插图被取消时它不会自己收（那张图的下一次上报不会来了），
+        // 留着的话浮层会永远显示「正在识别插图 2/3…」而其实什么都没在跑。
+        imageStageText = null
+        imageStageChapter = -1
+        // ⚠️ 停队列 = 在途批被 cancel：**那一批留在库里的「翻译中」没人清**（写成 SUCCESS/FAILED
+        // 的代码在 cancel 之后不会执行）→ 面板会把那几张图永远显示成"翻译中"。
+        // 这里顺手把它们复位成 IDLE（与进入阅读器时的 `resetStale` 同一件事，只是更及时）。
+        val b = book
+        if (b != null) {
+            lifecycleScope.launch {
+                runCatching { translator().resetTranslating(b) }
+            }
+        }
         message?.let { showOverlayToast(it, error = false) }
         pushPanelState()
     }
@@ -2087,21 +2954,46 @@ class NovelReaderActivity : AppCompatActivity() {
         queueObserverJob?.cancel()
         queueObserverJob = lifecycleScope.launch {
             q.state.collect { st ->
+                queueState = st
                 // 队列状态一变就把整份状态推给面板（否则面板不知道"正在翻/停了"）
                 pushPanelState()
-                // 「正在翻译」高亮：手动/自动/增量都走队列，所以在这一处统一接
-                // （TRANSLATING / WAITING_LOCK 时高亮这一批；DRAINED 后**保留**，
-                //  用户正是靠它找"刚翻完的是哪几段"）
-                if (st.batchParaIndexes.isNotEmpty()) {
-                    val next = st.batchParaIndexes.toSet()
-                    if (next != activeBatch) {
-                        activeBatch = next
-                        refreshActiveHighlight()
+                // 同一份状态也镜像到**通知栏**（用户口径 2026-10-03：翻译过程的提示必须进通知系统，
+                // 不只是面板上的章卡片徽章）
+                updateReaderTranslationNotify(st)
+                // 「正在翻译」高亮 = **真的在飞的那几批**（用户口径 2026-10-03）。
+                //
+                // ⚠️ 原来写的是「认领了就高亮、翻完也不擦」，于是一旦某一批卡住/失败，那几段就
+                // **永远黄着** —— 用户看到的「首批一直黄着却不翻译」「黄底和实际在翻译的段对不上」
+                // 就是它。现在只在 TRANSLATING / WAITING_LOCK 期间高亮在飞的批，其余阶段立刻擦掉；
+                // 「哪几段失败了」由面板的失败明细 + 红条说明，不再靠底色记。
+                val inflightParas =
+                    if (st.phase == NovelQueuePhase.TRANSLATING || st.phase == NovelQueuePhase.WAITING_LOCK) {
+                        st.batchParaIndexes.toSet()
+                    } else {
+                        emptySet()
                     }
+                // 队列不在翻 → 插图进度文案**必须清掉**：批内插图只在自己开跑前上报一次，
+                // 批失败/被取消时那次"清零上报"不会执行，留着会让浮层永远显示「正在识别插图 2/3…」。
+                if (st.phase != NovelQueuePhase.TRANSLATING && imageStageText != null) {
+                    imageStageText = null
+                    imageStageChapter = -1
+                }
+                if (inflightParas != activeBatch) {
+                    activeBatch = inflightParas
+                    refreshActiveHighlight()
                 }
                 when (st.phase) {
                     NovelQueuePhase.TRANSLATING -> showOverlay(
-                        queuePositionText(st), autoDismiss = false,
+                        // 批内有插图正在 OCR 时优先报"第 i/N 张图"（用户口径 2026-10-04：
+                        // 「由于 ocr 串行，提示系统要显示当前正在翻译的图片状态」）——
+                        // 三张图要一张张来，只报"正在翻译 · 第 X/Y 页"用户不知道在等什么
+                        imageStageText ?: queuePositionText(st), autoDismiss = false,
+                    )
+                    // ⚠️ **等页面稳定要有明文提示**（用户口径 2026-10-04：「我没看到任何等待页面稳定…
+                    // 的相关提示信息」）—— 这一态**还没有发请求**，所以黄底是空的，
+                    // 只靠"没有黄底"用户不知道是在等自己停下来。
+                    NovelQueuePhase.WAITING_STABLE -> showOverlay(
+                        getString(R.string.novel_queue_waiting_stable), autoDismiss = false,
                     )
                     NovelQueuePhase.WAITING_LOCK -> showOverlay(
                         getString(R.string.novel_translate_busy), autoDismiss = false
@@ -2133,12 +3025,67 @@ class NovelReaderActivity : AppCompatActivity() {
      */
     private fun queuePositionText(st: NovelQueueState): String {
         val para = st.batchParaIndexes.firstOrNull()
+        // 在飞批全都不在当前屏（用户已经翻走）时不再瞎报"第 1 段"，只说"翻译中…"
+        if (para == null) return getString(R.string.reader_translate_in_progress)
         val c = content
-        if (para != null && !isScrollMode() && c != null && c.pages.isNotEmpty()) {
+        if (!isScrollMode() && c != null && c.pages.isNotEmpty()) {
             val page = NovelAnchors.pageOf(c.pages, c.displayTexts, NovelAnchor(para))
             return getString(R.string.novel_queue_translating_page, page + 1, c.pages.size)
         }
-        return getString(R.string.novel_queue_translating_para, (para ?: 0) + 1)
+        return getString(R.string.novel_queue_translating_para, para + 1)
+    }
+
+    /**
+     * 阅读器**前台队列**（手动翻一批 / 自动 / 增量）在通知栏的进度。
+     *
+     * 用户口径 2026-10-03：「整章翻译的通知要有，**其他模式的翻译过程相关提示也必须显示在通知系统中**」。
+     * 整章任务本来就有通知（`TranslationJobService`）；自动/增量/手动只有浮层与面板徽章，
+     * 这里补上通知栏那一条（[ReaderTranslationNotify]，固定 id，同一时刻只有一条）。
+     *
+     * ⚠️ **只在真的在翻时挂着**：面板打开 / 翻完本页 / 停队列时立刻收掉 ——
+     * 一条写着"正在翻译"却什么都没在跑的通知比没有通知更让人困惑。
+     */
+    private fun updateReaderTranslationNotify(st: NovelQueueState) {
+        val b = book
+        if (b == null ||
+            (st.phase != NovelQueuePhase.TRANSLATING && st.phase != NovelQueuePhase.WAITING_LOCK)
+        ) {
+            ReaderTranslationNotify.clear(this)
+            return
+        }
+        val para = st.batchParaIndexes.firstOrNull() ?: 0
+        // 队列可能在**别的章**上跑（切章不重启队列）→ 通知要报它自己那一章
+        val ch = if (st.chapterIndex >= 0) st.chapterIndex else chapterIndex
+        val c = content
+        val paged = !isScrollMode() && c != null && c.pages.isNotEmpty()
+        val posText: String
+        var done = 0
+        var total = 0
+        if (paged && c != null) {
+            val page = NovelAnchors.pageOf(c.pages, c.displayTexts, NovelAnchor(para))
+            done = page + 1
+            total = c.pages.size
+            posText = getString(R.string.novel_queue_translating_page, done, total)
+        } else {
+            posText = getString(R.string.novel_queue_translating_para, para + 1)
+        }
+        // ⚠️ 批内有插图正在 OCR 时，**通知栏也要报那一句**（用户口径：提示系统要显示当前正在
+        // 翻译的图片状态）—— 只报"第 X/Y 页"的话，锁屏/下拉看到的是同一句，图片那几秒像卡住。
+        val stage = imageStageText
+        ReaderTranslationNotify.show(
+            context = this,
+            bookTitle = b.title,
+            chapterLabel = chapterDisplayTitle(this, ch, chaptersCache[ch]),
+            line = getString(
+                R.string.novel_translate_notify_line,
+                stage ?: posText,
+                st.batchesDone,
+            ),
+            done = done,
+            total = total,
+            novelId = b.id,
+            chapterIndex = ch,
+        )
     }
 
     /**
@@ -2262,6 +3209,7 @@ class NovelReaderActivity : AppCompatActivity() {
                     PreferenceManager.getDefaultSharedPreferences(this),
                 ),
                 batchWarnIndex = NovelBatchWarning.indexOf(NovelPanelStyle.batchWarnThreshold(prefs)),
+                translateImages = NovelPanelStyle.translateImages(prefs),
             ),
             NovelPanelCallbacks(
                 onReaderMode = { mode ->
@@ -2338,6 +3286,17 @@ class NovelReaderActivity : AppCompatActivity() {
                 onBatchWarn = { index ->
                     NovelPanelStyle.setBatchWarnThreshold(prefs, NovelBatchWarning.thresholdAt(index))
                 },
+                // 「同时翻译图片」：写 prefs 就够了 —— 队列每轮的段号表与图片判据都现读它
+                // （见 ensureQueue 的 chapterParaIndexes / isImagePara），下一批立刻生效。
+                // ⚠️ 不用重启队列：在飞的那批照常跑完，改的是"后面还挑不挑图片"。
+                onTranslateImages = { on ->
+                    NovelPanelStyle.setTranslateImages(prefs, on)
+                    if (!on) {
+                        // 关掉时把"这张图还等着翻"的焦点与浮层收掉，免得停在一张永远不动的图上
+                        focusedImagePara = null
+                        refreshImageChrome()
+                    }
+                },
                 currentTranslateMode = { NovelPanelStyle.translateMode(prefs) },
                 // ⚠️ 章卡片的主按钮（用户口径）：没任务 = 翻译本章；跑着 = 暂停；暂停了 = 继续。
                 // 任务本体在**应用级宿主**里跑，退出阅读器也继续（进度走通知栏）。
@@ -2389,6 +3348,8 @@ class NovelReaderActivity : AppCompatActivity() {
                 translations = emptyMap()
                 // 译文都没了，"刚翻的是哪几段"也就无从谈起
                 activeBatch = emptySet()
+                failedBatch = emptySet()
+                recentPara = emptySet()
                 loadChapter(index, anchor = pendingAnchor)
             }
             refreshChapterStats()
@@ -2424,9 +3385,16 @@ class NovelReaderActivity : AppCompatActivity() {
         val chapter = chapterIndex
         val target = selectedPara.filter { translations.containsKey(it) }.sorted()
         if (target.isEmpty()) return
-        // ⚠️ 本会话别再**自动**翻回来：自动/增量盯着"当前页有没有没翻的段"，清完立刻又翻回来的话
-        // 用户看到的是"清了个寂寞"。显式操作（点翻译 / 翻译本章 / 选段重翻）不受影响。
-        queue?.skipParagraphs(target)
+        // ⚠️ **清译文 = 用户的一次显式编辑 → 当场停掉前台的自动/增量队列并回退手动**（用户口径 2026-10-04）。
+        //
+        // 老写法是"把清掉的段记进账、本会话别再自动翻回来"。那份账带来两个更糟的后果：
+        // ① 用户清完再开启自动/增量 → 那几段被静默跳过，**看着像"不会翻译"**（用户报的
+        //    「清译文后重翻只有手动生效，自动和增量开启也没有任何翻译」）；
+        // ② 判断"本屏/跨屏"还得跟着翻页维护，越写越绕。
+        // 现在：清完就停队列 + 回退手动（**此刻不会**立刻翻回来 = 不会"清了个寂寞"），
+        // 用户之后**再开启**自动/增量时，那几段就是普通"没译文的段"，照常被翻。
+        // ⚠️ 只停**前台队列**，不动整章任务（那是应用级后台任务，见 [pauseToManual] 的说明）。
+        pauseToManual()
         lifecycleScope.launch {
             runCatching { translator().clearParagraphs(b, chapter, target) }
                 .onFailure {
@@ -2438,7 +3406,12 @@ class NovelReaderActivity : AppCompatActivity() {
                 }
             refreshChapterStats()
             // 期间用户可能已经翻到别的章：那就别把他拽回来
-            if (chapter == chapterIndex) loadChapter(chapter, anchor = pendingAnchor)
+            if (chapter == chapterIndex) {
+                // 清掉的段不该再亮"刚翻完"（那已经不是"刚翻完"了）
+                recentPara = recentPara - target.toSet()
+                refreshRecentHighlight()
+                loadChapter(chapter, anchor = pendingAnchor)
+            }
             showOverlayToast(getString(R.string.novel_clear_translation_done, target.size), error = false)
         }
     }

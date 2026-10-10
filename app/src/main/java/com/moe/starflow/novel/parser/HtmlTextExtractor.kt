@@ -22,7 +22,15 @@ object HtmlTextExtractor {
         RegexOption.IGNORE_CASE,
     )
     private val BR = Regex("""<br\s*/?>""", RegexOption.IGNORE_CASE)
-    private val IMG = Regex("""<img\b[^>]*>""", RegexOption.IGNORE_CASE)
+
+    /**
+     * 图片标签。
+     *
+     * ⚠️ 不只有 `<img>`：EPUB3 的封面页标准写法是 `<svg><image xlink:href="cover.jpg"/></svg>`
+     * （SVG 当容器、真正的位图挂在 `<image>` 上），只认 `<img>` 的话**封面永远显示不出来** ——
+     * 而那正是用户报的「封面、插图打不开」里最典型的一张。
+     */
+    private val IMG = Regex("""<(?:img|image)\b[^>]*>""", RegexOption.IGNORE_CASE)
     private val TITLE = Regex(
         """<title\b[^>]*>(.*?)</title>""",
         setOf(RegexOption.DOT_MATCHES_ALL, RegexOption.IGNORE_CASE),
@@ -34,8 +42,28 @@ object HtmlTextExtractor {
     /** 图片占位标记。`NovelParagraphSplitter` 靠它认出「这段是图，别翻译」。 */
     const val IMAGE_MARK = "📷 [图片]"
 
-    fun extract(html: String): String {
-        if (html.isBlank()) return ""
+    /**
+     * 一段标记语言抽出来的东西：正文 + 本章引用到的图片。
+     *
+     * @param text 纯文本正文（图片在文里是 [IMAGE_MARK]，**每张图单独成段**）
+     * @param imageSources 图片地址（`src` / `xlink:href` / `href` 的**原样**值，未做相对路径解析），
+     *   **按文档顺序**，与 [text] 里的图片标记**一一对应**：第 i 个标记就是第 i 项。
+     *   标签上没写地址的那张也占一个位置（空串），这样两边的下标永远对得上 ——
+     *   少一项就会让后面所有插图**整体错位一张**。
+     */
+    class Extracted(val text: String, val imageSources: List<String>)
+
+    fun extract(html: String): String = extractWithImages(html).text
+
+    /**
+     * 正文 + 图片地址（见 [Extracted]）。
+     *
+     * ⚠️ 图片标记**前后各留一个空行**：这样它必定单独成段（`NovelParagraphSplitter` 只按空行
+     * 分段）。写成单换行的话，`<p>文字<img/></p>` 会得到「文字\n📷 [图片]」**一段**，
+     * 而它被判成 IMAGE 段 → **那半句文字凭空消失**（既没显示成文字，也没显示成图）。
+     */
+    fun extractWithImages(html: String): Extracted {
+        if (html.isBlank()) return Extracted("", emptyList())
         var s = html
         // 顺序与旧的正则版一致：先 script/style，再 head
         s = stripClosedBlock(s, "script")
@@ -46,14 +74,65 @@ object HtmlTextExtractor {
         // 也好过把整个正文吃掉。
         s = stripClosedBlock(s, "head")
         s = BR.replace(s, "\n")
-        s = IMG.replace(s, "\n$IMAGE_MARK\n")
+        val sources = ArrayList<String>()
+        s = IMG.replace(s) { m ->
+            // 没写地址的图也占一格（空串）：下标对齐比"少一项"重要得多
+            sources.add(imageSourceOf(m.value))
+            "\n\n$IMAGE_MARK\n\n"
+        }
         s = BLOCK_TAGS.replace(s, "\n\n")
         s = stripTags(s)
         s = decodeEntities(s)
         s = INLINE_SPACE.replace(s, " ")
         s = LINE_PADDING.replace(s, "\n")
         s = BLANK_LINES.replace(s, "\n\n")
-        return s.trim()
+        return Extracted(s.trim(), sources)
+    }
+
+    /**
+     * 取**第一个**图片标签的地址（SVG 包装用：`<img src="cover.svg">` 里那层
+     * `<image xlink:href="cover.jpg">` 才是能画的位图）。没有返回 null。
+     */
+    fun firstImageSource(markup: String): String? =
+        IMG.find(markup)?.let { m -> imageSourceOf(m.value).takeIf { it.isNotEmpty() } }
+
+    /**
+     * 图片标签上的地址：`src`（`<img>`）→ `xlink:href`（SVG `<image>`）→ `href`。
+     *
+     * ⚠️ 顺序不能反：`href` 会**命中 `xlink:href` 里那一截**（前面是 `:`，属于"词边界"），
+     * 于是 `<image xlink:href="a.jpg">` 被解析成……其实是同一个值，但
+     * `<image xlink:href="a.jpg" href="b.jpg">` 这种写法就会取错。
+     */
+    private fun imageSourceOf(tag: String): String {
+        for (attr in IMAGE_ATTRS) {
+            attrValue(tag, attr)?.trim()?.takeIf { it.isNotEmpty() }?.let { return it }
+        }
+        return ""
+    }
+
+    private val IMAGE_ATTRS = listOf("src", "xlink:href", "href")
+
+    /**
+     * ⚠️ `ConcurrentHashMap` 而不是 `HashMap`：本 object 会被多个导入/阅读任务并发调用
+     * （类注释里那条「无状态」约束说的是解析状态，这里是纯函数的缓存），并发写 `HashMap` 会坏表。
+     */
+    private val attrPatterns = java.util.concurrent.ConcurrentHashMap<String, Regex>()
+
+    /**
+     * 取属性值（双引号 / 单引号 / 裸值三种写法）。
+     *
+     * ⚠️ 属性名前的边界必须是 `(?<![\w-])` 而不是 `\b`：`data-src` 里的 `src`
+     * （懒加载图片的标准写法）在 `\b` 下**会命中**，于是拿到的是占位符而不是真图。
+     */
+    private fun attrValue(tag: String, name: String): String? {
+        val re = attrPatterns.getOrPut(name) {
+            Regex(
+                """(?<![\w-])${Regex.escape(name)}\s*=\s*(?:"([^"]*)"|'([^']*)'|([^\s>]+))""",
+                RegexOption.IGNORE_CASE,
+            )
+        }
+        val m = re.find(tag) ?: return null
+        return m.groupValues[1].ifEmpty { m.groupValues[2] }.ifEmpty { m.groupValues[3] }
     }
 
     fun titleOf(html: String): String? =

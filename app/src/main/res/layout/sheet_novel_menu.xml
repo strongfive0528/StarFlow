@@ -222,16 +222,36 @@
                     <LinearLayout android:layout_width="match_parent" android:layout_height="wrap_content"
                         android:orientation="horizontal" android:gravity="center_vertical">
                         <TextView android:id="@+id/tv_debounce_label" android:layout_width="0dp" android:layout_weight="1"
-                            android:layout_height="wrap_content" android:text="@string/reader_translate_debounce"
+                            android:layout_height="wrap_content" android:text="@string/novel_translate_debounce"
                             android:textSize="14sp" android:textColor="#333333"/>
                         <TextView android:id="@+id/tv_debounce_value" android:layout_width="wrap_content"
                             android:layout_height="wrap_content" android:text="500 ms" android:textSize="12sp" android:textColor="#55AEEA"/>
                     </LinearLayout>
                     <SeekBar android:id="@+id/sb_debounce" android:layout_width="match_parent"
-                        android:layout_height="wrap_content" android:min="200" android:max="2000" android:layout_marginTop="2dp"
+                        android:layout_height="wrap_content" android:min="200" android:max="5000" android:layout_marginTop="2dp"
                         android:thumbTint="#55AEEA" android:progressTint="#55AEEA" android:progressBackgroundTint="#55AEEA"/>
                     <TextView android:id="@+id/tv_debounce_hint" android:layout_width="match_parent"
                         android:layout_height="wrap_content" android:text="@string/novel_translate_debounce_hint"
+                        android:textSize="11sp" android:textColor="#888888"/>
+                </LinearLayout>
+
+                <!-- ===== 同时翻译图片（用户口径 2026-10）=====
+                     开着时 epub 插图当"一个段落"一起翻（OCR → 翻译 → 画回图上）；默认关。
+                     ⚠️ 放在**折叠组之外、常显**：这是用户点名要的开关，
+                     藏进默认折叠的「批次处理」里等于"没做"。
+                     长按单张插图翻译不受这个开关限制。 -->
+                <LinearLayout android:id="@+id/row_translate_images" android:layout_width="match_parent"
+                    android:layout_height="wrap_content" android:orientation="vertical" android:layout_marginTop="8dp">
+                    <LinearLayout android:layout_width="match_parent" android:layout_height="wrap_content"
+                        android:orientation="horizontal" android:gravity="center_vertical">
+                        <TextView android:id="@+id/tv_translate_images_label" android:layout_width="0dp"
+                            android:layout_weight="1" android:layout_height="wrap_content"
+                            android:text="@string/novel_translate_images" android:textSize="14sp" android:textColor="#333333"/>
+                        <Switch android:id="@+id/sw_translate_images" android:layout_width="wrap_content"
+                            android:layout_height="wrap_content"/>
+                    </LinearLayout>
+                    <TextView android:id="@+id/tv_translate_images_hint" android:layout_width="match_parent"
+                        android:layout_height="wrap_content" android:text="@string/novel_translate_images_hint"
                         android:textSize="11sp" android:textColor="#888888"/>
                 </LinearLayout>
 
@@ -295,7 +315,9 @@
                 </LinearLayout>
 
                 <!-- 单批预警阈值（token 粗估）：一批合并文本超过它就弹窗问「继续 / 取消这次翻译」。
-                     档位在 NovelBatchWarning.tiers，滑块位置是**档位下标**（不是 token 值本身）。 -->
+                     档位在 NovelBatchWarning.tiers（512/1024/2048/4096/8192/16384），滑块位置是
+                     **档位下标**（不是 token 值本身）；默认值 2048 落在中间那格，两边都能拖。
+                     这里的 min/max/默认文本只是预览值，实际由 NovelPanelSheet 按档位表刷新。 -->
                 <LinearLayout android:id="@+id/row_batch_warn" android:layout_width="match_parent"
                     android:layout_height="wrap_content" android:orientation="vertical" android:layout_marginTop="8dp">
                     <LinearLayout android:layout_width="match_parent" android:layout_height="wrap_content"
@@ -304,10 +326,10 @@
                             android:layout_height="wrap_content" android:text="@string/novel_translate_warn"
                             android:textSize="14sp" android:textColor="#333333"/>
                         <TextView android:id="@+id/tv_batch_warn_value" android:layout_width="wrap_content"
-                            android:layout_height="wrap_content" android:text="4096" android:textSize="12sp" android:textColor="#55AEEA"/>
+                            android:layout_height="wrap_content" android:text="2048" android:textSize="12sp" android:textColor="#55AEEA"/>
                     </LinearLayout>
                     <SeekBar android:id="@+id/sb_batch_warn" android:layout_width="match_parent"
-                        android:layout_height="wrap_content" android:min="0" android:max="4" android:layout_marginTop="2dp"
+                        android:layout_height="wrap_content" android:min="0" android:max="5" android:layout_marginTop="2dp"
                         android:thumbTint="#55AEEA" android:progressTint="#55AEEA" android:progressBackgroundTint="#55AEEA"/>
                     <TextView android:id="@+id/tv_batch_warn_hint" android:layout_width="match_parent"
                         android:layout_height="wrap_content" android:text="@string/novel_translate_warn_hint"

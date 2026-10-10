@@ -17,6 +17,8 @@
 
 package translationapi.customtranslation
 
+import translationapi.InFlightRequests
+
 import android.graphics.Bitmap
 import android.util.Base64
 import android.util.Log
@@ -47,7 +49,7 @@ import java.util.concurrent.TimeUnit
 
 class CustomTranslationImage(private val config: CustomPicAPIConfig): TranslationPicAPI {
     private val coroutineScope = CoroutineScope(Dispatchers.IO + SupervisorJob())
-    private var currentJob: Job? = null
+    private val inFlight = InFlightRequests()
     private lateinit var base64Image: String
 
     private val SOCKET_TIMEOUT = 10L
@@ -66,9 +68,7 @@ class CustomTranslationImage(private val config: CustomPicAPIConfig): Translatio
         targetLanguage: String,
         callback: (TranslationResult) -> Unit
     ) {
-        currentJob?.cancel()
-
-        currentJob = coroutineScope.launch {
+        inFlight.track(coroutineScope) {
             val tempFile = File.createTempFile("translate_", ".jpg")
             try {
                 // 如果是multipart/form-data，需要保存临时文件
@@ -242,8 +242,7 @@ class CustomTranslationImage(private val config: CustomPicAPIConfig): Translatio
     }
 
     override fun cancelTranslation() {
-        currentJob?.cancel()
-        currentJob = null
+        inFlight.cancelAll()
     }
 
     override fun release() {

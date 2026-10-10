@@ -222,6 +222,9 @@ class SrRecordSystemWiringTest {
             Regex("srRuns = computeTranslatedRuns\\(srPages, total\\)").containsMatchIn(bar),
         )
         // 宿主接线 + 数据源口径
+        // ⚠️ 别把变量名写死（曾写 `translationController?.srPages()`，而宿主后来把变量简化成 `c`）
+        // —— 写死之后这条守卫就永远匹配不上，等于没有守卫。这里只断言"宿主把控制器的
+        // `srPages()` 喂进了 `setSrPages`"这个语义。
         assertTrue(
             "宿主要把「已成功的超分页」喂给进度条",
             // ⚠️ 别按字面量匹配 `setSrPages(translationController?.srPages()`：宿主后来把控制器

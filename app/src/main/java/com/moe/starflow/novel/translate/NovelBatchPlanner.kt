@@ -25,11 +25,13 @@ object NovelBatchPlanner {
     /**
      * 按模式取锚点。
      *
-     * @param pageParaIndexes 当前页显示的段（按顺序）
+     * @param pageParaIndexes 当前页**可翻译**的段（按顺序）
      * @param chapterParaIndexes 整章的段（按顺序）—— 增量模式在页内翻完后从这里继续**向后**找
      * @param aheadLimitPara 增量窗口的右边界（**不含**）：只在这个段号之前往后找。
      *   窗口 = 当前页第一段往后「向后批数 × 每批段数」段（见 [NovelTranslationQueue]）——
      *   翻页时窗口自己前移，所以"额度用完"不是终点，翻页就能接着翻
+     * @param aheadStartPara 增量窗口的**左边界**（当前页第一个段在整章里的位置）。
+     *   只在本页一个可翻译段都没有时用到，见下面的说明
      */
     fun anchorForMode(
         mode: NovelTranslateMode,
@@ -37,12 +39,23 @@ object NovelBatchPlanner {
         chapterParaIndexes: List<Int>,
         translated: Set<Int>,
         aheadLimitPara: Int = Int.MAX_VALUE,
+        aheadStartPara: Int? = null,
     ): Int? {
         anchorOnPage(pageParaIndexes, translated)?.let { return it }
         if (mode != NovelTranslateMode.AHEAD) return null
         // ⚠️ 增量只**向后**：页内翻完后取「本页之后第一段没翻的」，
         // **不回头**去补本页之前的段（那与"向后翻译"相反），也不越到下一章（章末即停 → null）。
-        val lastOnPage = pageParaIndexes.maxOrNull() ?: return null
+        val lastOnPage = pageParaIndexes.maxOrNull()
+        // ⚠️ **本页一个可翻译段都没有**（图片页 / 整页都是 <4 字的短行 / 段落都在别页）时
+        // 不能直接返回 null：那样增量会永远停在「已向后翻完 0 批 · 翻页继续」，用户不翻页
+        // 就一动不动（2026-10 用户报的「当前页段数不足时增量/自动无法翻译、始终 0 批」）。
+        // 增量的本意是「不受当前页限制」→ 这时从**窗口起点**（当前页在整章里的位置）往后找。
+        if (lastOnPage == null) {
+            return chapterParaIndexes.firstOrNull {
+                (aheadStartPara == null || it >= aheadStartPara) &&
+                    it < aheadLimitPara && it !in translated
+            }
+        }
         return chapterParaIndexes.firstOrNull {
             it > lastOnPage && it < aheadLimitPara && it !in translated
         }
@@ -74,13 +87,79 @@ object NovelBatchPlanner {
      * `filter(未翻).chunked(batchSize)`。两套算法各写一份迟早不一致，等价性用测试钉住。
      *
      * ⚠️ **只在本章内成批**（调用方按章调用）：批不跨章是既有约定。
+     *
+     * ⚠️ **插图不再单独拆批**（用户口径 2026-10-04）：「图片算段落的一段！每批 3 段，
+     * 哪怕三张都是图片，也要先后翻译三张图片」—— 所以这里就是普通 `chunked(batchSize)`，
+     * 一批里可以混着文本与插图；**插图在批内串行处理**是 `NovelChapterTranslator` 的职责
+     * （它自己把文本段合成一次请求、插图段逐个 OCR+翻译，见 `translateBatch`）。
+     * 老实现把插图拆成独占批，后果正是用户报的「每批段数的设置遇到图片就中断」。
      */
     fun planBatches(
         chapterParaIndexes: List<Int>,
         translated: Set<Int>,
         batchSize: Int,
     ): List<List<Int>> =
-        chapterParaIndexes.filter { it !in translated }.chunked(batchSize.coerceAtLeast(1))
+        chapterParaIndexes.filter { it !in translated }
+            .chunked(batchSize.coerceAtLeast(1))
+
+    /**
+     * 一批里的**一个请求单位**：要么是「连续的若干文本段」（合成一个请求），要么是「一张插图」（独占一个请求）。
+     *
+     * @param isImage true = 插图单位（走 OCR + 图片翻译那条路，见 `NovelChapterTranslator`）
+     */
+    data class RequestRun(val paraIndexes: List<Int>, val isImage: Boolean)
+
+    /**
+     * 把一批切成**请求单位**（纯函数，用户口径 2026-10-04 的落点）。
+     *
+     * 用户口径原文：「图片虽然属于某个批次的一个段落，但是他应该是**单独发送一个 api 请求**，
+     * 不要和前面的文本或者其他图片识别结果放到一起发送出去；例如一个批次：**文本，图片，文本**，
+     * 三个段落全部变黄，但是要**分三次 api 请求**；如果是**文本，文本，图片**的批次，
+     * 则前两个作为一次请求，图片识别的结果单独一个 api 请求」。
+     *
+     * 所以规则是**按文档顺序做同类归并**：
+     * - **连续的文本段** → 合并成一个请求（与旧行为一致：一批纯文本仍是一次请求）
+     * - **每个插图段** → 独占一个请求（一次 OCR + 一次翻译；插图之间**不合并**，
+     *   也不与任何文本合并 —— 混在一起发的话编号对位会把 OCR 文本和正文搅乱）
+     *
+     * ⚠️ 批本身**不拆**（[planBatches] 仍是普通 `chunked`）：批仍是进度/高亮/配额的单位，
+     * 变的只是"这一批内部发几个请求"。拆批的代价早先踩过（用户报的「每批段数遇到图片就中断」）。
+     *
+     * ⚠️ 顺序**原样保留**：`[文本, 图片, 文本]` 就是「先文本、再图片、最后文本」三次请求 ——
+     * 按"文本都排前面"重排会让读者看到的落实顺序与原文顺序不一致。
+     *
+     * @param paraIndexes 本批要翻的段号（**按文档顺序**；调用方来自 `NovelBatchPlanner.nextBatch`）
+     * @param includeImages 「同时翻译图片」是否开着（关着时插图段直接不出现在结果里）
+     */
+    fun requestRuns(
+        paragraphs: List<NovelParagraph>,
+        paraIndexes: List<Int>,
+        includeImages: Boolean,
+    ): List<RequestRun> {
+        if (paraIndexes.isEmpty()) return emptyList()
+        val byIndex = paragraphs.associateBy { it.index }
+        val out = ArrayList<RequestRun>()
+        var text: MutableList<Int> = ArrayList()
+        fun flushText() {
+            if (text.isNotEmpty()) {
+                out += RequestRun(text.toList(), isImage = false)
+                text = ArrayList()
+            }
+        }
+        for (pi in paraIndexes) {
+            val p = byIndex[pi] ?: continue
+            when {
+                p.type == NovelParagraphType.TEXT && p.originalText.isNotBlank() -> text += pi
+                p.type == NovelParagraphType.IMAGE && includeImages -> {
+                    // 遇到插图：先把手上攒的那几段文本收成一个请求（"连续文本合并"与"顺序不变"两条同时成立）
+                    flushText()
+                    out += RequestRun(listOf(pi), isImage = true)
+                }
+            }
+        }
+        flushText()
+        return out
+    }
 }
 
 /**

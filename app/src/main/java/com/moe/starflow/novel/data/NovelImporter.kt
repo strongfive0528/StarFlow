@@ -7,6 +7,7 @@ import android.graphics.Canvas
 import android.graphics.Color
 import android.graphics.Paint
 import android.net.Uri
+import android.provider.DocumentsContract
 import androidx.documentfile.provider.DocumentFile
 import com.moe.starflow.mangaimport.data.ArchivedMangaReader
 import com.moe.starflow.mangaimport.data.ImportPhase
@@ -43,13 +44,40 @@ object NovelImporter {
     private const val REPORT_INTERVAL_MS = 80L
 
     /**
-     * 文件夹子认可的扩展名。
+     * 文件夹子认可的**文本**扩展名。
      *
-     * 只认 txt 与 epub —— 与 koto 的小说文件夹导入一致（「内部 TXT 文件会作为章节导入；
-     * 每个 EPUB 文件会作为一个分卷导入」）。夹里的 html/zip 不读，避免把「随手丢在同一个夹里」
-     * 的无关文件当成章节。
+     * txt / epub 与 koto 的小说文件夹导入一致（「内部 TXT 文件会作为章节导入；
+     * 每个 EPUB 文件会作为一个分卷导入」）。
+     *
+     * ⚠️ **html 系列是 2026-10-04 加的**（用户要求「所有支持的格式都支持图片预览」）：
+     * 「一个夹里一堆 html + 一个 images/ 目录」是小说下载最常见的分发形态之一，
+     * 之前那种夹子会报「未找到可阅读的文本章节」。夹里的 zip 仍不读
+     * （避免把「随手丢在同一个夹里」的无关文件当成章节）。
      */
-    private val DIR_IMPORT_EXTS = setOf("txt", "epub")
+    private val DIR_TEXT_EXTS = setOf("txt", "epub", "html", "htm", "xhtml")
+
+    /** 夹内 html 的扩展名（决定「要不要连图片一起拷」，见 [importDirectory]）。 */
+    private val DIR_HTML_EXTS = setOf("html", "htm", "xhtml")
+
+    /**
+     * 夹内**会递归拷贝**的图片扩展名。
+     *
+     * 只认这些：html 引用的插图基本都在其列，而别的东西（.db/.json/字体）不该被搬进书目录。
+     * `.svg` 也收 —— `ZipImages` 会往里找一层真正的位图（EPUB3 封面那种写法）。
+     */
+    private val DIR_IMAGE_EXTS = setOf(
+        "jpg", "jpeg", "png", "gif", "webp", "bmp", "avif", "heic", "svg",
+    )
+
+    /**
+     * 递归搬图片的两个上限：夹里若有上万张图（用户误把漫画夹当小说导入），
+     * 不封顶会把整本漫画复制进来。命中上限只**停止继续拷**并留日志，已拷的照常用。
+     */
+    internal const val MAX_DIR_IMAGES = 2000
+    internal const val MAX_DIR_IMAGE_BYTES = 400L * 1024 * 1024
+
+    /** 递归深度上限（正常小说夹不会超过两三层）。 */
+    private const val MAX_DIR_DEPTH = 6
 
     fun nextId(context: Context): Long =
         (NovelStore.load(context).maxOfOrNull { it.id } ?: 0L) + 1L
@@ -135,13 +163,20 @@ object NovelImporter {
     }
 
     /**
-     * 导入一个文件夹：**整个夹 = 一部小说**，夹内每个 txt 是一章（见 `FolderNovelParser`）。
+     * 导入一个文件夹：**整个夹 = 一部小说**，夹内每个 txt / html 是一章（见 `FolderNovelParser`）。
      *
      * 与漫画侧同一套心智（整个夹 = 一部作品）—— 上一版按「每个文件一部书」实现，
      * 那种语义在「一本小说被拆成 300 个 txt」时会长出 300 本书。
      *
-     * 只复制会读的两种扩展名（txt / epub）：夹里的图片、说明文件一概不拷，
-     * 既省空间也避免被格式判定误认成漫画包。
+     * ### 拷什么（2026-10-04 起）
+     * - **文本**：直接子文件里的 txt / epub / html / htm / xhtml（不递归 —— 递归会把
+     *   「夹里套了一堆杂七杂八」的情况也吞进来变成莫名其妙的章节）
+     * - **图片**：**仅当夹里有 html 时**才递归拷贝（`images/xxx.jpg` 这种子目录是常态）。
+     *   txt / epub 不需要外部图片（epub 的图在包内），所以纯 txt 夹不会被塞进一堆图。
+     *   ⚠️ 两个上限见 [MAX_DIR_IMAGES] / [MAX_DIR_IMAGE_BYTES]，命中只停拷 + 留日志。
+     *
+     * 单张图拷失败**不让整次导入失败**：少一张插图是小事，整本书导不进来才是大事 ——
+     * 但每张失败都留日志（否则用户只看到"图没了"却查不出原因）。
      */
     suspend fun importDirectory(
         context: Context,
@@ -155,15 +190,17 @@ object NovelImporter {
         val destDir = NovelStorageDir.bookDir(context, id).apply { mkdirs() }
 
         try {
-            val children = rootDoc.listFiles().filter { it.isFile }
-            val wanted = children.filter {
-                it.name?.substringAfterLast('.', "")?.lowercase(Locale.ROOT) in DIR_IMPORT_EXTS
-            }
-            if (wanted.isEmpty()) throw IllegalStateException(ERROR_NO_TEXT_CHAPTER)
+            val textDocs = rootDoc.listFiles().filter { it.isFile && isDirTextEntry(it.name) }
+            if (textDocs.isEmpty()) throw IllegalStateException(ERROR_NO_TEXT_CHAPTER)
+            // 夹里有 html 才收图片（见 KDoc）；`rootId` 用来把 documentId 折成相对路径
+            val rootId = runCatching { DocumentsContract.getTreeDocumentId(treeUri) }.getOrNull()
+            val hasHtml = textDocs.any { isDirHtmlEntry(it.name) }
+            val imageDocs = if (hasHtml) collectImageDocs(rootDoc, rootId) else emptyList()
+            val total = textDocs.size + imageDocs.size
 
-            onProgress(ImportProgress(ImportPhase.COPYING, 0, wanted.size))
+            onProgress(ImportProgress(ImportPhase.COPYING, 0, total))
             var done = 0
-            for (doc in wanted) {
+            for (doc in textDocs) {
                 coroutineContext.ensureActive()
                 // ⚠️ provider 给的名字同样要收敛成单段，理由见 safeSegment
                 val name = safeSegment(doc.name, "")
@@ -173,7 +210,28 @@ object NovelImporter {
                     FileOutputStream(target).use { output -> copyStream(input, output) {} }
                 }
                 done++
-                onProgress(ImportProgress(ImportPhase.COPYING, done, wanted.size))
+                onProgress(ImportProgress(ImportPhase.COPYING, done, total))
+            }
+            var copiedBytes = 0L
+            for ((rel, doc) in imageDocs) {
+                coroutineContext.ensureActive()
+                if (copiedBytes >= MAX_DIR_IMAGE_BYTES) {
+                    LogCollector.w(TAG, "夹内图片超过 ${MAX_DIR_IMAGE_BYTES / (1024 * 1024)}MB，余下不再拷贝")
+                    break
+                }
+                val target = resolveInsideTree(destDir, rel)
+                if (target == null) {
+                    LogCollector.w(TAG, "夹内图片路径不安全，已跳过: $rel")
+                    continue
+                }
+                runCatching {
+                    context.contentResolver.openInputStream(doc.uri)?.use { input ->
+                        FileOutputStream(target).use { output -> copyStream(input, output) {} }
+                    }
+                    copiedBytes += target.length()
+                }.onFailure { LogCollector.w(TAG, "夹内图片拷贝失败，已跳过: $rel", it) }
+                done++
+                onProgress(ImportProgress(ImportPhase.COPYING, done, total))
             }
             coroutineContext.ensureActive()
 
@@ -197,6 +255,109 @@ object NovelImporter {
             LogCollector.e(TAG, "文件夹导入失败，已清理 $destDir: ${e.message}", e)
             throw e
         }
+    }
+
+    /** 这一条名字是不是文件夹导入认可的**文本**条目（纯函数，可单测）。 */
+    internal fun isDirTextEntry(name: String?): Boolean = extOf(name) in DIR_TEXT_EXTS
+
+    /** 这一条名字是不是夹内 **html**（决定要不要连图片一起拷）。 */
+    internal fun isDirHtmlEntry(name: String?): Boolean = extOf(name) in DIR_HTML_EXTS
+
+    /** 这一条名字是不是会**递归拷贝**的图片条目。 */
+    internal fun isDirImageEntry(name: String?): Boolean = extOf(name) in DIR_IMAGE_EXTS
+
+    private fun extOf(name: String?): String =
+        name?.substringAfterLast('.', "")?.lowercase(Locale.ROOT).orEmpty()
+
+    /**
+     * 递归收集夹内图片（只收 [DIR_IMAGE_EXTS]，深度封顶 [MAX_DIR_DEPTH]，张数封顶
+     * [MAX_DIR_IMAGES]），返回 `相对路径 -> 文档`。
+     *
+     * ⚠️ 相对路径由 **documentId** 折出来（`primary:Books/novel/images/a.jpg` 去掉树根前缀），
+     * 而不是靠 `DocumentFile.name` 拼 —— 后者只有文件名，`images/` 这层就丢了，
+     * 于是 html 里的 `images/a.jpg` 永远解析不到。
+     */
+    private suspend fun collectImageDocs(
+        root: DocumentFile,
+        rootId: String?,
+    ): List<Pair<String, DocumentFile>> {
+        val out = ArrayList<Pair<String, DocumentFile>>()
+        suspend fun walk(dir: DocumentFile, depth: Int) {
+            if (depth > MAX_DIR_DEPTH) return
+            for (child in dir.listFiles()) {
+                coroutineContext.ensureActive()
+                if (out.size >= MAX_DIR_IMAGES) {
+                    LogCollector.w(TAG, "夹内图片超过 $MAX_DIR_IMAGES 张，余下不再拷贝")
+                    return
+                }
+                if (child.isDirectory) {
+                    walk(child, depth + 1)
+                } else if (isDirImageEntry(child.name)) {
+                    val rel = relativePathOf(rootId, child) ?: continue
+                    out += rel to child
+                }
+            }
+        }
+        walk(root, 0)
+        return out
+    }
+
+    /**
+     * 文档 → **相对树根**的路径（拿不到 / 不在树内返回 null）。
+     *
+     * `DocumentsContract.getDocumentId` 对 `content://…/document/primary%3ABooks%2Fn%2Fimages%2Fa.jpg`
+     * 给出 `primary:Books/n/images/a.jpg`，而树根是 `primary:Books/n` → 相对路径 `images/a.jpg`。
+     */
+    private fun relativePathOf(rootId: String?, doc: DocumentFile): String? {
+        if (rootId.isNullOrBlank()) return null
+        val id = runCatching { DocumentsContract.getDocumentId(doc.uri) }.getOrNull() ?: return null
+        if (!id.startsWith("$rootId/")) return null
+        return sanitizeRelPath(id.removePrefix("$rootId/"))
+    }
+
+    /**
+     * 相对路径消毒（纯函数，可单测）：只留安全的普通路径段，其余一律返回 null。
+     *
+     * ⚠️ **这是安全边界**：路径来自 DocumentsProvider（不受我们控制）。放行 `..`、绝对路径、
+     * 带盘符/冒号的段，就能把写入目标挪出 `novel_import/<id>/`（覆盖别的书、封面、日志）。
+     * 与 [safeSegment] 同一套思路，只是这里允许多层子目录。
+     */
+    internal fun sanitizeRelPath(rel: String?): String? {
+        val raw = rel?.trim().orEmpty()
+        if (raw.isEmpty() || raw.length > MAX_REL_PATH_CHARS) return null
+        val segs = raw.split('/', '\\')
+        val out = ArrayList<String>(segs.size)
+        for (seg in segs) {
+            when {
+                seg.isEmpty() || seg == "." -> Unit
+                seg == ".." -> return null
+                // 冒号 = Windows 盘符 / SAF 的 `primary:` 前缀；控制字符与尾点/尾空格在部分文件系统上非法
+                seg.contains(':') -> return null
+                seg.any { it.isISOControl() } -> return null
+                seg.length > MAX_REL_SEGMENT_CHARS -> return null
+                else -> out += seg
+            }
+        }
+        if (out.isEmpty() || out.size > MAX_DIR_DEPTH + 1) return null
+        return out.joinToString("/")
+    }
+
+    private const val MAX_REL_PATH_CHARS = 400
+    private const val MAX_REL_SEGMENT_CHARS = 120
+
+    /**
+     * 相对路径 → 书目录内的目标文件（必要时建父目录）。
+     *
+     * 与 [resolveInside] 同一条纵深防御：规范路径必须**严格落在 [destDir] 内**，否则返回 null
+     * （调用方跳过并留日志，而不是静默写到别处）。
+     */
+    private fun resolveInsideTree(destDir: File, rel: String): File? {
+        val dir = destDir.canonicalFile
+        val target = File(dir, rel).canonicalFile
+        if (target.path == dir.path) return null
+        if (!target.path.startsWith(dir.path + File.separator)) return null
+        target.parentFile?.mkdirs()
+        return target
     }
 
     private suspend fun importOne(

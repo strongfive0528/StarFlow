@@ -181,12 +181,25 @@ adb devices
 - OCR-only 游戏历史不能用破坏性的 `refreshGameCache` 删除已有译文；已有译文时只更新处理状态并保留译文载荷。
 
 - `sr/` — **图片超分**（feature/super-resolution）：`SrProcessor`（唯一执行入口：等锁 → 大图压缩 → 推理 → 落盘 → 写记录）/`SrDownscale`（大图预处理：短边 1080 + 引擎输入上限两个约束一起解）/`SuperResolutionEngines`（门面：选引擎 / 失败降级 / `resolveSteps`）/`NcnnSrEngine`（ncnn+Vulkan，主力）/`AnimeJaNaiEngine`（ONNX CPU，当前不可达）/`anime4k/`（GLES3 shader，不放大）/`SrStore`（webp + 标记的落盘）/`SrModelManager`/`SrSettings`/`SrDisplayBase`；原生在 **`:sr` 模块**（ncnn+Vulkan，源码自编）。详见 `sr/CLAUDE.md`。
-- `novel/` — 小说导入 & 阅读（feature/novel-text-import）：`parser/`（格式判定与解析：`NovelParsers` 分发、`TxtParser`/`TxtChapterSplitter` 用**字符区间**定位章节、`EpubParser`、`ZipHtmlParser`/`HtmlParser`/`HtmlTextExtractor`、`FolderNovelParser`、`TextEncoding` 解 GBK/Big5）、`model/`+`data/`（`NovelFormat` 判定、`NovelImporter`/`NovelImportManager`/`NovelStore`/`NovelStorageDir`）、`shelf/`（`NovelShelfFragment`，宿主在 `mangaimport/ImportMangaFragment`）、`reader/`（`NovelReaderActivity` + `NovelChapterRepository` + `NovelPaginator` + `NovelTextRenderer`/`NovelPageView`/`NovelScrollAdapter`/`NovelTocDialog`/`NovelPanelSheet`/`NovelPanelStyle`）、`translate/`（`NovelParagraphSplitter`/`NovelTranslationBatch`/`NovelTranslationEngine`/`NovelChapterTranslator`/`NovelTranslationQueue`）。详见 `novel/CLAUDE.md`。
+- `novel/` — 小说导入 & 阅读（feature/novel-text-import）：`parser/`（格式判定与解析：`NovelParsers` 分发、`TxtParser`/`TxtChapterSplitter` 用**字符区间**定位章节、`EpubParser`、`ZipHtmlParser`/`HtmlParser`/`HtmlTextExtractor`、**`ZipImages`（epub/zip 内嵌插图：相对地址解析 + 百分号转义 + SVG 包装往里找一层 + `data:` + 单章额度）**、`FolderNovelParser`、`TextEncoding` 解 GBK/Big5）、`model/`+`data/`（`NovelFormat` 判定、`NovelImporter`/`NovelImportManager`/`NovelStore`/`NovelStorageDir`）、`shelf/`（`NovelShelfFragment`，宿主在 `mangaimport/ImportMangaFragment`）、`reader/`（`NovelReaderActivity` + `NovelChapterRepository`（含 epub 插图解出与落盘）+ `NovelPaginator` + `NovelTextRenderer`/`NovelPageView`/`NovelScrollAdapter`/**`NovelImage`+`NovelImageMetrics`/`NovelImageStore`（插图尺寸口径唯一一份 + 懒解码缓存）**/`NovelTocDialog`/`NovelPanelSheet`/`NovelPanelStyle`）、`translate/`（`NovelParagraphSplitter`/`NovelTranslationBatch`/`NovelTranslationEngine`/`NovelChapterTranslator`/`NovelTranslationQueue`）。详见 `novel/CLAUDE.md`。
 
 **翻译 API 实现** (`app/src/main/java/translationapi/`):
 每个子目录实现 `TranslationTextAPI` 接口：`openaitranslation/`、`bingtranslation/`、`nllbtranslation/`、`niutrans/`、`volctranslation/`、`deepltranslation/`、`baidutranslation/`、`tencentcloud/`、`azuretranslation/`、`customtranslation/`、`doubaotranslation/`、`llamacpp/`
 - `llamacpp/` — **LlamaCpp 本地引擎的 JNI 门面**，只有一个 `LlamaCppNative.kt`（`external` 方法 + `LlamaCppStreamCallback` 接口）；引擎实现（模型清单/导入/翻译/提示词）在 `com.moe.starflow.llamacpp/`，原生代码在 **`:llamacpp` 模块**。`nllbtranslation/` 同属本地引擎类
 - ⚠️ **本包是历史遗留的独立顶层包，不在 `com.moe.starflow` 命名空间内，保持现状勿移动**：JNI 符号（`:llamacpp` 的 `llamacpp_bridge.cpp` → `Java_translationapi_llamacpp_LlamaCppNative_*` + `cpp/src/SentencePieceProcessorInterface.cpp` 的 SentencePieceProcessorJava 6 个）与 `proguard-rules.pro` 的 `LlamaCppStreamCallback` keep 规则都硬编码 `translationapi.*` 包名，移动即 UnsatisfiedLinkError。详见 `TranslatorFactory.kt` 顶部注释。
+- ⚠️ **一个引擎实例上可以并发 N 个请求：绝不许「发新请求就把上一个取消」**（2026-10-03 真机事故，6 个实现都踩过）。
+  小说（默认 3 并发）/漫画（默认 3 并发）都是**同一个引擎实例上并发 N 批**，而这 6 个实现原来都在
+  `getTranslation` 开头写 `currentJob?.cancel()` + 单值 `currentJob`：第 2 批一发出就把第 1 批的协程取消掉，
+  取消路径走 `catch (CancellationException) { throw e }` → **永远不回调** → 那一批永久挂起
+  （不入库、不报错、并发槽位不释放、界面一直显示「翻译中」）。
+  真机日志特征：**只有最后发出的那个批能回来**，前面几个一直没有 Response。
+  现在统一走 `translationapi/InFlightRequests`（每个请求一个自己的 Job；`cancelTranslation()` = 取消该实例上
+  **所有**在飞请求），守卫 `translationapi/InFlightRequestsTest`（行为）+
+  `TranslationEngineRequestCancelGuardTest`（源码级：禁止 `currentJob?.cancel()` 写回来）。
+  ⚠️ 推论：**`cancelTranslation()` 不是「取消某一次请求」** —— 接口层没有请求句柄，一取消就是全部。
+  所以「这一次请求的调用方不要结果了」**不能**再转成引擎取消（会连带杀掉同实例上其它并发批），
+  消费侧改用明确的整体中止语义（小说侧 `NovelBatchTranslator.abortAll` / `NovelTextTranslator.abortInFlight`，
+  只在**退出阅读器 / 停任务**时调用）。
 
 **LlamaCpp 本地引擎关键机制（`translationapi/llamacpp/` 门面 + `com.moe.starflow.llamacpp/` 实现 + `:llamacpp` 原生模块）：**
 
@@ -590,6 +603,27 @@ tag:OCRBridge | tag:DetectionBridge | tag:BubbleDetector | tag:MangaFloatingServ
 `adb push` 到 app 数据目录、`am force-stop`、`adb shell input/svc power`、`pm trim-caches`。
 `adb install` 与 `adb uninstall` **一律先问**，不得自行决定。
 
+### ⛔ 2026-10-04 用户再次明确：**任何设备操作都要先获得授权**
+
+> 「**不允许你私自安装启动app截图等等操作！！必须获得用户授权**」
+
+当时的违规动作（**每个都是错的**）：`adb install -r` 装机 → `am force-stop` → `am start`/`monkey`
+启动 app → `screencap` 截图。它们在旧文档里被拆在不同清单里（`install`/`force-stop` 在 CAUTION、
+`am start`/`screencap` **压根没写**），于是"逐条对照清单"就把自己说服了。所以改成两条硬规矩：
+
+1. **SAFE 清单是白名单**：清单里**没有**的，默认当 CAUTION —— **先问一句**。
+   不许自己判断"这个应该没事"（`am start` / `monkey` / `screencap` / `screenrecord` 就是这么溜过去的）。
+2. **"启动 app" 与 "截图" 明确算设备操作**：它们不改数据，但会**打断用户正在用手机做的事**
+   （app 被拉到前台、正在跑的翻译任务被切走、屏幕上突然多出东西），对用户是可见的打扰。
+
+新增进 CAUTION（都要先问）：`am start` / `am startservice` / `monkey`（启动 app）、
+`adb shell screencap` / `screenrecord`（截图/录屏，含 `adb exec-out screencap`）。
+
+⚠️ **"只是装个刚构建好的包帮你看看效果"也不行**：`adb install -r` 即便同签名、即便上次装过、
+即便自认为"只是顺手"，也**必须先问**。**本地构建（`gradlew assembleDebug` / 单测）随便跑**
+（产物在 `build/` 里，不碰设备），**装不装、什么时候装由用户说了算**。
+用户没要求时，交付物是「构建通过 + 单测 + 清晰的验证步骤」，**不是**"已经装到你手机上了"。
+
 ### 允许的只读手段（SAFE，可直接用）
 
 `adb devices`、`adb logcat -d`、`adb shell dumpsys/getprop/pidof/ls/stat/df/cat`、
@@ -858,6 +892,29 @@ if (knownBefore == null || knownBefore != nowLandscape) clearCropForScreenChange
 - 许可证：LGPL（原项目）
 
 ## 高频踩坑（gotchas）
+
+- ⚠️⚠️ **改完文件先看 `git show --stat` 有没有"整文件重写"**（2026-10-04 踩到）：
+  本仓库的工作区里**大量文件是 CRLF、而索引里存的是 LF**（`git ls-files --eol` 会显示
+  `i/lf w/crlf`，998 个文件如此），因为 git 靠 stat 缓存判断"没改过"，`git status` 一声不吭。
+  **一旦某个文件被重新写盘（编辑器/AI 工具整文件写回），它的字节就会被原样存进索引 —— CRLF 也存**，
+  于是那个文件的 diff 变成"整文件重写"（实测 `NovelImporter.kt` 540 行 CRLF → 919 行改动、
+  `NovelShelfFragment.kt` 473 行 → 945 行改动），真正的改动被埋在里面**完全 review 不动**。
+  两条处置：
+  1. 提交前扫一眼 `git show --stat HEAD`：某文件改动行数 ≈ 全文件行数 = 中招了；
+  2. 归一化再 `commit --amend`：
+     ```powershell
+     $p = (Resolve-Path <file>).Path
+     $t = [System.IO.File]::ReadAllText($p).Replace("`r`n", "`n")
+     [System.IO.File]::WriteAllText($p, $t, (New-Object System.Text.UTF8Encoding($false)))
+     ```
+  ⚠️ 别用 `Get-Content`/`Set-Content` 做这件事（会把中文读成 mojibake，见下一条）。
+  ⚠️ 也别想着"反正 git 会归一化"：本仓库 `core.autocrlf=false` + `core.eol=lf`，
+  **git 不会替你把 CRLF 转成 LF**（`.gitattributes` 只对 `novel-fixtures/**` 标了 `-text`）。
+
+- **读文件一律用 `read` 工具，不要用 `Get-Content`**（2026-10-04 踩到）：无 BOM 的 UTF-8 文件会被
+  PowerShell 5.1 按系统 ANSI（GBK）解码 —— 中文全变 mojibake（`灏忚鏂囦欢鏍煎紡`），
+  看着像文件坏了、其实只是读错了。要按字节核对（换行/BOM）就用
+  `[System.IO.File]::ReadAllBytes()`。
 
 - **Kotlin 块注释会嵌套**：KDoc 里出现 `/*` 就开一层新注释 —— 例如中文强调写法
   `失败/**不属于这本书**` → 报 `Unclosed comment` + 后面一整片 `Missing '}'`，

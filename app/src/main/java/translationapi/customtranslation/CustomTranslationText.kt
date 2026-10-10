@@ -17,6 +17,8 @@
 
 package translationapi.customtranslation
 
+import translationapi.InFlightRequests
+
 import android.util.Log
 import com.moe.starflow.me.apiconfig.CustomTextAPIConfig
 import com.moe.starflow.translate.TranslationResult
@@ -40,7 +42,7 @@ import java.util.concurrent.TimeUnit
 class CustomTranslationText(private val config: CustomTextAPIConfig): TranslationTextAPI {
     // 创建协程作用域
     private val coroutineScope = CoroutineScope(Dispatchers.IO + SupervisorJob())
-    private var currentJob: Job? = null
+    private val inFlight = InFlightRequests()
 
     private val SOCKET_TIMEOUT = 10L // 10秒
     private val JSON = "application/json; charset=utf-8".toMediaType()
@@ -62,10 +64,7 @@ class CustomTranslationText(private val config: CustomTextAPIConfig): Translatio
         targetLanguage: String,
         callback: (TranslationResult) -> Unit
     ) {
-        // 取消之前的任务（如果存在）
-        currentJob?.cancel()
-
-        currentJob = coroutineScope.launch {
+        inFlight.track(coroutineScope) {
             try {
                 // 执行翻译请求
                 val result = if (config.method == "GET") {
@@ -186,8 +185,7 @@ class CustomTranslationText(private val config: CustomTextAPIConfig): Translatio
     }
 
     override fun cancelTranslation() {
-        currentJob?.cancel()
-        currentJob = null
+        inFlight.cancelAll()
     }
 
     override fun release() {

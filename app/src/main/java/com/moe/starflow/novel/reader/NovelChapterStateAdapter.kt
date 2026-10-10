@@ -372,10 +372,14 @@ class NovelChapterStateAdapter(
 
         val running = job?.state == ChapterJobState.RUNNING || job?.state == ChapterJobState.QUEUED
         val paused = job?.state == ChapterJobState.PAUSED
+        // ⚠️ `done` 把**失败也计进去了**（见 ChapterJob 注释）→ 成功/失败必须拆开显示，
+        // 否则「跑到一半全失败」和「正常在跑」在卡片上长得一模一样（用户口径 2026-10-03）
+        val okCount = job?.ok ?: 0
+        val failCount = ((job?.done ?: 0) - okCount).coerceAtLeast(0)
         item.findViewById<TextView>(R.id.tv_chapter_badge).apply {
             text = when {
-                running -> ctx.getString(R.string.novel_chapter_running_batches, job?.done ?: 0, job?.total ?: 0)
-                paused -> ctx.getString(R.string.novel_chapter_paused_batches, job?.done ?: 0, job?.total ?: 0)
+                running -> ctx.getString(R.string.novel_chapter_running_split, okCount, failCount, job?.total ?: 0)
+                paused -> ctx.getString(R.string.novel_chapter_paused_split, okCount, failCount, job?.total ?: 0)
                 waitingCount > 0 -> ctx.getString(R.string.reader_translate_state_waiting)
                 isDone(index) -> ctx.getString(R.string.novel_chapter_done)
                 success > 0 -> ctx.getString(R.string.novel_chapter_partial, success, total)
@@ -541,12 +545,18 @@ class NovelChapterStateAdapter(
             dark,
         )
         item.findViewById<TextView>(R.id.tv_page_label).apply {
-            text = item.context.getString(
-                R.string.novel_translate_batch_row,
-                batch.ordinal + 1,
-                batch.firstPara + 1,
-                batch.lastPara + 1,
-            )
+            // 图片单位（一张图 = 一个段）显示「第 N 张图」：写成「第 x–y 段」时 x == y，
+            // 用户只看到同一个数字写两遍，看不出这是一张插图
+            text = if (batch.isImageUnit) {
+                item.context.getString(R.string.novel_translate_batch_row_image, batch.ordinal + 1)
+            } else {
+                item.context.getString(
+                    R.string.novel_translate_batch_row,
+                    batch.ordinal + 1,
+                    batch.firstPara + 1,
+                    batch.lastPara + 1,
+                )
+            }
             setTextColor(labelColor)
             maxLines = 1
             ellipsize = android.text.TextUtils.TruncateAt.END

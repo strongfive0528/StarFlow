@@ -27,6 +27,10 @@ enum class JobAction { PAUSE, RESUME, CANCEL }
  * @param bookId 书 id（漫画=ImportedManga.id，小说=ImportedNovel.id）
  * @param chapterIndex 章在书里的下标（点通知回到这一章要用）
  * @param startPage 漫画用：该章第一页（点通知直接跳过去）；小说恒 0
+ * @param stageText **比"第 x/y"更细的一行状态**（可空）。目前只有小说插图用：
+ *   一整批里三张图要一张张 OCR，通知栏要显示得出「正在识别插图 2/3…」——
+ *   只报 `done/total` 的话，阅读器已经关掉时用户在通知栏看到的是"进度不动"。
+ *   ⚠️ 有值就**优先于**默认的进度文案（[TranslationJobService] 里那条 when）。
  */
 data class ActiveChapterJob(
     val kind: TranslationJobKind,
@@ -38,6 +42,7 @@ data class ActiveChapterJob(
     val done: Int,
     val state: ChapterJobState,
     val startPage: Int = 0,
+    val stageText: String? = null,
 ) {
     /**
      * 通知 id 的稳定来源（同一本书同一章恒等）。

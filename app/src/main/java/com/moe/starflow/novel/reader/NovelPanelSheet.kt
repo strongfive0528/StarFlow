@@ -60,7 +60,7 @@ class NovelPanelState(
     val rotateLabel: String = "",
     val isDarkPanel: Boolean = false,
     val translateMode: NovelTranslateMode = NovelTranslateMode.MANUAL,
-    val debounceMs: Int = 500,
+    val debounceMs: Int = NovelPanelStyle.DEBOUNCE_DEFAULT,
     val aheadBatches: Int = NovelQuota.DEFAULT,
     val batchSize: Int = NovelPanelStyle.BATCH_DEFAULT,
     val currentChapter: Int = 0,
@@ -77,6 +77,8 @@ class NovelPanelState(
     val concurrency: Int = TranslationConcurrency.NOVEL_DEFAULT,
     /** 单批预警阈值的档位下标（见 `NovelBatchWarning.tiers`）。 */
     val batchWarnIndex: Int = NovelBatchWarning.defaultIndex,
+    /** 同时翻译图片（epub 插图当"一个段落"一起翻；默认关）。 */
+    val translateImages: Boolean = false,
 )
 
 /** 小说阅读器底部工具栏回调。 */
@@ -133,6 +135,9 @@ class NovelPanelCallbacks(
 
     /** 「单批预警阈值」滑块（传的是**档位下标**，见 `NovelBatchWarning.tiers`）。 */
     val onBatchWarn: (Int) -> Unit = {},
+
+    /** 「同时翻译图片」开关。 */
+    val onTranslateImages: (Boolean) -> Unit = {},
 
     /** 下载：[NovelExportKind] 的序号（0 译文 / 1 原文 / 2 双语）。 */
     val onDownload: (Int) -> Unit = {},
@@ -484,7 +489,7 @@ class NovelPanelSheet(
         })
         applyAheadRowVisibility(view, translateMode)
 
-        // 单批预警阈值（滑块位置 = 档位下标；用户口径：默认 4096，档位都是较大的值）
+        // 单批预警阈值（滑块位置 = 档位下标；默认 2048 落在**中间那格**，两边都能拖，见 NovelBatchWarning.tiers）
         val sbWarn = view.findViewById<SeekBar>(R.id.sb_batch_warn)
         val tvWarn = view.findViewById<TextView>(R.id.tv_batch_warn_value)
         sbWarn.max = NovelBatchWarning.maxIndex()
@@ -520,6 +525,14 @@ class NovelPanelSheet(
         applyBatchGroup(prefs.getBoolean(KEY_BATCH_GROUP_EXPANDED, false))
         view.findViewById<View>(R.id.btn_batch_group).setOnClickListener {
             applyBatchGroup(groupContent.visibility != View.VISIBLE)
+        }
+
+        // 同时翻译图片（⚠️ 在**折叠组之外**、常显：用户点名要的开关，藏起来等于没做）
+        val swImages = view.findViewById<Switch>(R.id.sw_translate_images)
+        swImages.isChecked = state.translateImages
+        swImages.setOnCheckedChangeListener { _, checked ->
+            // ⚠️ 回推（renderHostState）时不能回调，否则会与"宿主刚写进 prefs 的值"打架
+            if (!syncing) cb.onTranslateImages(checked)
         }
 
         view.findViewById<TextView>(R.id.tv_translator_model_row).text =
@@ -724,6 +737,7 @@ class NovelPanelSheet(
         R.id.tv_line_spacing_label, R.id.tv_para_spacing_label,
         R.id.tv_padding_label, R.id.tv_keep_paragraphs_label,
         R.id.tv_top_padding_label, R.id.tv_bottom_padding_label,
+        R.id.tv_translate_images_label,
     )
     // PANEL_THEME_LABEL_IDS_END
 
@@ -743,6 +757,7 @@ class NovelPanelSheet(
         R.id.tv_top_padding_value, R.id.tv_bottom_padding_value,
         R.id.tv_style_hint,
         R.id.tv_batch_group_arrow,
+        R.id.tv_translate_images_hint,
     )
     // PANEL_THEME_SUB_IDS_END
 
@@ -762,7 +777,8 @@ class NovelPanelSheet(
         chapterAdapter.dark = darkPanel
         // Switch 配色（避免与面板背景重叠/看不清）
         val swTrack = if (dark) 0xFF3A4046.toInt() else 0xFFCFD8DC.toInt()
-        listOf(R.id.sw_auto_turn, R.id.sw_keep_paragraphs).forEach { id ->
+        listOf(R.id.sw_auto_turn, R.id.sw_keep_paragraphs, R.id.sw_translate_images).forEach { id ->
+
             view.findViewById<Switch>(id).let {
                 it.thumbTintList = ColorStateList.valueOf(0xFF55AEEA.toInt())
                 it.trackTintList = ColorStateList.valueOf(swTrack)
@@ -1038,6 +1054,7 @@ class NovelPanelSheet(
             view.findViewById<TextView>(R.id.tv_interval_value).text = "${s.intervalSec} s"
             view.findViewById<Switch>(R.id.sw_auto_turn).isChecked = s.autoTurn
             view.findViewById<Switch>(R.id.sw_keep_paragraphs).isChecked = s.keepParagraphsWhole
+            view.findViewById<Switch>(R.id.sw_translate_images).isChecked = s.translateImages
         } finally {
             syncing = false
         }

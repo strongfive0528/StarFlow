@@ -23,6 +23,13 @@ class NovelTranslationQueueTest {
         val batches = mutableListOf<List<Int>>()
         var failAll = false
 
+        /** 一批"跑"多久（虚拟时间）；> 0 时用来制造"上一批还在飞"的场景。 */
+        var holdMs = 0L
+
+        /** 同时在跑的批数 / 历史峰值 —— 并发与"图片串行"都靠它断言（比数批次数可靠）。 */
+        var concurrent = 0
+        var maxConcurrent = 0
+
         override suspend fun translateBatch(
             book: ImportedNovel,
             chapterIndex: Int,
@@ -33,8 +40,15 @@ class NovelTranslationQueueTest {
             translatorName: String,
         ): NovelBatchResult {
             batches += paraIndexes
-            if (failAll) return NovelBatchResult(emptyMap(), "fake 失败")
-            return NovelBatchResult(paraIndexes.associateWith { "译$it" })
+            concurrent++
+            if (concurrent > maxConcurrent) maxConcurrent = concurrent
+            try {
+                if (holdMs > 0) kotlinx.coroutines.delay(holdMs)
+                if (failAll) return NovelBatchResult(emptyMap(), "fake 失败")
+                return NovelBatchResult(paraIndexes.associateWith { "译$it" })
+            } finally {
+                concurrent--
+            }
         }
     }
 
@@ -49,6 +63,14 @@ class NovelTranslationQueueTest {
         page: () -> List<Int>,
         chapterSize: Int,
         batchSize: Int,
+        /** 当前页**全部**段（含不可翻译）—— 默认与 [page] 相同（绝大多数用例没有不可翻译段）。 */
+        span: () -> List<Int> = page,
+        /** 启动延迟（防抖）；默认 0 让既有用例的时序保持逐字不变。 */
+        debounce: Int = 0,
+        /** 同时最多几个批在飞；默认 1（与旧行为一致）。 */
+        concurrency: Int = 1,
+        /** 图片段判据（默认"没有图片段"）；图片单位要独占一批并串行。 */
+        isImage: (Int) -> Boolean = { false },
     ) = NovelTranslationQueue(
         scope = scope,
         translator = translator,
@@ -59,11 +81,40 @@ class NovelTranslationQueueTest {
         targetLang = { "zh" },
         translatorName = { "fake" },
         batchSize = { batchSize },
-        debounceMs = { 0 },
+        debounceMs = { debounce },
         currentPageParaIndexes = page,
+        currentPageSpanIndexes = span,
         chapterParaIndexes = { _, _ -> (0 until chapterSize).toList() },
         translatedIndexes = { _, _ -> translated.toSet() },
+        concurrency = { concurrency },
+        isImagePara = { _, p -> isImage(p) },
     )
+
+    /**
+     * ⚠️ **本页一个可翻译段都没有**（图片页 / 整页都是 <4 字短行）时，增量必须拿「当前页**全部**段」
+     * 定位窗口起点 —— 既不能退回章首（会翻到用户早就不看的地方），也不能停住
+     * （用户报的「当前页段数不足 → 增量始终 0 批」）。
+     */
+    @Test
+    fun `增量在本页无可翻译段时用当前页位置定位窗口`() = runTest {
+        val t = FakeTranslator()
+        val translated = mutableSetOf<Int>()
+        val q = queue(
+            backgroundScope, t, translated,
+            page = { emptyList() },       // 本页没有可翻译段
+            span = { listOf(10, 11) },    // 但本页确实落在第 10 段那一位
+            chapterSize = 30, batchSize = 2,
+        )
+
+        q.start(
+            book(), NovelTranslateMode.AHEAD, quota = NovelQuota.of(2), currentChapter = { 0 },
+        ) { _, r -> translated += r.translations.keys }
+        advanceTimeBy(10_000)
+
+        assertEquals("第一批必须从当前页位置（第 10 段）起，不能从章首起", listOf(10, 11), t.batches.first())
+        assertTrue("不许翻到当前页之前的段", t.batches.flatten().all { it >= 10 })
+        q.stop()
+    }
 
     /** 自动：当前页是唯一锚点 —— 本页翻完就停，**不越页**。 */
     @Test
@@ -76,6 +127,88 @@ class NovelTranslationQueueTest {
         advanceTimeBy(5_000)
 
         assertEquals("只翻当前页那一批", listOf(listOf(0, 1)), t.batches)
+        q.stop()
+    }
+
+    // ===== 插图（用户口径 2026-10-04：「图片算段落的一段！每批 3 段，哪怕三张都是图片，
+    //       也要先后翻译三张图片」）=====
+
+    /**
+     * **插图不拆批**：批按「每批段数」切，一批里可以混着文本与插图 ——
+     * 老实现把图拆成独占批，用户实测就是「每批段数的设置遇到图片就中断」。
+     *
+     * "一张一张来"改由 `NovelChapterTranslator` 在批内串行（它自己拿 OCR 锁）实现，
+     * 队列这边只管照常按段数成批。
+     */
+    @Test
+    fun `插图与文本同批且按每批段数切`() = runTest {
+        val t = FakeTranslator()
+        val translated = mutableSetOf<Int>()
+        // 章内 0..5，第 2 段是插图；每批 3 段
+        val q = queue(
+            backgroundScope, t, translated,
+            page = { listOf(0, 1, 2, 3, 4, 5) }, chapterSize = 6, batchSize = 3,
+            isImage = { it == 2 },
+        )
+
+        q.start(book(), NovelTranslateMode.AHEAD, quota = NovelQuota.of(10), currentChapter = { 0 }) { _, r ->
+            translated += r.translations.keys
+        }
+        advanceTimeBy(30_000)
+
+        assertEquals(
+            "严格按每批段数切，插图留在自己那一批里（顺序不变）",
+            listOf(listOf(0, 1, 2), listOf(3, 4, 5)),
+            t.batches,
+        )
+        q.stop()
+    }
+
+    /** **三张连续的图 = 一批三张**（用户点名的场景）。 */
+    @Test
+    fun `三张连续插图同一批`() = runTest {
+        val t = FakeTranslator()
+        val translated = mutableSetOf<Int>()
+        val q = queue(
+            backgroundScope, t, translated,
+            page = { listOf(0, 1, 2, 3) }, chapterSize = 4, batchSize = 3,
+            isImage = { true },
+        )
+
+        q.start(book(), NovelTranslateMode.AHEAD, quota = NovelQuota.of(10), currentChapter = { 0 }) { _, r ->
+            translated += r.translations.keys
+        }
+        advanceTimeBy(30_000)
+
+        assertEquals("三张图一批、第四张下一批", listOf(listOf(0, 1, 2), listOf(3)), t.batches)
+        q.stop()
+    }
+
+    /**
+     * **含插图的批之间不并发**：OCR 是单例引擎（`OcrLock` 一把），两批含图的批同时起飞
+     * 只会让后来那批在锁上干等、还白占并发槽位。
+     *
+     * 断言用**并发峰值**（假翻译器记 `maxConcurrent`）：并发 4 下也必须是 1。
+     */
+    @Test
+    fun `含插图的批之间串行`() = runTest {
+        val t = FakeTranslator()
+        t.holdMs = 1_000
+        val translated = mutableSetOf<Int>()
+        // 六张图、每批 3 段 → 两批，各自含图
+        val q = queue(
+            backgroundScope, t, translated,
+            page = { (0..5).toList() }, chapterSize = 6, batchSize = 3,
+            concurrency = 4, isImage = { true },
+        )
+
+        q.start(book(), NovelTranslateMode.AHEAD, quota = NovelQuota.of(10), currentChapter = { 0 }) { _, r ->
+            translated += r.translations.keys
+        }
+        advanceTimeBy(10_000)
+
+        assertEquals("同一时刻只允许一批含图的批在飞（并发 4 也一样）", 1, t.maxConcurrent)
+        assertEquals(listOf(listOf(0, 1, 2), listOf(3, 4, 5)), t.batches)
         q.stop()
     }
 
@@ -244,27 +377,56 @@ class NovelTranslationQueueTest {
     }
 
     /**
-     * 用户**清除了译文**的段：自动模式本会话别再翻回来（否则用户看到的是"清了个寂寞"）。
-     * 而「翻译本章」是显式操作 —— 开跑前会把这份账整份清掉，照样翻。
+     * **用户清掉译文的段，重新开启自动/增量时要照常翻**（用户口径 2026-10-04）。
+     *
+     * 用户报的现场：「清译文后重翻只有手动生效，自动和增量即使当前页面刚才删除了译文，
+     * 开启也没有任何翻译，不会翻译」—— 老实现有一份"用户清过的段别再自动挑"的账，
+     * 清完再开自动就全被静默跳过。现在这份账**没有了**：
+     * 清译文 = 一次显式编辑（宿主当场停队列 + 回退手动），之后那几段就是普通"没译文的段"。
+     * 判据很直白：**译文表里没有它们** → 自动模式把它们当成待翻段。
      */
     @Test
-    fun `清除过的段自动模式不再翻但翻译本章照样翻`() = runTest {
+    fun `清掉译文的段重新开启自动照常翻`() = runTest {
         val t = FakeTranslator()
+        // 清掉译文 = 库里那几段回到"没有译文"的状态（translations 里没有它们）
         val translated = mutableSetOf<Int>()
         val q = queue(backgroundScope, t, translated, page = { listOf(0, 1) }, chapterSize = 4, batchSize = 2)
 
-        q.skipParagraphs(listOf(0, 1))
         q.start(book(), NovelTranslateMode.AUTO, currentChapter = { 0 }) { _, r -> translated += r.translations.keys }
         advanceTimeBy(5_000)
 
-        assertTrue("清过的段不该被自动翻回来，实际发了 ${t.batches}", t.batches.isEmpty())
-        assertEquals(NovelQueuePhase.DRAINED, q.state.value.phase)
+        assertEquals("清过的段（库里没译文）自动模式必须照常翻", listOf(listOf(0, 1)), t.batches)
         q.stop()
+    }
 
-        val done = q.translateWholeChapter(book(), 0) { r -> translated += r.translations.keys }
+    /**
+     * **上一批收尾后要等一次防抖才认领下一批**（用户口径 2026-10-04）。
+     *
+     * 用户报的现场：「**黄色翻译中的背景在上一批翻译完后就会立刻跳到当前正在翻的页面**」——
+     * 旧写法把防抖只挂在"翻屏"上，而翻屏时上一批还在飞：那次防抖在"等在飞批"的过程中被白白
+     * 消耗掉，上一批真收尾时防抖早已过期 → 立刻认领，黄底无缝跳过去。
+     * 现在**有批收尾（在飞清零）也会排一次防抖**，所以两批之间一定看得见间隔。
+     */
+    @Test
+    fun `上一批收尾后要等防抖才发下一批`() = runTest {
+        val t = FakeTranslator().apply { holdMs = 300 }
+        val translated = mutableSetOf<Int>()
+        val q = queue(
+            backgroundScope, t, translated, page = { listOf(0, 1, 2, 3) },
+            chapterSize = 8, batchSize = 2, debounce = 500,
+        )
 
-        assertEquals("「翻译本章」是显式操作：4 段 / 每批 2 段 → 2 批", 2, done)
-        assertTrue(translated.containsAll(listOf(0, 1, 2, 3)))
+        q.start(book(), NovelTranslateMode.AUTO, currentChapter = { 0 }) { _, r -> translated += r.translations.keys }
+
+        // t=500（首屏防抖）认领第 1 批；它 300ms 后收尾
+        advanceTimeBy(520)
+        assertEquals("首批在防抖后发出", listOf(listOf(0, 1)), t.batches)
+        advanceTimeBy(400)   // t=920：第 1 批已收尾（t=800），防抖要到 t=1300
+        assertEquals("上一批收尾后必须停一拍，不能立刻跳下一批", 1, t.batches.size)
+
+        advanceTimeBy(500)   // t=1420：防抖过去了 → 第 2 批
+        assertEquals(listOf(listOf(0, 1), listOf(2, 3)), t.batches)
+        q.stop()
     }
 
     /** 空选择不发请求（白抢一次锁、白烧一次额度）。 */
@@ -310,6 +472,100 @@ class NovelTranslationQueueTest {
         )
         advanceTimeBy(60_000)
         assertEquals("新窗口翻完又停下，不会一路翻到章末", 4, t.batches.size)
+        q.stop()
+    }
+
+    /**
+     * **翻页后必须重新等一次防抖**（用户口径 2026-10-03：「前面的页还在翻译，我翻到别的地方，
+     * 别的页**立刻**变黄 —— 防抖机制完全没起作用」）。
+     *
+     * 回归点：旧实现的防抖是"整条流水线空着才等一次" —— 上一屏还有批在飞时，翻到新一屏
+     * **一个防抖都不等**就认领新批（用户看到的"别的地方立刻变黄"）。现在防抖按**屏**重计：
+     * 用户还在连翻就一轮一轮往后推，只有停下来的那一屏才开始翻。
+     */
+    @Test
+    fun `翻页后要重新等防抖才认领新页`() = runTest {
+        val t = FakeTranslator().apply { holdMs = 5_000 }
+        val translated = mutableSetOf<Int>()
+        var page = listOf(0, 1)
+        val q = queue(
+            backgroundScope, t, translated, page = { page },
+            chapterSize = 30, batchSize = 2, debounce = 500, concurrency = 3,
+        )
+
+        q.start(
+            book(), NovelTranslateMode.AHEAD, quota = NovelQuota.of(10), currentChapter = { 0 },
+        ) { _, r -> translated += r.translations.keys }
+
+        // t=500：首批（防抖 500ms 后）认领，此后一直在飞
+        // ⚠️ `advanceTimeBy(500)` 不会执行**正好落在 500ms** 的任务，所以多推一点点
+        advanceTimeBy(520)
+        assertEquals(listOf(listOf(0, 1)), t.batches)
+
+        // 翻到新的一屏：调度器看到新页 → **重新**防抖，防抖没到就不许认领
+        page = listOf(2, 3)
+        advanceTimeBy(700)
+        assertEquals("翻页后不足一个防抖窗口，不许认领新页（实际 ${t.batches}）", 1, t.batches.size)
+
+        // 防抖到点 → 才开始翻新的一屏
+        advanceTimeBy(600)
+        assertEquals(listOf(listOf(0, 1), listOf(2, 3)), t.batches)
+        q.stop()
+    }
+
+    /**
+     * **翻页后待翻的屏变了 → 自动接着翻新屏**（没有"清过译文的账"要维护之后，这条更直接：
+     * 只要库里没译文就是待翻段）。
+     */
+    @Test
+    fun `翻页后自动接着翻新的一屏`() = runTest {
+        val t = FakeTranslator()
+        val translated = mutableSetOf<Int>()
+        var page = listOf(0, 1)
+        val q = queue(backgroundScope, t, translated, page = { page }, chapterSize = 20, batchSize = 2)
+
+        q.start(book(), NovelTranslateMode.AUTO, currentChapter = { 0 }) { _, r -> translated += r.translations.keys }
+        advanceTimeBy(5_000)
+        assertEquals(listOf(listOf(0, 1)), t.batches)
+
+        page = listOf(2, 3)
+        advanceTimeBy(5_000)
+        page = listOf(0, 1)      // 翻回来：这两段已经有译文了，不该重复发
+        advanceTimeBy(5_000)
+
+        assertEquals(
+            "划过一屏翻回来：已译的段不重发、新屏照翻",
+            listOf(listOf(0, 1), listOf(2, 3)),
+            t.batches,
+        )
+        q.stop()
+    }
+
+    /**
+     * **等页面稳定期间要有明确的阶段**（用户口径 2026-10-04：「我没看到任何等待页面稳定…的相关提示信息」）。
+     *
+     * 这一拍**还没发请求**，所以：阶段 = `WAITING_STABLE`、**高亮段为空**（不画黄底）；
+     * 稳定期满、真的为这一屏发出请求时才转 `TRANSLATING`。
+     */
+    @Test
+    fun `等页面稳定期间是 WAITING_STABLE 且没有高亮`() = runTest {
+        // 批要"跑"一会儿：否则它瞬间收尾，又会立刻排下一拍等待（阶段在两种态间来回跳，测不出东西）
+        val t = FakeTranslator().apply { holdMs = 3_000 }
+        val q = queue(
+            backgroundScope, t, mutableSetOf(), page = { listOf(0, 1) },
+            chapterSize = 4, batchSize = 2, debounce = 500,
+        )
+
+        q.start(book(), NovelTranslateMode.AUTO, currentChapter = { 0 }) { _, _ -> }
+
+        advanceTimeBy(100)   // 还在"等页面稳定"窗口里
+        assertEquals(NovelQueuePhase.WAITING_STABLE, q.state.value.phase)
+        assertTrue("等待期间还没发请求 → 不该有黄底段", q.state.value.batchParaIndexes.isEmpty())
+
+        advanceTimeBy(500)   // t=600：稳定期满 → 认领这一屏
+        assertEquals(NovelQueuePhase.TRANSLATING, q.state.value.phase)
+        assertEquals(listOf(listOf(0, 1)), t.batches)
+        assertEquals("认领后才有黄底（这几段真在飞）", listOf(0, 1), q.state.value.batchParaIndexes)
         q.stop()
     }
 

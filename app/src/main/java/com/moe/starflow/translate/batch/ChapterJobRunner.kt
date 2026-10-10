@@ -66,6 +66,13 @@ data class ChapterJob(
     val chapterIndex: Int,
     val total: Int,
     val done: Int,
+    /**
+     * 已处理完里**成功**的页数/批数（`done - ok` = 失败数）。
+     *
+     * 用户口径 2026-10-03：「面板上的 `x/y 批` 分不出『在跑』还是『全失败』」→ 拆成
+     * 成功 / 失败 / 共 三段显示（小说面板在用；漫画侧只多了一个字段，行为不变）。
+     */
+    val ok: Int = 0,
     val state: ChapterJobState,
     /** 章标题（通知栏/面板显示用，由宿主传入；空串则调用方自己兜底）。 */
     val label: String = "",
@@ -758,6 +765,7 @@ class ChapterJobRunner<T>(
                 chapterIndex = it.chapterIndex,
                 total = it.total,
                 done = it.done,
+                ok = it.ok,
                 state = it.state,
                 label = it.label,
                 startPage = it.startPage,

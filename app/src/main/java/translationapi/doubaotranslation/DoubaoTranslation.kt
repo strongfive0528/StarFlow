@@ -1,5 +1,7 @@
 package translationapi.doubaotranslation
 
+import translationapi.InFlightRequests
+
 import android.util.Log
 import com.moe.starflow.me.apiconfig.OpenAIProviderConfig
 import com.moe.starflow.translate.CustomLocale
@@ -39,7 +41,7 @@ class DoubaoTranslation(
     }
 
     private val coroutineScope = CoroutineScope(Dispatchers.IO + SupervisorJob())
-    private var currentJob: Job? = null
+    private val inFlight = InFlightRequests()
     private val JSON = "application/json; charset=utf-8".toMediaType()
 
     private val client = OkHttpClient.Builder()
@@ -54,8 +56,7 @@ class DoubaoTranslation(
         targetLanguage: String,
         callback: (TranslationResult) -> Unit
     ) {
-        currentJob?.cancel()
-        currentJob = coroutineScope.launch {
+        inFlight.track(coroutineScope) {
             try {
                 val result = translate(text, sourceLanguage, targetLanguage)
                 withContext(Dispatchers.Main) {
@@ -154,8 +155,7 @@ class DoubaoTranslation(
     }
 
     override fun cancelTranslation() {
-        currentJob?.cancel()
-        currentJob = null
+        inFlight.cancelAll()
     }
 
     override fun release() {

@@ -166,7 +166,9 @@ FloatingBallService 和 MangaFloatingService 在 MediaProjection 模式下自动
 |---|---|
 | `ChapterJobRunner.kt` | **纯协程调度器**（不依赖 Android，可纯 JVM 单测）：`ocr(page)` 阶段串行、`translate(page, prep)` 阶段并发 N、按章 `pause/resume/cancel`、`jobs`/`waitingPages` flow。调用方给「页号或批号」当唯一标识即可 |
 | `TranslationJobs.kt` | `ChapterJobState` / `ActiveChapterJob`（通知栏用快照）/ `ChapterJobSource`（谁的快照）/ `TranslationJobRegistry`（**通知栏与前台服务的唯一数据源**） |
-| `TranslationJobService.kt` | 前台服务（`dataSync`）：**每章一条通知**（进度 / 暂停 / 继续 / 取消，点通知回到对应阅读器）。⚠️ **任务状态不在服务里**，它只镜像 `TranslationJobRegistry.activeJobs`；registry 空了就 `stopSelf` |
+| `TranslationJobService.kt` | 前台服务（`dataSync`）：**每章一条通知**（进度 / 暂停 / 继续 / 取消，点通知回到对应阅读器）。⚠️ **任务状态不在服务里**，它只镜像 `TranslationJobRegistry.activeJobs`；registry 空了就 `stopSelf`。`notify()` 里记了「章通知 id/章/状态/进度」的日志 —— 排查"没看到通知"时一眼分清"没发出去"还是"发了被折叠" |
+| `TranslationNotifyChannel.kt` | **通知通道的唯一创建入口**（`translation_progress` + **`IMPORTANCE_DEFAULT`**）：旧通道 `chapter_translation` 建成 `LOW`，而通道重要度**创建后 App 改不了** → MIUI 上不亮状态栏图标、容易被折叠，用户报的「整章翻译看不到通知」就是它；换 id 时顺手 `deleteNotificationChannel(旧 id)`。⚠️ **两条通知路径都必须调 `ensure`**：Android 8+ 往**不存在**的通道发通知是**静默丢弃**，而阅读器队列那条不算前台服务 —— 只用自动/增量、从没点过「翻译本章」的用户，通道根本没人建 |
+| `ReaderTranslationNotify.kt` | **阅读器前台队列**（手动一批 / 自动 / 增量）的进度通知（固定 id 9997，共用上面的通道）。⚠️ 不进 registry、不要前台服务：那个队列活在阅读器 `lifecycleScope` 里、离开阅读器就停，没有后台保活需求。只在真的在翻时挂着（DRAINED/IDLE 立刻收）。守卫 `ReaderTranslationNotifyTest`（id 不撞 + 通道重要度 + **两条路径都 ensure** + 接线） |
 
 **约定（改之前必读，漫画侧踩过的坑都在这）**
 - **预取深度 = 「1 项在准备 + N 项在翻译」**：`preparedChannel` 容量必须是 **0（会合点）**。
@@ -242,7 +244,7 @@ FloatingBallService 和 MangaFloatingService 在 MediaProjection 模式下自动
   ⚠️ **漫画侧的生效范围是「整章任务 + 增量模式」**（用户口径 2026-09-28）：整章走本 runner，
   增量走 `ReaderTranslationController.runWindow`（OCR 逐页串行 + `Semaphore(N)` 限并发翻译请求）；
   手动/自动同时只有 1 页，无所谓。
-- **单批超长预警**（小说）：`NovelBatchWarning`（档位 2048/4096/8192/16384/32768，默认 4096）+
+- **单批超长预警**（小说）：`NovelBatchWarning`（档位 2048/4096/8192/16384/32768，默认 **2048**）+
   `utils/TokenEstimator`；判据收敛在 `NovelChapterTranslator.translateBatch` 一处，
   后台任务没有 UI 可弹窗时**放行不拦**。
 - **回归守卫**：`ChapterJobRunnerTest`（OCR 串行 / 翻译并发 / OCR 与请求重叠 / 等待项 /

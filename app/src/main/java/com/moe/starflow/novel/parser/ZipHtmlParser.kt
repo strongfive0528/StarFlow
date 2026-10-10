@@ -49,13 +49,29 @@ object ZipHtmlParser : NovelParser {
         )
     }
 
-    override suspend fun loadChapter(file: File, locator: String): String = withContext(Dispatchers.IO) {
-        val raw = ZipFile(file).use { zip ->
-            val entry = zip.getEntry(locator) ?: return@withContext ""
-            NovelReadLimits.readZipEntry(zip, entry)
+    override suspend fun loadChapter(file: File, locator: String): String =
+        loadChapterSource(file, locator).text
+
+    /**
+     * 正文 + 章内插图。
+     *
+     * `.txt` 条目是纯文本，不能再走 HTML 提取（会把正文里的 `<` 之类当标签吃掉）——
+     * 也因此**它没有图片**，直接返回纯文本。
+     */
+    override suspend fun loadChapterSource(file: File, locator: String): ChapterSource =
+        withContext(Dispatchers.IO) {
+            ZipFile(file).use { zip ->
+                val entry = zip.getEntry(locator) ?: return@withContext ChapterSource.EMPTY
+                val budget = NovelReadLimits.ZipBudget()
+                val text = TextEncoding.decode(budget.readEntry(zip, entry))
+                if (locator.endsWith(".txt", ignoreCase = true)) {
+                    ChapterSource(text)
+                } else {
+                    val ex = HtmlTextExtractor.extractWithImages(text)
+                    // ⚠️ 基准目录带结尾 `/`（见 [ZipImages.baseDirOf]）
+                    val base = ZipImages.baseDirOf(locator)
+                    ChapterSource(ex.text, ZipImages.read(zip, base, ex.imageSources, budget))
+                }
+            }
         }
-        val text = TextEncoding.decode(raw)
-        // .txt 条目是纯文本，不能再走 HTML 提取（会把正文里的 `<` 之类当标签吃掉）
-        if (locator.endsWith(".txt", ignoreCase = true)) text else HtmlTextExtractor.extract(text)
-    }
 }

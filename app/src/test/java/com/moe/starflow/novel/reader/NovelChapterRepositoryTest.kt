@@ -87,6 +87,49 @@ class NovelChapterRepositoryTest {
         assertEquals(expected, repo.charCountOf(book, 0))
     }
 
+    /**
+     * **分母要不要算上插图**：只有「同时翻译图片」开着（`includeImages = true`）时才算。
+     *
+     * 不算的话会出现「已翻 6/5」——库里图片那段算了成功数、分母里却没有它；
+     * 无脑算上的话，关着开关的机器永远差着那几张图（用户以为漏翻了）。
+     */
+    @Test
+    fun `分母按开关决定是否算上插图段`() = runBlocking {
+        val text = "第一章 起\n\n这是第一段正文八个字\n\n📷 [图片]\n\n第二段正文也八个字\n\n📷 [图片]"
+        val repo = NovelChapterRepository()
+        val book = bookOf(text)
+        val paras = repo.paragraphsOf(book, 0)
+        val images = paras.count { it.type == com.moe.starflow.novel.translate.NovelParagraphType.IMAGE }
+        assertEquals("样本里要有两张图", 2, images)
+
+        val withoutImages = repo.paragraphCountOf(book, 0)
+        val withImages = repo.paragraphCountOf(book, 0, includeImages = true)
+        assertEquals("默认口径不含插图（老行为）", withoutImages, withImages - images)
+        assertEquals(paras.count { it.isTranslatable() }, withoutImages)
+    }
+
+    /**
+     * **进度条绿块的判据也要跟着开关走**：`translatableIndexes` 不含插图时，
+     * 含插图的页会在图还没翻的时候就变绿（用户以为这页翻完了）。
+     */
+    @Test
+    fun `插图算不算可翻译段由开关决定`() = runBlocking {
+        val text = "第一章 起\n\n这是第一段正文八个字\n\n📷 [图片]"
+        val repo = NovelChapterRepository()
+        val book = bookOf(text)
+        val imagePara = repo.paragraphsOf(book, 0)
+            .first { it.type == com.moe.starflow.novel.translate.NovelParagraphType.IMAGE }
+
+        val off = repo.load(book, 0, emptyMap(), NovelDisplayMode.TRANSLATED, style, 1080, 1920)
+        assertTrue("默认（开关关）插图不进可翻译集", imagePara.index !in off.translatableIndexes)
+
+        val on = repo.load(
+            book, 0, emptyMap(), NovelDisplayMode.TRANSLATED, style, 1080, 1920,
+            includeImages = true,
+        )
+        assertTrue("开关开着时插图要进可翻译集（进度条才不会提前变绿）", imagePara.index in on.translatableIndexes)
+    }
+
     @Test
     fun `文件丢失时不崩溃返回空内容`() = runBlocking {
         val repo = NovelChapterRepository()

@@ -8,7 +8,9 @@ import android.content.SharedPreferences
  *
  * 用户口径：
  * - **漫画**批量翻译：受**本地 OCR 速度**制约，2-5 个并发就够，默认 3
- * - **文本**翻译：可以激进些，1-10，默认 5；**越高越快烧 API 额度**（设置页要写明）
+ * - **文本**翻译：可以激进些，1-10，**默认 3**（原 5，2026-10-03 用户要求下调）；
+ *   ⚠️ 老用户「还停在旧默认 5」的会由 `NovelPanelStyle.migrateConcurrency` 一起挪到 3，
+ *   自己拖过滑块的不动
  * - **本地翻译引擎**（LlamaCpp / NLLB）**强制 1**：本地推理是 CPU 单例，并发只会互相拖慢
  *   （LlamaCpp 那边还有一把 native `g_mutex`，并发请求等于排队 + 白占内存）
  *
@@ -23,11 +25,11 @@ object TranslationConcurrency {
     const val MANGA_MAX = 5
     const val MANGA_DEFAULT = 3
 
-    /** 文本翻译的并发数（设置项：同时 API 请求数 1-10）。 */
+    /** 文本翻译的并发数（设置项：同时 API 请求数 1-10，**默认 3**——用户口径 2026-10-03）。 */
     const val KEY_NOVEL = "novel_concurrent_requests"
     const val NOVEL_MIN = 1
     const val NOVEL_MAX = 10
-    const val NOVEL_DEFAULT = 5
+    const val NOVEL_DEFAULT = 3
 
     fun mangaConcurrency(context: Context, prefs: SharedPreferences): Int =
         resolve(context, prefs, KEY_MANGA, MANGA_MIN, MANGA_MAX, MANGA_DEFAULT)

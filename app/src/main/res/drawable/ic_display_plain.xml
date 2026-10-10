@@ -1,0 +1,20 @@
+<!--
+  插图三态的第三个态：**纯原图**（不画任何覆盖块）。
+  与 `ic_display_{translated,original,bilingual}` 同一套"自绘细线"语言，但刻意**不是文字块**
+  ——那一枚代表的是"文字"，这一枚是"画面"：细边框 + 一道地平线 + 山形。
+  三个插图态并排显示时，用户一眼能分出"看译文 / 看识别出的原文 / 看原图"。
+-->
+<vector xmlns:android="http://schemas.android.com/apk/res/android"
+    android:width="24dp"
+    android:height="24dp"
+    android:viewportWidth="24"
+    android:viewportHeight="24">
+    <!-- 画框（四条细边） -->
+    <path
+        android:fillColor="#FF000000"
+        android:pathData="M4,4.5h16v2.1H4zM4,17.4h16v2.1H4zM4,4.5h2.1v15H4zM17.9,4.5H20v15h-2.1z" />
+    <!-- 地平线 + 山形 -->
+    <path
+        android:fillColor="#FF000000"
+        android:pathData="M6,17h12v-1.6l-2.6,-3.4 -1.8,2.1 -2.4,-3.4z" />
+</vector>

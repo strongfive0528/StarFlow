@@ -62,9 +62,318 @@ Robolectric 的文本引擎是**桩**：`Paint.breakText` 不按宽度换行、�
 新版本的行 `insertIgnore` **静默写不进去**（"补齐分母"与"标记翻译中"全废，且不报错，看不出错）。
 
 - 现存的清理路径：`NovelChapterTranslator.resetStale`（阅读器进入时跑）→ `dao.deleteOtherVersions`
-- **当前值已经是 2**（上面那次「一行一段」时 +1 的），所以改切分规则照旧 +1 即可 ——
-  别看到版本号已是 2 就以为"动完了不能再动"，也别把上面那句清理路径删了
+- **当前值已经是 3**（2 → 3 是「图片标记前后各留一个空行」那次：`<p>文字<img/></p>` 从一段变成
+  两段，含内嵌图片的章段号整体后移）。所以改切分规则照旧 +1 即可 ——
+  别看到版本号已是 3 就以为"动完了不能再动"，也别把上面那句清理路径删了
 - 另一条路是把 `splitVersion` 并进主键（要一次重建表的迁移），没做
+
+### ⚠️ 支持哪些格式 / 每种格式的插图能力（2026-10-04 整理，改动前必读）
+
+`NovelFormat` 只有 **5 种**：`TXT` / `EPUB` / `ZIP_HTML` / `HTML` / `FOLDER`
+（判定在 `NovelFormatDetector.detect`：**先按内容**试 zip 分流，再按扩展名；未知扩展名先嗅探内容，
+见文件顶部那条「先看内容再信扩展名」）。
+
+| 格式 | 导入入口 | 章节 | **插图** |
+|---|---|---|---|
+| `TXT` | 文件 | 按章节标记切；无标记 = 整本一章 | —（纯文本，没有图片的概念） |
+| `EPUB` | 文件 | spine 序（不是文件名字典序） | ✅ 包内图（整包复制进来） |
+| `ZIP_HTML` | 文件（.zip） | 包内 html/htm/xhtml/txt 条目，自然序 | ✅ 包内图（`ZipImages.read`） |
+| `HTML` | 文件（.html） | 整篇 = 一章 | ⚠️ **导不进来**：单文件授权只有那一个文件，兄弟图片拿不到 → 回落占位文本 |
+| `FOLDER` | 文件夹 | 直接子文件：txt / **html** / epub（epub 展开成卷） | ✅ 夹内 html 引用的图（导入时**递归**拷进来）；epub 卷的图 ✅；txt 无图 |
+
+- ⚠️ **小说侧不许复用漫画的导入文案**：`NovelShelfFragment.showImportDialog` 曾用
+  `import_manga_option_files`（＝「导入文件（zip/cbz/cbr/7z）」）—— **cbr/cbz/7z 是漫画的格式**
+  （走 libarchive 解压那套），小说一条都不认。用户 2026-10-04 直接指出了这条。
+  小说的按钮/描述有自己的 key：`import_novel_option_files` / `import_desc_files_novel` /
+  `import_desc_dir_novel`。漫画那边是 `import_manga_option_files` / `import_desc_files_manga`。
+- ⚠️ **单 HTML 的图片是 SAF 的硬限制**（不是漏做）：`ACTION_OPEN_DOCUMENT` 的单文件授权
+  只覆盖那一个文件，同目录的兄弟图片读不了（构造兄弟 URI 也会 `SecurityException`）。
+  所以 `import_desc_files_novel` 的文案里**明说**了「有插图请改用导入文件夹」。
+  要真做成，只能再加一次 `ACTION_OPEN_DOCUMENT_TREE`（让用户把父目录授权一遍）——没做。
+- ⚠️ **夹内 html 的图片靠"导入时递归拷"**（`NovelImporter.collectImageDocs`）：html 里的
+  `images/a.jpg` 是**相对路径**，而 `resolveLocal` 的基准目录是书目录 —— 不把图拷进书目录，
+  解析出来永远是 null。两条配套约束：
+  1. **只有夹里有 html 才拷图片**（txt/epub 不需要外部图；纯 txt 夹不该被塞进一堆图）；
+  2. 相对路径由 **documentId** 折出来（`DocumentsContract.getDocumentId` 去掉树根前缀），
+     不是靠 `DocumentFile.name` 拼 —— 后者只有文件名，`images/` 那层就丢了。
+- ⚠️ **拷图片必须过两道守卫**（与 `safeSegment` / `resolveInside` 同一套威胁模型）：
+  `sanitizeRelPath`（拒 `..`、冒号/盘符、控制字符、超长、层级过深）+ `resolveInsideTree`
+  （规范路径必须**严格**落在书目录内）。放行一条 `../../x.jpg` 就能覆盖别的书/封面/日志。
+  张数/字节上限：`MAX_DIR_IMAGES = 2000` / `MAX_DIR_IMAGE_BYTES = 400MB`（命中只停拷 + 留日志）。
+- 单张图拷失败**不让整次导入失败**（少一张插图 ≠ 整本书读不了），但必须 `LogCollector.w` 留痕。
+- 守卫：`NovelImporterDirectoryRulesTest`（扩展名分类 + 路径消毒 8 例）、
+  `NovelImageExtractionTest`（含「文件夹里的 html 章节能读出插图」/「子目录里的 html 不成章」/
+  「夹内 html 缺图返回 null」）、`FolderNovelParserTest`（12 例，既有约定一条没破）。
+
+### ⚠️ EPUB/HTML 的内嵌插图（2026-10-04 加，改动前必读）
+
+小说阅读器**会显示 epub/zip 里的插图**（封面页、插图页）。整条链路是"标记 ←→ 字节 ←→ 文件"
+三段，每一段的一一对应都是硬约束：
+
+| 段 | 位置 | 约定 |
+|---|---|---|
+| 抽地址 | `HtmlTextExtractor.extractWithImages` | 图片标记 `📷 [图片]` **前后各留一个空行**（单独成段）；地址表（`src` / `xlink:href` / `href`）**按文档顺序**，标签没写地址的也占一个空位 |
+| 读字节 | `NovelParser.loadChapterSource` + `ZipImages` | 一次开包读完整章；相对地址按**条目所在目录**解析（基准目录**必须带结尾 `/`**，`ZipImages.baseDirOf`）；`../`、百分号转义、`data:`、SVG 包装往里找一层 |
+| 落盘+量尺寸 | `NovelChapterRepository.imagesOf` | 按**内容哈希**写进 `novel_import/<书 id>/images/`（删书一起清）；`inJustDecodeBounds` 量原始像素尺寸 |
+| 分页+绘制 | `NovelPaginator` / `NovelPageView` / `NovelScrollAdapter` | 尺寸口径**只有一份**：`NovelImageMetrics`（等比、放大封顶 3×、分页时限一页高）；插图段没有 `StaticLayout`，高度伪装成"整段一行" |
+
+- ⚠️ **图片段数是配对规则的锚**：`第 i 个 IMAGE 段` 配 `第 i 张图`。所以 `head` / `script` 里的
+  图片**必须**在抽地址前就被剥掉（`stripClosedBlock` 先跑），标签没地址的也必须占位 ——
+  少一项就是"第 3 章配了第 4 章的脸"，**看不出错**
+- ⚠️ **放大到列宽、封顶 3×**（2026-10-04 从"只缩不放"改成这样）：电子书里 1×1 的占位/间距小图
+  非常多，无上限放大就是**一整屏色块**；而完全不放又让真插图贴着原始像素显示（用户报的
+  「图片感觉都太小了」）。详见下面「插图**翻译**」一节的尺寸条与 `NovelImageMetrics.MAX_UPSCALE`。
+- ⚠️ 读不到的图写 `null` → 该段**回落成占位文本**：少一张图不能把正文也丢了
+- ⚠️ **单 HTML 的图导不进来**（SAF 单文件授权拿不到兄弟文件，见上面那张表 + 那条硬约束）；
+  夹内散章（txt）本来就没有图；**夹内 html 的图能显示**（2026-10-04 起，导入时递归拷贝）。
+  `HtmlParser.loadChapterSource` 那条路径一直按规矩解析 —— 图片一旦在书目录里（夹内 html、
+  或用户手工放进书目录），它立刻就能用
+- 守卫：`NovelImageExtractionTest`（抽地址 / 配对 / epub 相对路径 / 百分号转义 / SVG 包装 /
+  `data:` / 路径穿越 / 夹内 html 取图）、`NovelImageMetricsTest`（尺寸口径）、
+  `NovelImagePaginationTest`（占位高度与换页）
+
+### ⚠️ 插图**翻译**（2026-10-04 加，改动前必读）
+
+用户口径：「长按图片翻译图片内容（OCR + 翻译 + overlay 渲染回去，图片右下角支持三态切换、
+重新翻译、删除等功能，**相关逻辑和漫画翻译那边一样**）」+「翻译面板多一个开关『同时翻译图片』」
++「**一张图片算一个文本段落**，队列里有多张图片时依次 OCR 翻译每张」。
+
+链路（每一段都能单独替换，别把它们揉在一起）：
+
+| 段 | 位置 | 说明 |
+|---|---|---|
+| OCR | `NovelImagePipeline.ocrWithLock` | 复用**漫画同一条链路**：`OcrLock`（`beginOcrDemand` + 带 5s 心跳的等锁）→ `TranslationEngineInit.ensureReady`（引擎组来自全局设置，默认 PP-OCRv6 免下载）→ `DetectionBridge.runOCR` → `ocrToBubbleRegions`。⚠️ **翻译前一定放锁**（那是 OCR/超分引擎锁，不是翻译锁） |
+| 翻译 | `TranslateUtils.translateBubbles` | 漫画那套编号批量 + prefill + 空译文回退原文 + 取消看门狗；本地引擎（NLLB/LlamaCpp）外面套 `LocalTranslationCoordinator.mutex`（判据 `isLocalHeavyEngine()`） |
+| 载荷 | `NovelImageTranslation` + `NovelImagePayloadCodec` | 一个块 = 矩形 + OCR 原文 + 译文 + 竖排 + 字号；存 `novel_paragraph_translation.imagePayload`（JSON）。**同一行的 `translatedText` 存拼接译文**（导出/进度/「已翻」判据直接复用），所以图片段在库里就是一条普通成功行 |
+| 渲染 | `NovelImageOverlay` | 三态 = 译文（`useOriginalText=false`）/ 识别原文（`true`）/ 纯图（**不调** `renderOverlay`）；按 `(图片路径, 态, 载荷 hashCode, 目标宽, 渲染倍率)` 缓存；`renderScale` 按"这张图最终画多大"给（**不再是 1f**，见下面「⑤ 覆盖层按最终画多大光栅化」）。"原文"是**把 OCR 原文画回原位**，不是裸原图 |
+| 交互 | `NovelImageControls` + `NovelPageView`/`NovelScrollAdapter` | **长按只进"编辑模式"**（按钮亮出来，**不自动开翻**）→ 点右下角「翻译」按钮才 OCR+翻译；按钮**画在图上**（贴图片绘制矩形右下角内侧），**画与命中同源**（`controlsOf()` 一份几何） |
+
+**硬约束与踩过的坑**：
+
+- ⚠️ **插图不拆批**（`NovelBatchPlanner.planBatches` 就是普通 `chunked(每批段数)`）：一批里
+  可以混着文本与插图，批内插图由 `NovelChapterTranslator` **串行** OCR（见下面那条）。
+  真正的约束是"插图**绝不能**被送进文本引擎的请求里"——那由翻译器自己分流保证，
+  **不是**靠成批规则拆批（老实现拆批，代价是用户报的「每批段数遇到图片就中断」）。
+  ⚠️ 但**批 ≠ 一个请求**：批内怎么拆请求见下面「批内拆请求」那一条。
+- ⚠️ **含插图的批之间串行**（`NovelTranslationQueue.imageBusy`，判据是"批内含图"而不是"首段是图"）：
+  OCR 是单例引擎，两批含图的批同时起飞只会在锁上干等、还白占一个并发槽位。
+- ⚠️ **`imagePayload` 必须在清译文时一起清**（`resetToIdleRows` 的 `imagePayload = NULL`）：
+  它是"这张图已经翻过"的**另一份凭据**，留着的话用户点了「删除译文」屏幕上什么都没变。
+- ⚠️ **DB v21 → v22**（`MIGRATION_21_22` 加列：可空、无 DEFAULT）。守卫
+  `NovelParagraphTranslationDaoTest` —— 那条"迁移建出的表与 Entity 逐列一致"的老守卫会**当场拦下**
+  忘记加迁移的情况（真值在 `TranslationHistoryDatabase` 的 `@Database(version=)`）。
+- ⚠️ **分母**：开关开着时 `NovelChapterRepository.paragraphCountOf(includeImages = true)` 才算上图片段，
+  否则会出现「已翻 6/5」（库里图片行算了成功数、分母里没有它们）。
+- ⚠️ **单段 ensure 不能记"分母已补齐"**（`markEnsured = false`，长按单张图那条路）：只拿到一段就宣布
+  补齐，后面整章翻译再也不补分母 → 章行显示「已翻 1/1」却还有几十段没翻。
+- **三态与聚焦是会话级内存态**（不落库，与漫画"翻页重置为译文"同一取舍）：落库会让下次打开仍停在
+  上次随手切的"原图"上，用户以为译文丢了。
+- ⚠️ **长按只进「编辑模式」，不自动开翻**（用户口径 2026-10-04 明确纠正：「长按出现翻译按钮，
+  点击翻译才会 OCR 翻译」）：长按只把按钮亮出来 + 一句提示 `novel_image_edit_hint`，
+  **点那颗「翻译」按钮**才真的 OCR+翻译。之前那版长按即开跑，用户还没看清按钮，几秒的 OCR 与一次
+  翻译请求就已经发出去了。
+- ⚠️ **按钮个数跟着"有没有译文"变**（`NovelImageControls.buttonsFor`）：
+  没译文 → **只有一颗「翻译」**；有译文 → `[重翻][三态][删除]`。
+  **翻译与重翻合成一颗按钮**（图标随状态换：翻译用 `ic_reader_translate`、重翻用 `ic_refresh`）——
+  拆成两颗会让第一次进编辑模式的人点到一颗"点了什么都不会发生"的按钮。
+  删除永远在最右（离前两颗远一点，少误触）。
+- ⚠️ **退出编辑模式的入口有三个**（都要真的把按钮收掉，不然会在图上留一排幽灵按钮）：
+  点图上**别的位置**（点这张图本身留在编辑模式，方便用户补点按钮）、**翻页**（`turnPage`）、
+  换章（`loadChapter` 里清 `focusedImagePara`）。⚠️ 点空白那一支会**吃掉这一下点击**，
+  否则退出编辑模式的顺手一点就变成翻页了。
+- ⚠️ **选中效果 = 外扩 3dp 的选中框**（`NovelImageControls.selectionRect` + 填充/描边两个函数）：
+  填充画在图片**下面**（图片不透明，只留边缘一圈底色），描边画在图片**之后**
+  —— ⚠️ 两者都在 `drawImageSegment` 的 `clipRect` 内外分开画：描边在图片矩形外侧，
+  画进裁剪里会被切掉上/下两条边。**任何尺寸的图都看得见"已选中"**（描边不随图变小而消失）。
+  用**蓝色**（与文本段选中同一色相），不用翻译的琥珀 —— 琥珀的语义是"这批正在飞"。
+- ⚠️ **图太小就把按钮摆到图外，绝不缩按钮**（用户口径：「要考虑到多种图片尺寸，翻译按钮可能因为
+  图片尺寸太小没法放在图片上面」）。`NovelImageControls.layout` 三步走：
+  ① 图内右下角（`stripW + 2*inset ≤ 图宽` 且 `按钮高 + 2*inset ≤ 图高`）→
+  ② **图片正下方**、与图右边缘对齐 → ③ 下方没空间就放**图片正上方**；
+  最后统一夹进**正文框**（`boundsLeft/Top/Right/Bottom`）。只有正文框比按钮条还窄（极端分屏）
+  才整体等比缩小。⚠️ 滚动模式条目高度就是图高，所以它的 `boundsBottom` 用 `height`（含段间距）。
+- ⚠️ **退出编辑模式不许打断在途翻译**（用户口径：「翻译过程中也可以快速返回退出图片编辑模式，
+  翻译**不会**因为退出编辑模式而暂停，退出阅读器会自动暂停」）：点别处 / 翻页只清 `focusedImagePara`，
+  **不** `imageJob?.cancel()`（翻译继续跑，顶部浮层继续显示「正在翻译图片…」，完成后照样落库上屏）；
+  `onStop`（离开阅读器 / 切后台）才取消。守卫：`NovelImageEditWiringTest`（源码级：
+  长按不许开翻 / 按钮路由 / 清聚焦不取消 / onStop 取消 / 没聚焦不画不命中）。
+- ⚠️ **`NovelImageControls` 的几何不许建在 `RectF` 上**：几何是"纯算术、普通 JVM 单测"的
+  （`Paint` 都是 `by lazy`），而 `RectF` 在普通 JVM 单测里是**空实现**（构造完四个字段全是 0，
+  守卫 `选中框外扩 3dp` 就是这么红过的）→ 用自己的 `Box` 数据类，只在画的时候 `toRectF()`。
+- ⚠️⚠️ **含插图的批，外面绝不能再持 `OcrLock`**（2026-10-04 真机事故：「翻译过程中只要遇到
+  图片就会卡住，等了很长时间显示 `IllegalStateException: OCR 引擎被占用（别的翻译/超分正在跑），
+  稍后再试`，而我**没有任何别的占用**」）。根因是 `OcrLock` **不可重入**：队列在 `serial`
+  （本地引擎，或 AUTO 被夹成 1 后再看引擎）时整批持锁，而插图流水线要**自己**拿这把锁做 OCR ——
+  自己等自己 60s。现在 `NovelTranslationQueue.runInFlight` / `runBatch` 遇到**批内含图就跳过外锁**
+  （批级串行改由 `imageBusy` 保证），并把等锁上限从 60s 收到 20s。
+  守卫：`NovelTranslationQueueTest`（插图与文本同批 / 三张连续插图同一批 / 含图批之间串行）。
+- ⚠️ **插图也要有"状态框"**：分页与滚动两处绘制都按「选中(蓝) > 失败(红) > 正在翻译(琥珀) > 刚翻完(绿)」
+  给插图描边（`NovelImageControls.drawFrame`）—— 只高亮文本段的话，一整批都是图时屏幕上毫无反馈。
+  ⚠️ **描边色必须用 `NovelTextRenderer.BORDER_*`（不透明），不能用底色那几个 `COLOR_*`**：
+  底色是 18~24% alpha 的，当 3dp 描边画在图上几乎看不见（图不透明、没有"底色"可铺，
+  框是它唯一的状态载体）—— 那是"改了但没生效"。
+- ⚠️ **插图允许放大，但封顶 3×**（用户口径：「显示的图片感觉都太小了」）：`NovelImageMetrics`
+  的 `MAX_UPSCALE = 3f`，同时仍受"列宽"与"一页高"两道限制。⚠️ 不能无上限：电子书里 1×1
+  的占位/间距小图会被撑成一整屏色块（老实现因此写成"只缩不放"，代价是真插图贴着原始像素显示）。
+- ⚠️ **绝不裁图**：绘制端按「本段记的高度」与「一页正文高度」取**较小值**再 `fit` 一次
+  （`drawImageSegment`）—— 换排版参数/换屏尺寸的瞬间分页与绘制可能不同源，那时按分页记的高度
+  画就会顶出这条带子（用户口径：「绝不允许图片内容被切割遮挡」）。
+- ⚠️ **返回键先退编辑模式**（用户口径：「选中文本可以通过返回退出编辑，为什么选中图片返回直接就
+  退出阅读器？」）：`OnBackPressedCallback` 里 `selecting` 与 `focusedImagePara != null` 同一套处理，
+  都只退出编辑态、不 finish、**也不打断在途翻译**。
+- ⚠️ **含图批串行有两条路**（缺一条就出现"因为排队而失败"）：
+  前台队列 `NovelTranslationQueue.imageBusy`（判据=批内含图）；**整章任务**走
+  `NovelChapterJobHost.imageGate`（一把 Mutex，只圈含图批，不影响纯文本批的并发）。
+  两处都必须 try/finally 成对放 —— 取消/异常路径漏放就是"插图永远排队"。
+- ⚠️ **插图进度要进通知栏**（阅读器关掉时也看得到）：`ActiveChapterJob.stageText`（默认 null，
+  漫画侧零影响）+ `TranslationJobService` 文案优先级 **暂停 > stageText > 仅OCR > 进度**；
+  ⚠️ 暂停必须优先，否则"暂停在插图 OCR 中间"仍显示「正在识别插图 2/3…」（骗人）；
+  宿主按章存 `imageStage`（多章并行不串），并在 `forgetChapter`（收尾/取消）里清 —— 不清的话
+  下一轮任务会把上一轮的"第 2/3 张"重新发到通知栏。
+- ⚠️ **强制退出要清两样**（`pauseToManual`）：插图进度文案 + 库里残留的「翻译中」
+  （`NovelChapterTranslator.resetTranslating`）—— 在途批被 cancel 时写 SUCCESS/FAILED 的代码不会执行，
+  不复位的话面板会把那几张图永远显示成"翻译中"。
+- ⚠️ **同一张图不许被两路同时翻**：`imageInFlightElsewhere()`（整章在飞 ∪ 队列在飞 ∪ 手动那张）
+  → 翻译/重翻/删除都先拦一下并提示 `novel_image_already_translating`。
+  删除尤其要拦：删了之后那一批落库会把它**写回来**（用户看到"删了又出现"）。
+  手动翻的那张图同时要进队列的 `excludedParas`（库里还是 IDLE，不去重就是同一张图 OCR 两遍）。
+- ⚠️ **浮层的"已翻/未翻"判据含插图载荷**（`isUnitTranslated`）：`translations` 装的是
+  "这一段显示什么文字"，图片行虽然也有 `translatedText`，但**载荷才是插图真的翻过的凭据**
+  （载荷丢了/被清时两者会不一致）。
+- 守卫：`NovelImageConcurrencyGuardTest`（含图批不持外锁 / 两条串行路 / 强制退出清进度与复位 /
+  通知栏优先插图进度 / 同一张图不被两路翻）。
+- **长按单张图不受开关限制**（那是用户对这张图的显式指令）；开关只管自动/增量/整章/手动一批
+  要不要把插图也带上。
+- 图片视图的载荷走 **`setImageState(visuals, focused, translations)` 单独灌**，不读适配器手里那份
+  `ChapterContent`：`submit` 会把阅读位置一起掀掉，不值得为一张图重提整章内容。
+- ⚠️ **覆盖层坐标的基准是「原图像素」**（两处缩放必须成对，别再各写一套）：
+  OCR 跑在**采样后**的位图上（`NovelImagePipeline.OCR_MAX_SIDE = 1600`），渲染又按**显示宽度**
+  再采样解码一次 —— 所以 `toBlocks(bubbles, scaleToOriginal)` 要把矩形/字号乘回原图坐标系，
+  而 `NovelImageOverlay.bubblesOf(..., scale = 底图宽/原图宽, boundsW, boundsH)` 再缩回底图坐标系
+  **并夹进底图内**（越界矩形会让排版内核算出荒唐白块而抛异常 → 被 catch 吞掉 → 表现成"这张图永远
+  不显示覆盖层"）。守卫：`NovelPageViewImageTest.载荷坐标按底图倍率缩放且夹在底图内`。
+- ⚠️ **首次渲染在主线程**（`onDraw` → `NovelImageOverlay.of`，解码 + `renderOverlay`）：
+  一页一张全宽插图约几十到一百多毫秒，靠 48MB 的 LRU 保证**每张图每个态只付一次**。
+  真要消掉这一下，得在 `loadChapter` 的 IO 阶段按 `NovelImageMetrics.fit` 的宽度预渲染进缓存
+  （注意缓存键含宽度，预渲染必须用**同一个宽度**）—— 目前没做，先记为已知取舍。
+- 守卫：`NovelImagePayloadCodecTest`（编解码/坏数据不抛）、`NovelImageControlsTest`（贴右下角/命中/窄图）、
+  `NovelBatchPlannerTest`（图片独占批 + 顺序不变）、`NovelChapterTranslatorTest`（图片走宿主 + 载荷落库 +
+  失败写原因 + 没宿主时照旧跳过）、`NovelPanelSyncTest`（开关回推）。
+- **未做**：`仅 OCR` 执行模式对插图不生效（插图始终 OCR + 翻译）—— 注意**整个小说阅读器都不看这个开关**
+  （文本那条路也没接 `TranslationExecutionMode`，grep 全包无引用），所以这不是插图独有的缺口；
+  章任务的批行文案对图片单位仍显示「第 x–y 段」（一张图时 x == y）。
+
+### ⚠️ 插图第二版：批内拆请求 / 先完成先显示 / 点图看全图 / 「刚翻完」的高亮（2026-10-04）
+
+用户口径（四条一起提的）：
+
+> 「当前多张图片的结果**一起出现**，应该是**先 ocr 完成返回的就先显示结果**，而不是非要等到整个批次
+> 都完成再一起显示；……图片虽然属于某个批次的一个段落，但是他应该是**单独发送一个 api 请求**，
+> 不要和前面的文本或者其他图片识别结果放到一起发送出去；例如一个批次：**文本，图片，文本**，
+> 三个段落全部变黄，但是要**分三次 api 请求**；如果是**文本，文本，图片**的批次，则前两个作为一次请求，
+> 图片识别的结果单独一个 api 请求（注意这里的 api 请求数受到最大同时请求数的影响）；然后长按图片是编辑，
+> **点击图片应该要可以放大查看全图**（复用漫画阅读器那边的逻辑，底部右下角也要有翻译、切换和删除按钮）；
+> 上一次翻译完成的段落（不管是对比还是原文模式），都要**换一个背景色**用来提示刚刚翻译的是哪一段，
+> 4 种翻译模式都要有这个机制。」
+
+**① 批内拆请求（`NovelBatchPlanner.requestRuns`）**
+
+| 批内段型 | 请求数 |
+|---|---|
+| `[文本, 图片, 文本]` | **3**（文本 / 图片 / 文本）—— 顺序**就是文档顺序**，不重排 |
+| `[文本, 文本, 图片]` | **2**（两段文本合并 / 图片） |
+| `[图片, 图片, 图片]` | **3**（一张一次 OCR） |
+| 一批纯文本 | **1**（老行为零回归） |
+
+- ⚠️ **批 ≠ 请求**：批仍是进度 / 黄底 / 配额 / 每批段数的单位，拆的只是"这一批内部发几次"。
+  拆**批**的代价早先踩过（用户报的「每批段数遇到图片就中断」），别用拆批去做这件事。
+- ⚠️ **批内请求是串行的**：插图 OCR 是单例引擎（`OcrLock`），文本与插图也没必要抢带宽。
+  **跨批的并发仍由队列的「最大同时请求数」管** —— 所以同时在飞的请求数**不会**因为拆请求而变多
+  （上界仍是 N；批内 ≤1）。
+- ⚠️ **一批的段一起标「翻译中」**（`prepareChapterForBatch` 喂整批，不再只喂文本）：三张图要同时
+  显示黄色状态。⚠️ 但 `textDeclined`（超长预警里用户选了取消）时**只准备插图、且 `markEnsured=false`**
+  —— 老行为是"取消 = 这一批一个字都不写库"，喂整章 `paragraphs` 会顺手把整章分母建出来。
+
+**② 先完成先显示（`NovelChapterTranslator.onUnitSettled`）**
+
+- 每**落库一个请求单位**就回调一次 `(chapterIndex, 段号)`；阅读器（`onUnitSettled`）立刻上屏。
+  四条翻译路都在 `translateBatch` 里汇合 → **一处接线四种模式全生效**（手动 / 自动 / 增量 / 整章）。
+  ⚠️ 整章那条路是**另一个 translator 实例**（在 `NovelChapterJobHost`），所以宿主有一个
+  `@Volatile var onUnitSettled` 由阅读器 `onStart` 挂 / `onStop` 摘（与 `onImageStage` 同一套纪律：
+  宿主是应用级的，挂着就是泄漏）。
+- ⚠️ **上报顺序排过序**（`keys.sorted()`）：`result.translations` 是引擎按**回文顺序**建的
+  （模型会逆序回包），拿它直接上报会让日志/断言随模型脾气变。
+- ⚠️ **插图走轻量上屏**（`applyUnitResult`）：只 `loadImageTranslations` + `refreshImageChrome`
+  + `refreshTranslationChrome`，**不重排**。插图段高度由图片自身尺寸定、与有没有译文无关 ——
+  走 `refreshTranslations → loadChapter` 会白白重排整章（三张图就是三次）还会掀一下阅读位置。
+  **文本段相反**：译文比原文长，必须重排并回到同一锚点（那条路仍走 `refreshTranslations`）。
+
+**③ 点插图 = 全屏查看器（`NovelImageViewer` + `dialog_novel_image.xml`）**
+
+- 手势复用**漫画那套** `com.moe.starflow.ui.viewer.ZoomableImageView`（双指缩放 / 双击缩放 / 拖动平移）；
+  点一下（未放大时）关闭，放大后那一下留给拖动看图（`dispatchTapWhenZoomed = false` 的既有语义）。
+- 右下角三颗基础按钮 = `NovelImageControls.buttonsFor` 同一套（没译文只有「翻译」，有译文才有
+  「切换 / 删除」）；**它们不另写一份逻辑**，全部回调 Activity 里图上那排按钮同一条实现
+  （`translateImageNow` / `cycleImageVisual` / `deleteImageTranslation`）—— 在途去重、落库、上屏、
+  提示都只有一份。⚠️ 显示的是 `NovelImageOverlay` 渲染出来的那一份（按当前三态），
+  不是裸原图 —— 否则"放大看全图"会把译文藏起来。
+- ⚠️ **`handleTap` 的分区判定顺序 = 优先级**（2026-10-04 真机反馈后重排，**别再改回去**）：
+  ① 编辑模式按钮 → ② `chromeHidden` 时**任何点击先唤回 UI** → ③ 菜单按钮那一小块 →
+  ④ **点插图（整张图）** → ⑤ 九宫格（中格显隐 UI / 上下左右半屏翻页）。
+  - **④ 必须在 ⑤ 之前**：中格是屏幕正中 1/9，会把落在里面的插图**整个吃掉** ——
+    整张图正好在中格时**一个点都点不到**，边缘的图也只能点到露在中格外的上下两条。
+    用户口径 2026-10-04：「**触发范围应该都是整张图片**才对，有的图片打不开，必须在很刁钻的
+    位置才能打开」（滚动模式最明显，因为中格在屏幕正中、图会滚过去）。守卫：
+    `NovelImageEditWiringTest.插图优先于九宫格中格`。
+  - **③ 不是"右上角一大片"**：老实现是 `y < h*0.22f && x > w*0.72f`（按钮的十倍以上），
+    在按钮**下方老远**点一下也弹面板（用户口径：「点击屏幕右上角（菜单按钮的下方很大一片区域）
+    都可以打开底部菜单」）。现在 `inMenuZone` 按 `btn_menu` 的**真实屏幕矩形 + 6dp** 算，
+    chrome 隐藏（按钮 GONE）时直接不认。守卫：`NovelImageEditWiringTest.菜单角贴着菜单按钮算`。
+  - **② 是"点图开查看器"必然带来的口子**：整章都是插图时，用户把 UI 藏起来后就再也调不出
+    面板/返回键了。所以隐藏态下**任何一次点击先唤回 UI**（Koto 式"点一下唤出 UI"），
+    代价是"藏起 UI 后开查看器要多点一次"。守卫：`NovelImageEditWiringTest.UI 隐藏时先唤回 UI`。
+- ⚠️ **漫画阅读器里是同一份老分区**（`MangaReaderActivity.consumeChromeOrMenuTap` 的
+  0.22/0.72 + 中格）：那边没被反馈过、也没有"插图段落"这回事，**本分支没动它**；
+  要统一时两边一起改（改了记得同步两边文档）。
+- 与「同时翻译图片」开关**无关**：那开关管批量翻译要不要带上插图，而"点开看大图、对这张图下指令"
+  是用户的显式动作（与长按同一口径）。
+
+**⑤ 覆盖层按"最终画多大"光栅化（2026-10-04 真机反馈：小图译文糊）**
+
+用户口径：「**渲染回图片的译文非常不清晰，图片尺寸小，但是你的翻译文本没必要也为了贴合原图
+搞得那么模糊**」。根因与漫画那条**逐字同源**（见 `manga/CLAUDE.md`「低分辨率漫画译文模糊」）：
+
+- 插图**允许放大到 3×**（`NovelImageMetrics.MAX_UPSCALE`）：一张 400px 宽的小图会被拉到 ~1000px 显示；
+- 而覆盖层原先恒按底图分辨率光栅化（`renderScale = 1f`）→ **拉上去的字形是插值出来的像素** → 糊。
+
+修法（一个字都不改排版、也不用超分）：`NovelImageOverlay.renderScaleFor(drawnWidth, baseWidth)`
+= `drawnWidth / baseWidth` **夹到 `[1, 2]`**，交给 `OverlayRenderer.renderOverlay(renderScale=…)` ——
+字形的清晰度由**落笔时的 CTM** 决定，在"已被放大的坐标系"里画就天然清晰。
+
+- `drawnWidth <= baseWidth`（底图够大、画的时候是缩小）→ **1f**，老行为零内存增量；
+- 只有"小图被放大显示"才超采样，且封顶 2×（×2 = 4 倍像素，输出还进 48MB 的 LRU）；
+- 调用方传的 `targetWidth` **必须是这张图在屏幕上的实际绘制宽度**：分页/滚动传 `size.width`，
+  查看器传 `fitCenter` 之后的宽度（竖长图在宽屏上占不到整屏宽，按屏幕宽渲染纯属白占内存）；
+- 缓存键补上了 `renderScale`（底图宽取决于采样率，而解码缓存按文件路径存，可能被别的目标宽解过）。
+
+守卫：`NovelImageOverlayTest`（够大不超采样 / 小图按比例 / 封顶 2× / 底图宽为 0 兜底）。
+⚠️ **"文字变清晰"本身只能在真机上看**：Robolectric 的 Canvas 既不兑现 `canvas.scale()` 也不兑现
+`drawBitmap` 的目标矩形（漫画那边实测过），所以单测锁的是**倍率取值**，清晰度由构造保证。
+
+**④ 「刚翻完」的高亮（`NovelTextRenderer.COLOR_LAST_TRANSLATED` = 淡绿底）**
+
+- 与琥珀（**正在飞**）是前后两个时刻：译文到达后琥珀立刻擦掉，那几段就再没有标记，
+  而译文引起的重排会让人一时找不到刚才读到哪 —— 绿底就是补这一拍。
+- ⚠️ **只留最后一次**（`recentPara` 是可替换的集合，不是累积）：语义是"刚刚翻的是哪几段"。
+- ⚠️ **按段号高亮**，所以原文 / 双语 / 译文三种显示模式下都在（用户点名要求），
+  4 种翻译模式共用 `onUnitSettled` 一条接线。
+- ⚠️ **换章才清**：`loadChapter` 入口处判 `index != chapterIndex`（那时 `chapterIndex` 还是旧章）——
+  同一章的译文到达重排也走 `loadChapter`，在那里清就是"刚点亮又被自己抹掉"。
+  用户清除译文 / 删除插图译文那两条路也要把对应段号摘掉。
+- 优先级：**选中(蓝) > 失败(红) > 正在翻译(琥珀) > 刚翻完(绿) > 阅读背景**（"还在飞"必须压过"刚翻完"）。
+- 插图没有"底色"可铺 → 它用**绿框**表达（见上面那条 `BORDER_*` 的说明）。
+- 守卫：`NovelImageEditWiringTest`（点图看全图 / 查看器按钮复用 / onStop 收窗口 / 落库即上报接线 /
+  插图轻量上屏 / 两种阅读模式都收到高亮 + 换章才清）。
 
 ### ⚠️ 当前状态（2026-09-27）
 
@@ -75,12 +384,33 @@ Robolectric 的文本引擎是**桩**：`Paint.breakText` 不按宽度换行、�
 
 **翻译口径（别再改错，有测试钉着）**：
 
-- **批 = 连续 N 段**（默认 3，范围 1–10），**不跨章**
+- **批 = 连续 N 段**（默认 **2**（2026-10-03 用户口径，原 3），范围 1–10），**不跨章**
 - **手动**：当前页第一段没翻的段起，翻**一批**
-- **自动**：盯着**当前页**一批批翻，本页翻完就停（等翻页）
-- **增量**：自动 + 不受当前页限制，从**当前页第一段**往后翻「向后批数 × 每批段数」段（**滑动窗口**，不是一次性额度：窗口翻完停下，用户翻页窗口自己前移、接着翻；章末即停）
-- 面板打开 / 双击翻译按钮 = 暂停并**回退手动**；**退出阅读器只暂停、不改模式**（回来按原模式接着翻）
-- 守卫：`NovelBatchPlannerTest`、`NovelTranslationQueueTest`（三种模式怎么推进）
+- **自动**：盯着**当前页**一批批翻，本页翻完就停（等翻页）。
+  ⚠️ **自动恒为串行**（用户口径 2026-10-03：「自动翻译只会一批一批向后翻译，**前一批没结束不会开下一批**；
+  增量和整章才受最大请求数限制」）→ 调度里 `slots` 在 AUTO 下被夹成 1；`OcrLock` 仍只看**引擎**
+  （`concurrency() == 1`），远端 API 下 AUTO 不抢 OCR 锁
+- **增量**：自动 + 不受当前页限制，从**当前页第一段**往后翻「向后批数 × 每批段数」段（**滑动窗口**，不是一次性额度：窗口翻完停下，用户翻页窗口自己前移、接着翻；章末即停）；**并发 N 只作用于它和整章**
+- **防抖按「屏」+「上一批收尾」两个触发点**（2026-10-04 用户口径修）：
+  用户报的现场是「**黄色翻译中的背景在上一批翻译完后就会立刻跳到当前正在翻的页面**」——
+  旧写法只把防抖挂在"翻屏"上，而翻屏时上一批还在飞：那次 `delay(debounce)` 在"等在飞批"的
+  过程中被**白白消耗**掉，等上一批真收尾时防抖早已过期 → 立刻认领下一批，黄底无缝跳过去。
+  现在待翻的屏变了 **或 有批收尾（在飞清零）** 都会排一次「等待页面稳定」（两个 `AtomicBoolean`：
+  `spanChanged` / `settled`，见 `NovelTranslationQueue` 的 `页面稳定等待` 日志），
+  所以「上一批结束 → 停一拍 → 才轮到下一批」。
+  ⚠️ **黄底只画「当前这一屏真的在飞」的段**（用户口径 2026-10-04：「我一直翻页还是会有黄底」）：
+  翻屏的瞬间把不在本屏的在飞批从高亮里摘掉，一批落定也立刻摘掉 —— 一直翻页时屏幕上不该再出现黄底。
+  ⚠️ 只在**整条流水线空了**才排（`inflight.isEmpty()`）：增量 N>1 时前面的批收尾不打断补位，
+  第一批三个照旧错峰连发。
+- 面板打开 / 双击翻译按钮 = 暂停并**回退手动**；**离开阅读器（返回键/关掉）** 与
+  **切后台（home/息屏）现在是同一套**（用户口径 2026-10-04：「切后台只暂停什么意思？？
+  且后台就直接关闭当前翻译进程，回退到手动模式！（本章翻译除外）」）→ 一律：停队列 + 中止在途
+  请求 + **回退手动** + 提示 `reader_translate_force_stopped_to_manual`；
+  ⚠️ **只有整章任务例外**（应用级宿主，继续跑）。
+  （2026-09 那份"切后台只暂停、回来接着翻"的口径**已被用户明确撤销**，别再改回去。）
+- 守卫：`NovelBatchPlannerTest`、`NovelTranslationQueueTest`（三种模式怎么推进 + 翻页防抖 +
+  **上一批收尾后的防抖** + 清掉译文的段照常翻）、
+  `NovelTranslationConcurrencyTest`（并发错峰 + **自动恒串行**）
 
 ### 批量翻译：章节卡片 + 应用级后台任务 + 并发错峰（2026-10 大改，改动前必读）
 
@@ -113,7 +443,8 @@ Robolectric 的文本引擎是**桩**：`Paint.breakText` 不按宽度换行、�
 - ⚠️ **`waiting` 属性必须自己 `rebuild()`**：面板推送顺序是「先 waiting、后 active」，而 `active` 为空时
   会提前 return —— 少了 rebuild，"刚排上队的批"要等下一次别的字段变化才出现（`NovelPanelSyncTest` 卡这条）
 - ⚠️ **面板里原来的全局 `btn_translate_action` / `btn_translate_clear` 已按用户要求删除**，别再往面板加
-- **翻译参数分两层**：**「启动延迟」单独一行**（常显）；**其余四个收进可折叠组「批次处理」**
+- **翻译参数分两层**：**「等待页面稳定」（原「启动延迟」，2026-10-04 改名）单独一行**（常显）；
+  **其余四个收进可折叠组「批次处理」**
   （`row_batch_group` + `btn_batch_group` + `batch_group_content`）：组内顺序 = **启动增量翻译向后 →
   每批段数 → 单批预警 → 翻译模型最大同时请求数**，**默认折叠**，展开态存 prefs
   （`novel_batch_group_expanded`，`NovelPanelSheet` 里那一份 prefs）。
@@ -133,11 +464,18 @@ Robolectric 的文本引擎是**桩**：`Paint.breakText` 不按宽度换行、�
 - **N = `TranslationConcurrency.novelConcurrency(context, prefs)`**（`novel_concurrent_requests`；
   **本地引擎恒 1**）。⚠️ 滑块必须读写**默认 prefs** —— 阅读器自己那份是 `novel_*`，写错了就是
   "滑块能拖、值也存了，但翻译永远用默认值"的静默失效
-- 调度循环：满员（`inflight.size >= N`）时 60ms 轮询**补位**；**防抖只在流水线空着时等一次**
-  （每批都等防抖会把 N 个在飞又拖回串行）；`N > 1` 且未满员时按 **500ms 错峰**启动下一批
-- `done = 已译 ∪ failedAnchors ∪ userCleared ∪ **在飞批段号**` —— 最后一项是并发的前提：
-  不把在飞的批当"已完成"，同一个锚点会被反复挑中 → 同一瞬间发出 N 个一模一样的请求（白烧额度）
-- ⚠️ **两份账本 `failedAnchors` / `userClearedParaIndexes` 用并发集合**（N>1 时有多个工人读写），
+- ⚠️ **默认值 = 3**（原 5，用户口径 2026-10-03）：老用户里「还停在旧默认 5」的由
+  `NovelPanelStyle.migrateConcurrency` 一次性挪到 3，**自己拖过滑块的不动**（与 `migrateLineSpacing` 同一套）
+- 调度循环：满员（`inflight.size >= N`）时 60ms 轮询**补位**；
+  ⚠️ **AUTO 下 `slots` 被夹成 1**（自动恒串行，见上「翻译口径」），N 只作用于增量；
+  `N > 1` 且未满员时按 **500ms 错峰**启动下一批
+- **等页面稳定**：见上「翻译口径」那条（翻屏 **或** 上一批收尾都排一次；
+  `AtomicBoolean spanChanged` / `settled`，日志 `页面稳定等待 Nms`）
+- `done = 已译 ∪ failedAnchors ∪ **在飞批段号**` —— 最后一项是并发的前提：
+  不把在飞的批当"已完成"，同一个锚点会被反复挑中 → 同一瞬间发出 N 个一模一样的请求（白烧额度）。
+  ⚠️ **没有 `userCleared` 这一项了**（2026-10-04 撤）：清译文 = 一次显式编辑，宿主当场停队列 +
+  回退手动，之后那几段就是普通"没译文的段"（见「清除选中段的译文」那条）
+- ⚠️ **账本 `failedAnchors` 用并发集合**（N>1 时有多个工人读写），
   且**在飞账本的一切读写都要持锁**：曾出现"调度侧无锁 `sorted()` 迭代 + 工人侧加锁 `removeAll`"
   → `ConcurrentModificationException` 抛在 `launch` 里（scope 无异常处理器 = 崩进程）
 - **`OcrLock` 只在 N==1（本地引擎）时整批持有**；N>1（远端 API）**不持锁** —— 那把锁是**OCR 引擎锁**，
@@ -152,18 +490,57 @@ Robolectric 的文本引擎是**桩**：`Paint.breakText` 不按宽度换行、�
   —— 与漫画「打开面板/退出阅读器」的强制退出同一套，2026-09-28 核对过）。
   「等待」= `runner.waitingPages` + `queuedPages`（章任务）为唯一数据源，不要拿"提交数 − 完成数"推
 
-**单批超长预警**：`NovelBatchWarning`（档位 `2048/4096/8192/16384/32768`，默认 **4096**；
-`utils/TokenEstimator` 粗估 token）+ `NovelBatchWarnGate` / `NovelOversizeConfirmer`
-（**同一轮只打扰一次**：用户对一批说了"取消"之后，同一轮里后续超长批静默跳过）。
+**单批超长预警**：`NovelBatchWarning`（档位 `512/1024/2048/4096/8192/16384`，默认 **2048**
+（2026-10-03 用户口径，原 4096；老用户里"还停在旧默认 4096"的由 `NovelPanelStyle.migrateBatchDefaults`
+一次性挪到 2048，"每批段数 3 → 2"同一个迁移）；`utils/TokenEstimator` 粗估 token）+
+`NovelBatchWarnGate` / `NovelOversizeConfirmer`（**同一轮只打扰一次**）。
+⚠️ **档位区间是围绕默认值铺开的**（用户口径 2026-10-04：「滑动范围要根据当前默认值调整到合理的
+范围」）：默认 2048 落在第 3 格，往下还能拖到 512/1024 —— 原档位从 2048 起、默认值顶在最左端，
+滑块只能往右拖，"想更早被提醒"这条需求在界面上**根本走不通**。
 判据收敛在 **`NovelChapterTranslator.translateBatch` 一处**（翻译本章 / 多选 / 自动 / 增量全汇到这里，
 不会漏路径）；⚠️ **后台任务（阅读器已关）没有 UI 可弹窗时必须放行**，否则任务会静默停在一半。
 
-**暂停提示**：退出阅读器 / 打开面板 = **强制退出在途翻译 + 回退手动** → 文案
-`reader_translate_force_stopped_to_manual`（「翻译进程已强制退出，回退到手动模式」）；**章节任务取消**
-（本来就手动）→ 只报 `reader_translate_force_stopped`（用户口径 2026-09-28）。提示在
-**`onStop` 判 `isFinishing`** 时发（`onDestroy` 里弹的 Toast 常被系统吞掉，这正是用户报"没有提示"的根因），
-`onDestroy` 只兜底 + 防重复（与漫画同一套）。
+⚠️ **弹窗的两个出口**（用户口径 2026-10-03）：
+- **忽略并继续**（肯定）→ 照翻
+- **取消本次翻译**（否定）→ **关闭当前翻译进程 + 回退手动**（不再是"只跳过这一批"）：
+  前台队列走 `NovelReaderActivity.cancelCurrentTranslation()`（停队列 + 中止在途请求 + 模式回手动 +
+  取消当前章的整章任务）；整章任务那条路在 `NovelChapterJobHost.translateUnit` 里收尾
+  （`result.isEmpty && oversize.hasDeclined()` → `cancel(章)`），否则那一章会被一批批静默跳过
+- 60s 不点 = 当作"继续"（提示 `novel_translate_oversize_timeout`），不能让后台任务无限挂着
+
+**暂停提示（2026-10-04 更新：退出 与 切后台 同一套）**：**离开阅读器（返回键/关掉）**、
+**切后台（home/息屏）**、**打开面板** 都是**强制退出在途翻译（含中止 HTTP）+ 回退手动** →
+文案 `reader_translate_force_stopped_to_manual`（「翻译进程已强制退出，回退到手动模式」）；
+**章节任务取消**（本来就手动）→ 只报 `reader_translate_force_stopped`（用户口径 2026-09-28）。
+提示在 **`onStop`** 里发（`onDestroy` 里弹的 Toast 常被系统吞掉），`onDestroy` 只兜底 + 防重复
+（兜底那条也把模式回退手动）。
+⚠️ **提示必须走 [showSticky] 语义**（`showPausedNotice` 里那条注释）：提示发完紧接着就是 `onDestroy` 的
+`TranslationStatusOverlay.dismiss()`，普通 `show()` 会被**当场抹掉**（只剩几十毫秒的一闪）——
+用户报的「退出阅读器**没看到**回退提示」有一半来自这里。
 ⚠️ `pauseToManual` **不再动章节任务**（那是后台任务，暂停前台队列不该打断它）。
+⚠️ `novel_translate_paused_background`（"已暂停，回来继续"）**已废弃**：切后台不再只暂停。
+
+**两条"提示"通道别搞混（用户 2026-10-04 明确纠正过）**：
+| 用户说的 | 实际指 | 实现 |
+|---|---|---|
+| 「**app 的通知系统**」 | 应用内的**状态浮层**（`TranslationStatusOverlay` 的芯片） | **等页面稳定那一拍 → 「等待页面稳定…」**（队列阶段 `WAITING_STABLE`，此刻还没发请求、也没有黄底）；自动/增量翻译中 → `showImmediate`「正在翻译 · 第 X/Y 页」；**整章 → `showRunning`「整章翻译中 · 第 N 章 x/y 批」**（`NovelReaderActivity.refreshChapterJobChips`，与别的提示并存、可按句柄移除） |
+| 「通知」（系统通知栏） | Android 通知（**要下拉状态栏**才看得到） | 整章 = `TranslationJobService` 每章一条（id 10000+）；阅读器队列 = `ReaderTranslationNotify`（id 9997）。通道 `translation_progress`（DEFAULT 重要度） |
+
+**通知栏（用户口径 2026-10-03：翻译过程的提示**必须进通知系统**，不只是面板徽章）**：
+- **整章任务**：`TranslationJobService` 每章一条（注册表驱动），通道走
+  **`TranslationNotifyChannel.ensure`**（唯一入口，`translation_progress` + **`IMPORTANCE_DEFAULT`**）
+  ⚠️ 旧的 `chapter_translation` 建成 `IMPORTANCE_LOW`，而通道重要度**创建后 App 改不了** →
+  MIUI 上不亮状态栏图标、还容易被折叠成"不重要通知"，用户报的「整章翻译没看到通知」就是它。
+  换 id + 顺手删旧通道，守卫 `translate/batch/ReaderTranslationNotifyTest`
+- **阅读器前台队列（手动一批 / 自动 / 增量）**：`translate/batch/ReaderTranslationNotify`
+  （固定 id 9997，避开汇总 9998 与每章 10000+），由 `NovelReaderActivity.observeQueue` 逐次状态镜像
+  ⚠️ **它也必须先 `TranslationNotifyChannel.ensure`**：Android 8+ 往**不存在**的通道发通知是
+  **静默丢弃**，而这条通知不经过前台服务 —— 只用自动/增量、从没点过「翻译本章」的用户，
+  通道根本没人建（这是"看不到通知"的第三种漏法）
+  ⚠️ **只在 `TRANSLATING` / `WAITING_LOCK` 时挂着**，DRAINED/IDLE、面板打开、`onStop`/`onDestroy`
+  立刻收掉 —— 一条写着"正在翻译"却什么都没在跑的通知比没有通知更糟
+  ⚠️ 它**不进** `TranslationJobRegistry`、也**不需要前台服务**：队列活在阅读器的 `lifecycleScope` 里，
+  离开阅读器就停（用户明确要求），没有"后台保活"的需求
 
 **守卫**：`NovelTranslationConcurrencyTest`（错峰铺开 / 满员不发 / 结束补位 / N=1 全程单飞 /
 并发下失败批不重挑）、`NovelBatchWarningTest`、`NovelChapterTranslatorTest`（预警三条路径）、
@@ -204,11 +581,13 @@ Robolectric 的文本引擎是**桩**：`Paint.breakText` 不按宽度换行、�
   回收站图标（判据收在 `NovelTranslateChrome.showClear(translatedSelected) = translatedSelected > 0`）→
   弹窗报「将清除选中的 N 段译文」（N = 选中**且已翻**的段数）→ 确定后删库 + 重载本章，
   那几段立刻回原文显示，三态/翻译按钮按新状态重算
-  ⚠️ 清过的段要进 `NovelTranslationQueue.userClearedParaIndexes`，而 **`start()` 绝不能清这份账**：
-  自动/增量盯着「当前页有没有没翻的段」，不记账就是清完**立刻又翻回来**（用户看到的"清了个寂寞"）。
-  它与 `failedAnchors` 的唯一区别就是清除时机（`start()` 清后者，只有用户明确要求重来
-  —— 即「翻译本章」`translateWholeChapter` —— 才两份都清）→ **别把两个集合合并成一个**。
-  显式操作（点翻译 / 翻译本章 / 选段重翻）不受这份账影响。守卫：`NovelTranslationQueueTest`
+  ⚠️ **"用户清过的段别再自动翻"的那份账已经取消**（2026-10-04 用户口径：「清译文后重翻只有
+  手动生效，自动和增量即使当前页面刚才删除了译文，开启也没有任何翻译，不会翻译。你要考虑到
+  自动/增量/本章翻译模式下编辑删除的情况」）→ 现在：**清译文 = 一次显式编辑**，
+  `clearSelectedTranslations` 里当场 `pauseToManual()`（停前台队列 + 回退手动）——
+  ① 刚清完**不会**立刻又翻回来（不会"清了个寂寞"）；② 用户之后**再开启**自动/增量时，
+  那几段就是普通"没译文的段"，照常被翻。别再往队列里加"跳过账"。
+  守卫：`NovelTranslationQueueTest` 的「清掉译文的段重新开启自动照常翻」
 - **阅读位置是 `NovelAnchor(段号, 段内比例)`，不是段号**（`NovelAnchors`）：
   一段能跨好几页（只按空行分段，整章一段的样本就是），只按段号恢复会落到**段首那一页/段顶** ——
   译文到达必须重排，重排一次就把读者从段中间拽回段首（用户报的「翻译之后位置跳变」）。
@@ -247,6 +626,11 @@ Robolectric 的文本引擎是**桩**：`Paint.breakText` 不按宽度换行、�
 - **增量 = 跟着当前页走的窗口**（不是一次性额度）：窗口 = 当前页第一段往后
   「向后批数 × 每批段数」段；用完停下，用户**翻页窗口自己前移**接着翻（`aheadLimitPara`）。
   面板增量行显示换算后的段数（"3 批 = 15 段"），改批数或每批段数都要重算（走 `refreshDerivedUi`）
+  ⚠️ 窗口**起点**取「当前视野**全部**段」（`currentPageSpanIndexes`，含不可翻译的图片/短行），
+  **不是**锚点用的那份可翻译段：本页一个可翻译段都没有时，用可翻译段定位会退化成「章首」→
+  `remaining` 算成 0、只弹「已向后翻完 0 批 · 翻页继续」却一批都不翻（用户报的「当前页段数不足 →
+  增量/自动始终 0 批」）。`NovelBatchPlanner.anchorForMode` 在**本页无可翻译段**时改用窗口起点
+  继续向后（**自动模式不变**：本页翻完就停，等翻页）
 - 状态芯片显示**翻到哪一页/哪一段**，不显示第几章（增量会一直往后翻，章号看不出进度）；
   且 DRAINED 不再喊「已翻译」—— 走到 DRAINED 有四种原因（翻完本页/翻完窗口/本章真翻完/一批失败被跳过）
 - **滚动模式进度条按「像素比例」算，不按段序号**（`NovelScrollProgress`）：
@@ -260,10 +644,16 @@ Robolectric 的文本引擎是**桩**：`Paint.breakText` 不按宽度换行、�
 - **双语模式段间距 ×1.8**（`BILINGUAL_PARA_SPACING_FACTOR`，在 `NovelPanelStyle.textStyle` 里乘）：
   一段双语 = 原文行 + 译文行，行间只是一个普通行距；段间距不拉开就分不清"这行译文属于哪段原文"。
   ⚠️ 只作用于排版（分页与绘制共用同一份 style），**不改用户设置里那个 dp 数字**
-- **「正在翻译 / 刚翻完」的段有琥珀高亮**（`NovelTextRenderer.COLOR_ACTIVE_BATCH`，与选中的蓝区分开）：
-  译文到达必须重排、位置总有轻微偏移，高亮让用户偏移后还能找到刚翻的地方。一批翻完**不清**，
-  只在换章 / 清空本章译文 / 换阅读模式时清。高亮底两种模式都**铺满整行 + 8dp 圆角**
+- **琥珀高亮 = 「真的在飞的那几批」**（`NovelTextRenderer.COLOR_ACTIVE_BATCH`，与选中的蓝区分开）：
+  只在 `TRANSLATING` / `WAITING_LOCK` 期间高亮在飞的段，**出结果（成功/失败）立刻擦**。
+  ⚠️ 早先写的是「认领了就高亮、翻完也不擦」（本意是让你看得见"刚翻的是哪几段"），但一旦某批卡住/失败，
+  那几段就**永远黄着** —— 用户看到的「首批一直黄着却不翻译」正是它（2026-10-03 改）。
+  「哪几段失败了」改由面板失败明细 + 红条报，不靠底色记。高亮底两种模式都**铺满整行 + 8dp 圆角**
   （`HIGHLIGHT_CORNER_DP`）——只铺正文列会像被两侧裁了一刀
+  ⚠️ **「刚翻完」是另一个色（淡绿，`COLOR_LAST_TRANSLATED`）**，2026-10-04 用户要求：
+  琥珀只表达"正在飞"、出结果就擦，于是译文到达引起的重排之后用户找不到刚读的那几段 ——
+  绿底补的就是这一拍（只留**最后一次**落库的那几段，换章才清；见「插图第二版」那节）。
+  四色分工：**选中=蓝 / 正在翻译=琥珀 / 失败=红 / 刚翻完=绿**，插图用同名的不透明 `BORDER_*` 描边
 - **三态图标是自绘的** `ic_display_{translated,original,bilingual}`：
   ⚠️ 不得与翻译按钮的 `ic_reader_translate` **同形**（同一浮层组并排显示，用户会直接说"图标重复"）；
   ⚠️ 不要去描汉字字形（描「文」在 22dp 下看着就是「六」，用户问过"这什么玩意"）。

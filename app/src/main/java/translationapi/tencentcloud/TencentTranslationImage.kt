@@ -17,6 +17,8 @@
 
 package translationapi.tencentcloud
 
+import translationapi.InFlightRequests
+
 import android.graphics.Bitmap
 import android.util.Base64
 import android.util.Log
@@ -46,7 +48,7 @@ class TencentTranslationImage(
     private val secretKey: String
 ) : TranslationPicAPI {
     private val coroutineScope = CoroutineScope(Dispatchers.IO + SupervisorJob())
-    private var currentJob: Job? = null
+    private val inFlight = InFlightRequests()
 
     private val SOCKET_TIMEOUT = 10L
     private val JSON_TYPE = "application/json; charset=utf-8".toMediaType()
@@ -63,9 +65,7 @@ class TencentTranslationImage(
         targetLanguage: String,
         callback: (TranslationResult) -> Unit
     ) {
-        currentJob?.cancel()
-
-        currentJob = coroutineScope.launch {
+        inFlight.track(coroutineScope) {
             try {
                 // 转换图片为Base64
                 val imageBase64 = convertBitmapToBase64(pic)
@@ -172,13 +172,11 @@ class TencentTranslationImage(
     }
 
     override fun cancelTranslation() {
-        currentJob?.cancel()
-        currentJob = null
+        inFlight.cancelAll()
     }
 
     override fun release() {
+        cancelTranslation()
         coroutineScope.cancel()
-        currentJob?.cancel()
-        currentJob = null
     }
 }

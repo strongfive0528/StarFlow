@@ -392,8 +392,34 @@ class NovelParagraphTranslationDaoTest {
     fun `迁移是幂等的 重复执行不报错`() {
         val raw = rawMigratedDb()
         try {
+            // ⚠️ 只有**建表**那一步是幂等的（`CREATE TABLE IF NOT EXISTS`）。
+            // 加列（`ALTER TABLE ADD COLUMN`）**天然不幂等** —— 重复执行会
+            // `duplicate column name`，这是 SQLite 的语义，不要试图包一层"已存在就跳过"
+            // （Room 的迁移只会在版本跃迁时跑一次）。
             TranslationHistoryDatabase.MIGRATION_17_18.migrate(raw)
             assertTrue(columnsOf(raw, TABLE).isNotEmpty())
+        } finally {
+            raw.close()
+        }
+    }
+
+    /**
+     * **图片翻译载荷列**（v21 → v22）：列必须可空、无 DEFAULT
+     * （与 Room 按 Entity 建出来的表逐字一致，否则升级用户一打开库就抛
+     * `Migration didn't properly handle`）。
+     *
+     * 老行（加列之前写的）读出来是 NULL = "那时还没翻过图片"，与空载荷同义。
+     */
+    @Test
+    fun `图片载荷列可空且不带默认值`() {
+        val raw = rawMigratedDb()
+        try {
+            val cols = columnsOf(raw, TABLE).associateBy { it[0] as String }
+            val payload = cols["imagePayload"]
+            assertTrue("必须真的有 imagePayload 列", payload != null)
+            assertEquals("类型必须是 TEXT", "TEXT", payload!![1])
+            assertEquals("必须可空（老行是 NULL）", 0, payload[2])
+            assertNull("不能带 DEFAULT（与 Room 生成的建表语句必须逐字一致）", payload[3])
         } finally {
             raw.close()
         }
@@ -417,6 +443,10 @@ class NovelParagraphTranslationDaoTest {
         val support = h.writableDatabase
         openedHelpers += h
         TranslationHistoryDatabase.MIGRATION_17_18.migrate(support)
+        // ⚠️ 迁移链要**一路加到当前版本**：只跑到建表那一步的话，
+        // 后加的列（v21→v22 的 imagePayload）不在表里，与 Entity 比列时必然不一致 ——
+        // 这正是这条守卫存在的意义（升级用户一打开库就抛 IllegalStateException）
+        TranslationHistoryDatabase.MIGRATION_21_22.migrate(support)
         return support
     }
 

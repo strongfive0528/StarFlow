@@ -38,7 +38,7 @@ data class NovelPanelHostState(
     val background: Int = 0,
     val autoTurn: Boolean = false,
     val intervalSec: Int = 5,
-    val debounceMs: Int = 500,
+    val debounceMs: Int = NovelPanelStyle.DEBOUNCE_DEFAULT,
     val aheadBatches: Int = NovelQuota.DEFAULT,
     val batchSize: Int = NovelPanelStyle.BATCH_DEFAULT,
     val rotateLabel: String = "",
@@ -71,4 +71,7 @@ data class NovelPanelHostState(
 
     /** 单批预警阈值在 [NovelBatchWarning.tiers] 里的**档位下标**。 */
     val batchWarnIndex: Int = NovelBatchWarning.defaultIndex,
+
+    /** 同时翻译图片（epub 插图当"一个段落"一起翻；默认关）。 */
+    val translateImages: Boolean = false,
 )

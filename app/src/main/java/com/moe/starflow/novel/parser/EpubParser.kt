@@ -101,6 +101,26 @@ object EpubParser : NovelParser {
         HtmlTextExtractor.extract(TextEncoding.decode(raw))
     }
 
+    /**
+     * 正文 + 本章引用到的插图（见 [ChapterSource]）。
+     *
+     * ⚠️ **一次开包把图读完**：每张图各自 `ZipFile(file)` 一次的话，一章十几张插图就是十几次
+     * 打开/关闭压缩包（每次都要重建中央目录，几十毫秒起步），翻页时肉眼可见地卡。
+     *
+     * 图片地址的解析与读取都在 [ZipImages]（`../`、百分号转义、SVG 包装往里找一层、单章额度）。
+     */
+    override suspend fun loadChapterSource(file: File, locator: String): ChapterSource =
+        withContext(Dispatchers.IO) {
+            ZipFile(file).use { zip ->
+                val entry = zip.getEntry(locator) ?: return@withContext ChapterSource.EMPTY
+                val budget = NovelReadLimits.ZipBudget()
+                val html = TextEncoding.decode(budget.readEntry(zip, entry))
+                val ex = HtmlTextExtractor.extractWithImages(html)
+                // ⚠️ 相对地址的基准目录**必须带结尾的 `/`**（见 [ZipImages.baseDirOf]）
+                ChapterSource(ex.text, ZipImages.read(zip, ZipImages.baseDirOf(locator), ex.imageSources, budget))
+            }
+        }
+
     // ===== 加密 =====
 
     /**
@@ -447,19 +467,6 @@ object EpubParser : NovelParser {
             setInput(input, null)
         }
 
-    /** 把相对 href 解析成 zip 内全路径，处理 `../`、`./`、绝对路径与 `#` 片段。 */
-    private fun normalize(baseDir: String, href: String): String {
-        val decoded = href.substringBefore('#').trim()
-        if (decoded.isEmpty()) return ""
-        val combined = if (decoded.startsWith('/')) decoded.drop(1) else baseDir + decoded
-        val out = mutableListOf<String>()
-        for (seg in combined.split('/')) {
-            when (seg) {
-                "", "." -> Unit
-                ".." -> if (out.isNotEmpty()) out.removeAt(out.size - 1)
-                else -> out.add(seg)
-            }
-        }
-        return out.joinToString("/")
-    }
+    /** 把相对 href 解析成 zip 内全路径（章节路径用；URI 形式走 [ZipImages.resolveUri]）。 */
+    private fun normalize(baseDir: String, href: String): String = ZipImages.normalize(baseDir, href)
 }

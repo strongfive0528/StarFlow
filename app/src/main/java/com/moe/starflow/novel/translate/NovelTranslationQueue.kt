@@ -20,6 +20,14 @@ enum class NovelQueuePhase {
     IDLE,
     /** 抢翻译锁中（漫画/悬浮窗翻译在跑时会出现）。 */
     WAITING_LOCK,
+    /**
+     * **等页面稳定**（2026-10-04 用户口径）：翻屏之后、或上一批收尾之后的那一拍 —— 页面还没停满
+     * 「等待页面稳定」那么久，**一个请求都还没发**。
+     *
+     * ⚠️ 必须单独成态而不是沿用 `TRANSLATING`：界面要能明确告诉用户"在等你停下来"，
+     * 而且这一态**不画黄底**（黄底 = 真在飞的段，这一态还没有在飞的请求）。
+     */
+    WAITING_STABLE,
     /** 正在翻某一批。 */
     TRANSLATING,
     /** 当前页翻完、配额用尽或章末 —— 停下等用户翻页/切模式。 */
@@ -57,23 +65,36 @@ data class NovelQueueState(
  * ⚠️ 三条纪律别改回去（都是踩过的坑）：
  * 1. **`OcrLock` 必须轮询等**，拿不到就 return 会让本轮什么都不做、下一轮又选到同一批 → 空转
  * 2. **失败的批要记进 [failedAnchors] 跳过**，否则每轮重挑同一批 → 无限重试、额度烧光
- *    （用户"清除译文"另有一份 [userClearedParaIndexes]，两份账的清除时机不同）
  * 3. **面板打开时状态置空**（`NovelQueueState()`），否则用户看到一条永远不动的假进度
  *
- * ### 并发（2026-10 加，用户口径）
+ * ### 并发（2026-10 加，用户口径；2026-10-03 收紧）
  * 「最多 N 个批同时在飞、错峰启动（默认 500ms 一个），第 1 个结束后立刻补第 N+1 个」——
  * N = [concurrency]（远端 API 由设置里的「同时 API 请求数」决定，**本地引擎恒 1**）。
  *
+ * ⚠️ **自动模式恒为 1（串行）**：用户口径 2026-10-03「自动翻译只会一批一批向后翻译，
+ * 前一批没结束不会去开启下一批；**只有增量与整章**才受最大请求数限制」。
+ * 所以 [slots] 在 AUTO 下被夹成 1，N 只作用于 AHEAD（整章走 `ChapterJobRunner`，是另一条路）。
+ * ⚠️ 但**持不持 `OcrLock` 只看引擎**（[serial] = `concurrency() == 1`）：锁的语义是"本地引擎串行"，
+ * 与"自动模式串行"是两件事，别用 `slots == 1` 去推。
+ *
  * ⚠️ 只是把「串行等结果」换成「最多 N 个在飞」，**推进语义一个字都没改**：
- * 锚点/成批仍走 [NovelBatchPlanner]、`done` 仍是 `已译 ∪ failedAnchors ∪ userCleared`、
- * 失败仍记账跳过、增量窗口仍按当前页现算。唯一新增的一件事是：**在飞的批也并进 `done`** ——
- * 不然同一个锚点会被反复挑中（并发下等于同一时间发出 N 个一模一样的请求）。
+ * 锚点/成批仍走 [NovelBatchPlanner]、`done` 仍是 `已译 ∪ failedAnchors ∪ 在飞批段号`、
+ * 失败仍记账跳过、增量窗口仍按当前页现算。
+ *
+ * ### ⚠️ 防抖 = 「翻屏」+「上一批收尾」两个触发点（2026-10-04 用户口径修）
+ * 用户报的现场：「**黄色翻译中的背景在上一批翻译完后就会立刻跳到当前正在翻的页面**」——
+ * 旧写法把防抖只挂在"翻屏"上，而翻屏时上一批还在飞：那次 `delay(debounce)` 在"等在飞批"
+ * 的过程中被白白消耗掉，等上一批真收尾时防抖早已过期 → 立刻认领下一批，黄底无缝跳过去。
+ * 现在两个触发点**都会排一次「等待页面稳定」**（两个 `AtomicBoolean`：`spanChanged` / `settled`
+ * - 待翻的那一屏（`currentPageSpanIndexes`）变了 → 置位（连翻时一轮轮重计）
+ * - **有批收尾（在飞清零）** → 置位
+ * 调度循环见到这一位就先 `delay(debounceMs())` 再认领，所以「上一批结束 → 停一拍 → 才轮到下一批」，
+ * 黄底之间一定看得见间隔；`N > 1`（增量）时后续批只受错峰控制，不被它拖成串行。
  *
  * ### ⚠️ 锁纪律（并发化之后**必须**遵守，踩过就是崩进程）
  * queue 的 scope **未必是单线程派发器**（宿主给的是应用级 `Dispatchers.IO`，而
  * `translateBatch` 内部还会 `withContext(IO)`）→ 工人协程与调度协程真的会同时跑。所以：
- * - `failedAnchors` / `userClearedParaIndexes` / 在飞账本（`inflight` / `inflightParas`）
- *   一律用**并发集合**；
+ * - `failedAnchors` / 在飞账本（`inflight` / `inflightParas`）一律用**并发集合**；
  * - 在飞账本的**读取与迭代**（拼状态里的批次并集、判空、计数）**一律在 [lock] 里拿快照**，
  *   绝不裸迭代 —— 边迭代边被工人 `removeAll` 就是 `ConcurrentModificationException`，
  *   而且抛在 `launch` 里没人接 → 直接崩进程；
@@ -96,6 +117,13 @@ class NovelTranslationQueue(
     private val debounceMs: () -> Int,
     /** 当前页显示的段（按顺序）—— 手动/自动的锚点。 */
     private val currentPageParaIndexes: () -> List<Int>,
+    /**
+     * 当前视野里**全部**段（含不可翻译的图片/短行）—— **只用来给增量窗口定位起点**。
+     * ⚠️ 别拿 [currentPageParaIndexes] 顶替（宿主传进来的那份已滤掉不可翻译段）：本页一个可翻译段
+     * 都没有时窗口会退化成「章首」，窗口左边界与 `remaining` 全算错
+     * （用户报的「始终 0 批」有一半来自这里）。调用方没接就回落到它（等价旧行为）。
+     */
+    private val currentPageSpanIndexes: () -> List<Int> = currentPageParaIndexes,
     /** 整章的段（按顺序）—— 增量在页内翻完后从这里向后找。 */
     private val chapterParaIndexes: suspend (ImportedNovel, Int) -> List<Int>,
     /** 某章已有译文的段。 */
@@ -111,6 +139,14 @@ class NovelTranslationQueue(
      * 并发 == 1 时**完全不用它**（节奏仍由 [debounceMs] 控制，与旧版逐字一致）。
      */
     private val staggerMs: () -> Long = { DEFAULT_STAGGER_MS },
+    /**
+     * **图片段判据**（宿主提供；默认"没有图片段"= 旧行为）。
+     *
+     * 用户口径（2026-10）：「一张图片算一个文本段落……如果队列存在多个图片，依次 OCR 翻译每张图片」。
+     * 所以图片段要：① 进 `chapterParaIndexes` / `currentPageParaIndexes`（否则永远选不到它）；
+     * ② 在调度里**独占一个单位**（[NovelBatchPlanner.splitImageUnits]）—— OCR 一次只能跑一张。
+     */
+    private val isImagePara: (chapterIndex: Int, paraIndex: Int) -> Boolean = { _, _ -> false },
 ) {
 
     private companion object {
@@ -161,32 +197,43 @@ class NovelTranslationQueue(
     private val failedAnchors = java.util.concurrent.ConcurrentHashMap.newKeySet<Int>()
 
     /**
-     * **用户手动清除了译文**的段（见 [skipParagraphs]）。自动/增量本会话别再翻它们，
-     * 否则用户看到的是"清了个寂寞"（自动模式盯着"当前页有没有没翻的段"，清完立刻又翻回来）。
-     *
-     * ⚠️ **[start] 绝不能清这一份**（这是它与 [failedAnchors] 的唯一区别，别合并成一个集合）：
-     * 清除之后阅读器会重载本章 → `restartQueueIfNeeded` → 队列一重启就把账清了 → 刚清掉的段
-     * 又被翻回来。**只有用户显式要求翻的时候才清**（「翻译本章」）。
-     *
-     * ⚠️ 读取点如实记在这里，改判据前先看一遍：
-     * - **自动 / 增量**：每轮都并进 `done`（连同 [failedAnchors]）✓
-     * - **手动「翻一批」**：只在**当前页没有待翻段**时的兜底扫描里读它（页锚点那一步不读）
-     * - **「翻译本章」/ 选段重翻**：完全不读 —— 那是用户明确要求翻
-     *
-     * ⚠️ 同上：并发 > 1 时会被多个协程读写，所以用并发集合。
+     * **当前有图片单位在飞**（见构造参数的 [isImagePara]）：图片单位必须**依次**跑，
+     * 因为它要抢全局 `OcrLock`（单例 OCR 引擎），同时起飞只会互相等锁、白占并发槽位。
      */
-    private val userClearedParaIndexes = java.util.concurrent.ConcurrentHashMap.newKeySet<Int>()
+    private val imageBusy = java.util.concurrent.atomic.AtomicBoolean(false)
 
     /**
-     * 用户清除了这几段的译文 → 本会话别再**自动**翻回来（显式操作仍会翻，见上面那张清单）。
+     * ⚠️ **没有"用户清除了译文 → 自动别再翻回来"这份账了**（2026-10-04 用户口径撤销了它）：
+     * 「清译文后重翻只有手动生效，自动和增量即使当前页面刚才删除了译文，开启也没有任何翻译，
+     * 不会翻译。你要考虑到自动/增量/本章翻译模式下编辑删除的情况」。
+     * 现在的口径是 —— **清译文 = 用户的一次显式编辑**：由宿主当场**停掉前台队列并回退手动**
+     * （见 `NovelReaderActivity.clearSelectedTranslations`），之后用户**再开启**自动/增量时，
+     * 那几段已经是"没有译文"的普通段，照常被翻（不会再被静默跳过）。
+     * 所以这里不需要任何"跳过账"—— 需要的是**别在用户刚清完的瞬间自己又翻一遍**，
+     * 而那由"清完就停队列 + 回退手动"保证。
      */
-    fun skipParagraphs(indexes: Collection<Int>) {
-        userClearedParaIndexes += indexes
-    }
 
-    /** 自动/增量每轮并进 `done` 的"别再挑"账。 */
-    private fun skipSetFor(translated: Set<Int>): Set<Int> =
-        translated + failedAnchors + userClearedParaIndexes
+    /**
+     * **在飞批的段并集**（只读快照，给宿主做"别重复翻同一段"的反向去重）。
+     *
+     * ⚠️ 必须与 job 内部的 `inflightParas` 在**同一个进锁块**里更新，不要另算一套 ——
+     * 章任务排批时读它（[NovelChapterJobHost.queueInFlightParas]），读到的必须是同一份账。
+     */
+    @Volatile
+    private var inflightParasView: Set<Int> = emptySet()
+
+    /** 在飞批的段（空 = 当前没有在飞的批）。 */
+    fun inflightParaIndexes(): Set<Int> = inflightParasView
+
+    /** 自动/增量每轮并进 `done` 的"别再挑"账（只有失败的锚点，避免无限重试同一批）。 */
+    /**
+     * 「这些段别碰」= 已译 ∪ 失败账本。
+     *
+     * ⚠️ 调度侧还要再并上 `excludedParas(章)`（整章任务已占住的段）与在飞段号 ——
+     * 三者缺一都会让同一段被两边各发一次请求（插图尤其贵：一次 OCR + 一次请求）。
+     */
+    private fun skipSetFor(translated: Set<Int>): Set<Int> = translated + failedAnchors
+
 
     /**
      * 启动（或按新参数重启）队列。[NovelTranslateMode.MANUAL] 时只把状态清空 ——
@@ -206,7 +253,6 @@ class NovelTranslationQueue(
         onBatchSettled: suspend (Int, NovelBatchResult) -> Unit,
     ) {
         job?.cancel()
-        // ⚠️ 只清**失败**账：用户"清除译文"的账必须留着（见 userClearedParaIndexes）
         failedAnchors.clear()
         if (mode == NovelTranslateMode.MANUAL) {
             _state.value = NovelQueueState()
@@ -222,6 +268,25 @@ class NovelTranslationQueue(
             // 一边迭代一边被改就是 `ConcurrentModificationException`，抛在 `launch` 里没人接 → **崩进程**。
             val inflight = java.util.concurrent.ConcurrentHashMap<Int, Unit>()
             val inflightParas = java.util.concurrent.ConcurrentHashMap.newKeySet<Int>()
+            // 并发：**AUTO 恒 1**（用户口径 2026-10-03：「自动翻译只会一批一批向后翻译，
+            // 前一批没结束不会去开启下一批」），N 只作用于增量（整章走 ChapterJobRunner 那条路）。
+            // ⚠️ `serial`（持 OcrLock）只看**引擎**并发，与 AUTO 被夹成 1 无关：那把锁是"本地引擎串行"，
+            // 远端 API 下 AUTO 也不该去抢 OCR 锁。
+            val engineSlots = concurrency().coerceAtLeast(1)
+            val serial = engineSlots == 1
+            val slots = if (mode == NovelTranslateMode.AUTO) 1 else engineSlots
+            /** 已经为哪一屏排过防抖（`null` = 还没排过）。只在"这一屏第一次要翻"时排一次。 */
+            var debouncedSpanKey: String? = null
+            /**
+             * **该等一次防抖**（认领下一批之前先停一拍）。两个来源分开记（日志里要看清是哪一个）：
+             * - [spanChanged]、翻屏（`spanKey` 变了）
+             * - [settled]、**有批收尾**（`inflight` 清零，见工人 finally）
+             * ⚠️ 用户报的「上一批翻完黄底立刻跳到当前页」就是原来只有①、而①又被"等在飞批"白白
+             * 消耗掉了。两个都用 `AtomicBoolean`：置位的是**工人协程**、读取/清位的是**调度协程**，
+             * 普通 `var` 的"调度刚清位、工人同时置位"会**丢掉这一拍**（正好就是这条 bug 的形态）。
+             */
+            val spanChanged = java.util.concurrent.atomic.AtomicBoolean(false)
+            val settled = java.util.concurrent.atomic.AtomicBoolean(false)
             while (isActive) {
                 if (panelOpen) {
                     // 面板打开：状态置空 + 不动。用户在看面板时翻下去既浪费额度也可能翻错
@@ -229,16 +294,65 @@ class NovelTranslationQueue(
                     delay(LOCK_POLL_MS)
                     continue
                 }
-                val slots = concurrency().coerceAtLeast(1)
                 val inflightNow = synchronized(lock) { inflight.size }
                 if (inflightNow >= slots) {
                     // 并发占满：等一个批结束（下一轮**立刻**补位，不再等错峰/防抖）
                     delay(SLOT_POLL_MS)
                     continue
                 }
-                // ⚠️ 防抖只在**整条流水线空着**时等一次。原来每批都要等一次防抖，
-                // 并发化之后那样等于把「N 个在飞」又拖回串行（第 2 个批要排在第 1 个的防抖窗口后）
-                if (inflightNow == 0) delay(debounceMs().toLong())
+                // 当前视野里**全部**段（含不可翻译的图片/短行）—— 两个用途：① 增量窗口定位起点；
+                // ② **防抖的「屏」标识**。⚠️ 不能拿 `page`（已滤掉不可翻译段）顶替：本页一个可翻译段
+                // 都没有时窗口会退化成「章首」，窗口左边界与 `remaining` 全算错。
+                val spanPage = currentPageSpanIndexes()
+                val spanKey = if (spanPage.isEmpty()) {
+                    ""
+                } else {
+                    "${spanPage.first()}:${spanPage.last()}:${spanPage.size}"
+                }
+                if (spanKey.isNotEmpty() && spanKey != debouncedSpanKey) {
+                    // 翻页/滚动到新的一屏 → 防抖重新计时（连翻时一轮一轮往后推，只有停下来的那屏才开翻）
+                    debouncedSpanKey = spanKey
+                    spanChanged.set(true)
+                    // ⚠️ **翻屏 = 用户还在找要读的那一页：黄底只留"这一屏上真的在飞"的段**
+                    // （用户口径 2026-10-04：「我一直翻页还是会有黄底！应该是页面稳定停留
+                    // XXXms 才开始翻译出现黄底，增量也是一样的」）。
+                    //
+                    // 现象解释：请求已经发出去了（黄得有理），但发的是**上一屏**的段；用户往前翻时
+                    // 会翻**进**这些段所在的页（增量更是"往后预翻"，本来就在前面几页），于是"一边翻
+                    // 一边满屏黄"。调度这边其实一批都没多发（日志里 `防抖停一拍` 一直在重排）。
+                    // 所以这里把在飞批里**不在当前屏**的那些从高亮里摘掉：翻走了就看不到黄，
+                    // 停下来等过防抖、真的为这一屏发出请求时黄底才会（重新）出现。
+                    if (inflightNow > 0) {
+                        val visible = spanPage.toSet()
+                        val shown = synchronized(lock) { inflightParas.filter { it in visible } }
+                        val cur = _state.value
+                        if ((cur.phase == NovelQueuePhase.TRANSLATING ||
+                                cur.phase == NovelQueuePhase.WAITING_LOCK) &&
+                            cur.batchParaIndexes.toSet() != shown.toSet()
+                        ) {
+                            _state.value = cur.copy(batchParaIndexes = shown)
+                        }
+                    }
+                }
+                // ⚠️ **两个标志分开取**，日志里才分得清"是翻屏还是上批收尾"排的这一拍
+                val bySpan = spanChanged.getAndSet(false)
+                val bySettle = settled.getAndSet(false)
+                if (bySpan || bySettle) {
+                    val ms = debounceMs().toLong()
+                    // ⚠️ **进"等页面稳定"态**：界面靠它显示「等待页面稳定…」（用户口径 2026-10-04：
+                    // 「现在我没看到任何等待页面稳定…的相关提示信息」），并且这一态**不画黄底** ——
+                    // 此刻还没有任何请求发出去。计数/配额沿用当前状态，只把阶段与批次并集换掉。
+                    _state.value = _state.value.copy(
+                        phase = NovelQueuePhase.WAITING_STABLE,
+                        batchParaIndexes = emptyList(),
+                    )
+                    LogCollector.d(
+                        TAG,
+                        "页面稳定等待 ${ms}ms（${if (bySpan) "翻屏，页面刚变" else "上批收尾"}）",
+                    )
+                    delay(ms)
+                    continue
+                }
 
                 val chapter = currentChapter()
                 val chapterParas = chapterParaIndexes(book, chapter)
@@ -254,8 +368,9 @@ class NovelTranslationQueue(
                 // 窗口 = **当前页第一段**往后 X 段（X = 向后批数 × 每批段数）。
                 // ⚠️ 做成"窗口"而不是"一次性配额"：额度用完就永久停住的话，用户翻页也没反应；
                 // 窗口跟着当前页走，**翻页窗口自己就前移、自动接着翻**。
-                val windowStart = chapterParas.indexOf(page.firstOrNull() ?: chapterParas.firstOrNull())
-                    .takeIf { it >= 0 } ?: 0
+                val windowStart = chapterParas.indexOf(
+                    spanPage.firstOrNull() ?: page.firstOrNull() ?: chapterParas.firstOrNull()
+                ).takeIf { it >= 0 } ?: 0
                 val limitIdx = (windowStart + quota.remaining * size).coerceAtMost(chapterParas.size)
                 val aheadLimitPara = chapterParas.getOrNull(limitIdx) ?: Int.MAX_VALUE
                 // 窗口内还剩多少批（面板/芯片上的"剩 N 批"）
@@ -273,10 +388,14 @@ class NovelTranslationQueue(
                     chapterParaIndexes = chapterParas,
                     translated = done,
                     aheadLimitPara = aheadLimitPara,
+                    aheadStartPara = chapterParas.getOrNull(windowStart),
                 )
                 val batch = if (anchor == null) {
                     emptyList()
                 } else {
+                    // ⚠️ **插图不拆批**（用户口径 2026-10-04：「图片算段落的一段！每批 3 段，
+                    // 哪怕三张都是图片，也要先后翻译三张图片」）：按每批段数正常取一批，
+                    // 批内的插图由翻译器串行 OCR（它自己拿 OCR 锁）。
                     NovelBatchPlanner.nextBatch(chapterParas, anchor, done, size)
                 }
                 if (anchor == null || batch.isEmpty()) {
@@ -291,12 +410,27 @@ class NovelTranslationQueue(
                     continue
                 }
 
+                // ⚠️ **含插图的批要串行**：OCR 是单例引擎（`OcrLock` 一把），两批含图的批同时起飞
+                // 只会让后来那批在锁上干等（还占着并发槽位）。用户口径也是"依次 OCR 翻译每张图片" ——
+                // 这里就不认领，等上一批收尾（下一轮立刻补位）。
+                // ⚠️ 判据是 **"这一批里有没有插图"**（不是只看首段）：批按「每批段数」切，
+                // 一批里可以混着文本与插图（用户口径 2026-10-04：「图片算段落的一段」）。
+                val batchHasImage = batch.any {
+                    runCatching { isImagePara(chapter, it) }.getOrDefault(false)
+                }
+                if (batchHasImage && imageBusy.get()) {
+                    delay(SLOT_POLL_MS)
+                    continue
+                }
+
                 // 认领这一批（写账本 + 取状态里要用的批次并集，**同一次进锁**，视图一致）
                 val claimedParas = synchronized(lock) {
                     inflight[anchor] = Unit
                     inflightParas += batch
+                    inflightParasView = inflightParas.toSet()
                     inflightParas.toList().sorted()
                 }
+                if (batchHasImage) imageBusy.set(true)
                 _state.value = NovelQueueState(
                     NovelQueuePhase.TRANSLATING, chapter, claimedParas,
                     synchronized(lock) { batchesDone }, remaining,
@@ -305,7 +439,8 @@ class NovelTranslationQueue(
                 // 并发 == 1（本地引擎）时**整批持 OcrLock** —— 与旧实现逐字一致，
                 // 也保证本地推理/别的翻译任务不会同时进来；并发 > 1（远端 API）不持锁：
                 // OcrLock 是 **OCR 引擎**锁，小说的翻译请求不碰 OCR（漫画 translatePhase 同样不持锁）
-                val serial = slots == 1
+                // ⚠️ 用 [serial]（只看引擎）而不是 `slots == 1`：AUTO 被夹成 1 是**调度**上的串行，
+                // 远端 API 下 AUTO 不该去抢 OCR 锁。
                 launch {
                     try {
                         runInFlight(book, chapter, batch, serial) { result ->
@@ -322,10 +457,28 @@ class NovelTranslationQueue(
                             onBatchSettled(chapter, result)
                         }
                     } finally {
-                        synchronized(lock) {
+                        val idle = synchronized(lock) {
                             inflight.remove(anchor)
                             inflightParas.removeAll(batch)
+                            inflightParasView = inflightParas.toSet()
+                            // ⚠️ **一批一落定就把它从高亮里摘掉**（"出结果立刻擦"，别让它黄到下一批起飞）：
+                            // 状态里的段号换成"还剩下的在飞段"，全空就整块黄底消失。
+                            val remaining = inflightParas.toList().sorted()
+                            val cur = _state.value
+                            if ((cur.phase == NovelQueuePhase.TRANSLATING ||
+                                    cur.phase == NovelQueuePhase.WAITING_LOCK) &&
+                                cur.batchParaIndexes != remaining
+                            ) {
+                                _state.value = cur.copy(batchParaIndexes = remaining)
+                            }
+                            inflight.isEmpty()
                         }
+                        // ⚠️ **有批收尾（在飞清零）→ 排一次防抖**（用户口径 2026-10-04：
+                        // 「黄色翻译中的背景在上一批翻译完后就会立刻跳到当前正在翻的页面」）。
+                        // 认领下一批之前先停一拍，黄底之间才看得见间隔；`N > 1`（增量）时
+                        // 只要还有别的批在飞就不会被它拖住。
+                        if (batchHasImage) imageBusy.set(false)
+                        if (idle) settled.set(true)
                     }
                 }
 
@@ -337,10 +490,19 @@ class NovelTranslationQueue(
     }
 
     /**
-     * 一个在飞批的实际请求：抢锁（仅 [serial]）→ 翻 → 落库（在 [NovelBatchTranslator] 里）。
+     * 一个在飞批的实际请求：抢锁（仅 [serial] 且**批里没有插图**）→ 翻 → 落库。
      *
      * ⚠️ 与 [runBatch] 的区别只有两处：**不写 `_state`**（并发下多个工人会互相覆盖状态，
      * 调度器才是状态的唯一写入者），以及只在 [serial] 时持 `OcrLock`（见调用点的说明）。
+     *
+     * ⚠️⚠️ **批里含插图时绝不能在外面持 `OcrLock`**（2026-10-04 真机事故：
+     * 「翻译过程中只要遇到图片就会卡住，等了很长时间显示：IllegalStateException:
+     * OCR 引擎被占用（别的翻译/超分正在跑），稍后再试」，而用户**没有任何别的占用**）：
+     * 插图翻译要**自己**拿这把锁做 OCR（`NovelImagePipeline.ocrWithLock`），而 `OcrLock` 不是
+     * 可重入的 —— 外面持着、里面再 `acquire()` 只会拿到 0，于是干等 60s 后报一句
+     * "OCR 引擎被占用"，把责任推给根本不存在的"别的任务"。
+     * AUTO 模式 `slots` 被夹成 1、以及本地引擎（`serial=true`）都会走进这条死路。
+     * 现在：含图批**不持外锁**（OCR 锁由插图流水线自己按张持有；批级串行由 `imageBusy` 保证）。
      */
     private suspend fun runInFlight(
         book: ImportedNovel,
@@ -349,9 +511,13 @@ class NovelTranslationQueue(
         serial: Boolean,
         settled: suspend (NovelBatchResult) -> Unit,
     ) {
+        val batchHasImage = batch.any {
+            runCatching { isImagePara(chapterIndex, it) }.getOrDefault(false)
+        }
+        val holdLock = serial && !batchHasImage
         var lockToken = 0L
         try {
-            if (serial) {
+            if (holdLock) {
                 _state.value = NovelQueueState(NovelQueuePhase.WAITING_LOCK, chapterIndex, batch)
                 lockToken = acquireLockWithWait()
                 if (lockToken == 0L) {
@@ -407,8 +573,9 @@ class NovelTranslationQueue(
         val chapterParas = chapterParaIndexes(book, chapterIndex)
         val done = translatedIndexes(book, chapterIndex)
         val anchor = NovelBatchPlanner.anchorOnPage(currentPageParaIndexes(), done)
-            ?: chapterParas.firstOrNull { it !in done && it !in failedAnchors && it !in userClearedParaIndexes }
+            ?: chapterParas.firstOrNull { it !in done && it !in failedAnchors }
             ?: return NovelBatchResult(emptyMap(), "没有待翻译的段落了")
+        // ⚠️ 与队列同一条成批规则：**插图不拆批**（一张图 = 一个段，批内串行 OCR）
         val batch = NovelBatchPlanner.nextBatch(chapterParas, anchor, done, batchSize())
         if (batch.isEmpty()) return NovelBatchResult(emptyMap(), "没有待翻译的段落了")
         return runBatch(book, chapterIndex, batch)
@@ -439,9 +606,10 @@ class NovelTranslationQueue(
      * ⚠️ 这颗按钮长期写着「翻译本章」却只翻**一批**（文案与行为对不上，用户直接问了
      * "不是有翻译本章的功能吗"）—— 现在它是真的翻整章。
      *
-     * ⚠️ 开始前**两份账都清掉**（[failedAnchors] 与 [userClearedParaIndexes]）：那是"别再自动挑"的记账，
-     * 而这里是用户**明确要求重来一次**。不清的话，之前自动模式里失败过的那几段会被静默跳过，
-     * 任务却报「已翻完 N 批」—— 用户以为翻完了，其实那几段永远是原文。
+     * ⚠️ 开始前把 [failedAnchors] 清掉：那是"别再自动挑"的记账，而这里是用户**明确要求重来一次**。
+     * 不清的话，之前自动模式里失败过的那几段会被静默跳过，任务却报「已翻完 N 批」
+     * —— 用户以为翻完了，其实那几段永远是原文。
+     * （"用户清过译文"的账**没有**了，见类注释：清译文 = 一次显式编辑，再开启翻译就该照翻。）
      *
      * @param onBatch 每批落定就回调一次（宿主逐批上屏 + 刷新统计）
      * @return 成功翻完的**批数**；一批都没翻成才 0
@@ -452,12 +620,12 @@ class NovelTranslationQueue(
         onBatch: suspend (NovelBatchResult) -> Unit,
     ): Int {
         failedAnchors.clear()
-        userClearedParaIndexes.clear()
         val chapterParas = chapterParaIndexes(book, chapterIndex)
         var done = 0
         while (currentCoroutineContext().isActive) {
             val translated = skipSetFor(translatedIndexes(book, chapterIndex))
             val anchor = chapterParas.firstOrNull { it !in translated } ?: return done
+            // 同一条成批规则：**插图不拆批**（用户口径「图片算段落的一段」，见 NovelBatchPlanner）
             val batch = NovelBatchPlanner.nextBatch(chapterParas, anchor, translated, batchSize())
             if (batch.isEmpty()) return done
             val result = runBatch(book, chapterIndex, batch)
@@ -472,12 +640,32 @@ class NovelTranslationQueue(
         return done
     }
 
-    /** 一批（已确定段号）的实际请求：抢锁 → 翻 → 落库（在 [NovelBatchTranslator] 里）。 */
+    /**
+     * 一批（已确定段号）的实际请求：抢锁 → 翻 → 落库（在 [NovelBatchTranslator] 里）。
+     *
+     * ⚠️ 与 [runInFlight] 同一个坑：整章/手动那条路也**不能在含图批外面持 `OcrLock`**
+     * （插图流水线要自己拿它做 OCR，`OcrLock` 不可重入 —— 会干等 60s 后报"引擎被占用"）。
+     */
     private suspend fun runBatch(
         book: ImportedNovel,
         chapterIndex: Int,
         batch: List<Int>,
     ): NovelBatchResult {
+        val batchHasImage = batch.any {
+            runCatching { isImagePara(chapterIndex, it) }.getOrDefault(false)
+        }
+        if (batchHasImage) {
+            _state.value = NovelQueueState(NovelQueuePhase.TRANSLATING, chapterIndex, batch)
+            return translator.translateBatch(
+                book = book,
+                chapterIndex = chapterIndex,
+                paragraphs = paragraphsOf(book, chapterIndex),
+                paraIndexes = batch,
+                sourceLang = sourceLang(),
+                targetLang = targetLang(),
+                translatorName = translatorName(),
+            )
+        }
         _state.value = NovelQueueState(NovelQueuePhase.WAITING_LOCK, chapterIndex, batch)
         val lockToken = acquireLockWithWait()
         if (lockToken == 0L) return NovelBatchResult(emptyMap(), "翻译引擎被占用（别的翻译正在跑）")
@@ -544,6 +732,12 @@ class NovelTranslationQueue(
     fun stop() {
         job?.cancel()
         job = null
+        // ⚠️ 光取消协程**不会中止已经发出的 HTTP 请求**：那些请求会继续跑到服务端返回，
+        // 白烧额度、退出也被拖慢。用户口径 2026-10-03「退出阅读器要**立刻终止**自动/增量翻译」
+        // → 连在途请求一起中止。引擎侧语义是「取消该实例上所有在飞请求」，
+        // 这里要的正是全停（不存在误伤同实例其它批的问题：整章任务用的是**另一个**引擎实例）。
+        runCatching { translator.abortAll() }
+        inflightParasView = emptySet()
         _state.value = NovelQueueState()
     }
 
