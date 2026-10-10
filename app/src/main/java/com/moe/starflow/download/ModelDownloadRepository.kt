@@ -64,6 +64,7 @@ class ModelDownloadRepository private constructor(private val context: Context) 
      * 用于替代旧的 Download_NLLB 布尔标记（新下载架构不再写该标记）。
      */
     fun isFullyDownloaded(modelKey: ModelKey): Boolean {
+        if(modelKey in com.moe.starflow.sr.SrModelManager.allKeys)return com.moe.starflow.sr.SrModelManager.isDownloaded(context,modelKey)
         val info = getModelInfo(modelKey) ?: return false
         val baseDir = baseDirFor(modelKey)
         return info.files.all { fileInfo ->
@@ -89,13 +90,15 @@ class ModelDownloadRepository private constructor(private val context: Context) 
      * 用于页面进入时识别「目录里已有文件但状态还是 Idle/Partial」的模型：
      * 例如下载完成后状态未更新、或文件由外部放入。Running/Paused/Done 保持原样不打断。
      */
-    suspend fun refreshFromDisk(modelKey: ModelKey) = updateState(modelKey) {
+    suspend fun refreshFromDisk(modelKey: ModelKey) = withContext(Dispatchers.IO) { updateState(modelKey) {
         val current = stateMap[modelKey]
-        if (current is DownloadState.Running || current is DownloadState.Paused || current is DownloadState.Done) {
+        if (current is DownloadState.Running || current is DownloadState.Paused) {
             current
         } else {
             computeStateFromDisk(modelKey)
         }
+    }
+
     }
 
     /**
@@ -114,7 +117,12 @@ class ModelDownloadRepository private constructor(private val context: Context) 
                 val t = File(baseDir, fileInfo.fileName)
                 t.exists() && t.length() > 0
             }
-            if (allComplete) return DownloadState.Done
+            if (allComplete) {
+                if (modelKey !in com.moe.starflow.sr.SrModelManager.allKeys ||
+                    com.moe.starflow.sr.SrModelManager.validate(context, modelKey) == null) return DownloadState.Done
+                return DownloadState.Partial(0L, files.sumOf { it.fileSize }, 0, files.size,
+                    com.moe.starflow.sr.SrModelManager.validationError(context, modelKey) ?: "Model checksum failed", 0L, 0L)
+            }
 
             // 没有任何文件被下载（无 target 也无 .part）→ Idle
             val anyPartial = files.any { fileInfo ->
@@ -189,7 +197,9 @@ class ModelDownloadRepository private constructor(private val context: Context) 
         )
     }
 
-    suspend fun markDone(modelKey: ModelKey) = updateState(modelKey) { DownloadState.Done }
+    suspend fun markDone(modelKey: ModelKey) = withContext(Dispatchers.IO) {
+        updateState(modelKey) { if(modelKey in com.moe.starflow.sr.SrModelManager.allKeys) computeStateFromDisk(modelKey) else DownloadState.Done }
+    }
 
     private data class FileProgress(
         val downloadedBytes: Long,
@@ -376,7 +386,8 @@ class ModelDownloadRepository private constructor(private val context: Context) 
                 srFp16Arithmetic = modelObj.optBoolean("fp16Arithmetic", true),
                 srBlobIn = modelObj.optString("blobIn", ""),
                 srBlobOut = modelObj.optString("blobOut", ""),
-                srBgr = modelObj.optBoolean("bgr", false)
+                srBgr = modelObj.optBoolean("bgr", false),
+                srSyncGap = modelObj.optInt("syncGap", 3)
             ))
         }
         modelListCached.value = models

@@ -66,9 +66,6 @@ class SrOptionsTest {
         assertEquals("性能档默认 0 = 90%", 0, o.performanceMode)
         assertEquals("精度默认 FP16", SrOptions.PRECISION_FP16, o.precision)
         assertFalse("fp16 算术默认 **关**（他们的 pref_realcugan_fp16_arithmetic 默认 false）", o.fp16Arithmetic)
-        assertEquals("跳过阈值默认 0 = 不跳过", 0, o.skipMaxWidth)
-        assertEquals("跳过阈值默认 0 = 不跳过", 0, o.skipMaxHeight)
-        assertEquals("预加载页数默认 3（他们的 realCuganPreloadSize）", 3, o.preloadPages)
     }
 
     @Test
@@ -84,11 +81,9 @@ class SrOptionsTest {
         val prefs = FakePrefs()
         assertEquals("空 prefs = 全默认", SrOptions(), SrOptions.from(prefs))
 
-        SrOptions.write(prefs, SrOptions(skipMaxWidth = 1600, skipMaxHeight = 2000, tileSize = 256,
+        SrOptions.write(prefs, SrOptions(tileSize = 256,
             performanceMode = 2, precision = 1, fp16Arithmetic = true))
         val read = SrOptions.from(prefs)
-        assertEquals(1600, read.skipMaxWidth)
-        assertEquals(2000, read.skipMaxHeight)
         assertEquals(256, read.tileSize)
         assertEquals(2, read.performanceMode)
         assertEquals(1, read.precision)
@@ -109,7 +104,7 @@ class SrOptionsTest {
         assertNotEquals("精度变了必须重建引擎", base.engineKey(), base.copy(precision = 1).engineKey())
         assertNotEquals("fp16 算术变了必须重建引擎", base.engineKey(), base.copy(fp16Arithmetic = true).engineKey())
         // 与引擎无关的项（跳过阈值 / 性能档）不该让引擎重建 —— 否则每改一次都要重载模型
-        assertEquals("跳过阈值不该影响引擎指纹", base.engineKey(), base.copy(skipMaxWidth = 1600).engineKey())
+        assertEquals("压缩阈值不该影响引擎指纹", base.engineKey(), base.copy(maxInputMegapixels = 0.6f).engineKey())
         assertEquals("性能档不该影响引擎指纹", base.engineKey(), base.copy(performanceMode = 2).engineKey())
     }
 
@@ -122,9 +117,9 @@ class SrOptionsTest {
         assertNotEquals("换降噪档要变", f, base.fingerprint("SR_REALCUGAN_CONSERVATIVE", 2, 3))
         assertNotEquals("换 tile 要变", f, base.copy(tileSize = 64).fingerprint("SR_REALCUGAN_CONSERVATIVE", 2, 0))
         assertNotEquals(
-            "换跳过阈值要变",
+            "换压缩阈值要变",
             f,
-            base.copy(skipMaxWidth = 1600).fingerprint("SR_REALCUGAN_CONSERVATIVE", 2, 0),
+            base.copy(maxInputMegapixels = 0.6f).fingerprint("SR_REALCUGAN_CONSERVATIVE", 2, 0),
         )
         assertEquals("同样的选项必须给同样的指纹（缓存命中靠它）", f, base.fingerprint("SR_REALCUGAN_CONSERVATIVE", 2, 0))
     }

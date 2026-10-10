@@ -67,6 +67,9 @@ public:
      * ⚠️ 只开 `use_fp16_storage` 只省显存；**开了本项才是真的用 FP16 算**（移动 GPU 上明显更快）。
      */
     bool fp16_arithmetic = false;
+    bool storage_fp16 = true;
+    bool effective_fp16 = false;
+    bool effective_arithmetic = false;
     int syncgap;
 
 private:

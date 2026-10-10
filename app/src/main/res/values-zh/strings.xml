@@ -1081,7 +1081,7 @@
     <string name="sr_fail_not_upscaled">只应用了 Anime4K，而它不放大：没有选中超分模型，或模型文件缺失\n请到「超分模型管理 → 超分」下载一个模型，并点一下模型名选中它</string>
     <string name="sr_fail_no_model">还没选超分模型：到「超分模型管理 → 超分」里点一下模型名选中它（只下载、不选中是不会生效的）</string>
     <string name="sr_fail_model_missing">模型文件不存在：%1$s\n可能没下载完、或者文件已被删掉 —— 请回模型管理页重新下载</string>
-    <string name="sr_fail_engine_init">模型加载失败：%1$s\n可以到模型管理页把这个模型重新下载一次</string>
+    <string name="sr_fail_engine_init">超分引擎初始化失败（下方为引擎错误详情）。模型文件校验通过时无需重新下载。</string>
     <string name="sr_fail_source_too_large">本页分辨率太大，超分跳过了：本页 %1$d×%2$d（%3$.1f 百万像素）超过该模型的 %4$.1f 百万像素上限\n请换一个更小的模型，或对分辨率更低的图源使用超分</string>
     <string name="sr_fail_over_skip_limit">本页 %1$d×%2$d 超过你设定的跳过阈值 %3$d×%4$d，已按设置跳过超分（这页跑了也不会有收益）\n要么在超分设置里把阈值调大，要么这本就别开超分</string>
     <string name="sr_fail_anime4k_init">Anime4K 初始化失败（当前设备不支持 GLES3，或着色器编译失败）</string>
@@ -1797,17 +1797,15 @@
     <string name="sr_w2xex_group_desc">Waifu2x-Extension-GUI 作者训练、randomblock1 上传到 HuggingFace 的三个模型：Universal Fast / Omni MiniV2 / Photo Small。</string>
     <string name="sr_generic_group_desc">openmodeldb 上的社区模型：sudo UltraCompact（实时动画修复）、SPAN NomosUni（保景深通用，作者 Helaman）。</string>
     <string name="sr_opt_title">超分参数</string>
-    <string name="sr_opt_hint">引擎参数：分块尺寸（0 = 自动）、性能档（GPU 占用 90%/50%/30%）、精度（FP16/FP32 存储）、FP16 算术（默认关）。输入控制：输入像素压缩阈值（默认 1.5MP；不超过阈值直接送模型，超过则按像素总量等比例缩小；模型硬上限更低时按模型上限缩小）、目标分辨率（超过就跳过）。改完立即生效（会重建引擎）。</string>
+    <string name="sr_opt_hint">分块控制模型单次处理的核心区域；自动档按设备选择。性能档通过块间等待降低连续负载，不代表固定 GPU 占用率。存储精度与 FP16 算术分别控制，实际支持情况见超分记录。输入压缩阈值默认 1.5MP：不超过直接送模型，超过按总像素等比例缩小；不限则不主动缩图。降采样会损失细节，不重新编码 JPEG。新任务使用新参数，已有产物保留。</string>
     <string name="sr_opt_tile">分块尺寸 (px)</string>
-    <string name="sr_opt_perf">性能档（GPU 占用）</string>
-    <string name="sr_opt_precision">计算精度</string>
+    <string name="sr_opt_perf">性能档（块间等待）</string>
+    <string name="sr_opt_precision">存储精度</string>
     <string name="sr_opt_fp16a">FP16 算术（更快，可能有精度损失）</string>
-    <string name="sr_opt_skip">超过 1600×1600 就跳过</string>
-    <string name="sr_opt_preload">预加载页数</string>
     <string name="sr_opt_reset">恢复默认</string>
-    <string name="sr_opt_perf_90">90%（不休眠）</string>
-    <string name="sr_opt_perf_50">50%（块间 5ms）</string>
-    <string name="sr_opt_perf_30">30%（块间 15ms）</string>
+    <string name="sr_opt_perf_90">快速（不等待）</string>
+    <string name="sr_opt_perf_50">均衡（块间 5ms）</string>
+    <string name="sr_opt_perf_30">低负载（块间 15ms）</string>
     <string name="sr_model_realcugan_se">Real-CUGAN SE 2x</string>
     <string name="sr_model_realcugan_pro">Real-CUGAN Pro 2x</string>
     <string name="sr_model_realcugan_nose">Real-CUGAN Nose 2x</string>
@@ -1844,4 +1842,22 @@
     <string name="sr_tag_w2xex_photo">无降噪</string>
     <string name="sr_tag_sudo_uc">无降噪</string>
     <string name="sr_tag_span_nomosuni">无降噪</string>
+    <string name="sr_fail_model_corrupt">模型文件校验失败，请在模型管理页重新下载。</string>
+    <string name="sr_fail_out_of_memory">超分内存分配失败。推理阶段请手动缩小分块；输入或输出分配阶段请降低输入 MP 阈值，具体阶段见详情。</string>
+    <string name="sr_fail_cancelled">超分已取消，已保存的结果保留。</string>
+    <string name="sr_fail_delete">删除超分结果失败，原有结果和记录已保留。</string>
+    <string name="reader_sr_stopping">正在停止</string>
+    <string name="reader_sr_result_missing">结果已移除</string>
+    <string name="reader_sr_elapsed">耗时 %1$s 秒</string>
+    <string name="reader_sr_chapter_choose_title">本章已有超分结果</string>
+    <string name="reader_sr_chapter_choose_msg">本章共 %1$d 页：当前配置 %2$d 页、同模型旧参数 %3$d 页、其他模型 %4$d 页、无可用结果 %5$d 页。\n跳过将保留全部可用结果；全部重新超分将按当前配置处理整章，成功后逐页替换。</string>
+    <string name="reader_sr_chapter_skip_existing">跳过已有结果</string>
+    <string name="reader_sr_chapter_redo_all">全部重新超分</string>
+    <string name="reader_sr_old_config">已有产物使用旧配置</string>
+    <string name="reader_sr_detail_execution">后端：%1$s\n分块：请求 %2$s，实际 %3$s px\n存储精度：请求 %4$s，实际 %5$s\nFP16 算术：请求 %6$s，实际 %7$s\n性能档：%8$s（块间 %9$d ms），线程：%10$s\n输入压缩阈值：%11$s MP，模型输入：%12$s\n总耗时：%13$s 秒；等待 %14$s／初始化 %15$s／预处理 %16$s／推理 %17$s／保存 %18$s 秒</string>
+    <string name="reader_sr_detail_retained">仍有可用超分图：%1$s，%2$d×%3$d</string>
+    <string name="reader_sr_setting_on">开启</string>
+    <string name="reader_sr_setting_off">关闭</string>
+    <string name="reader_sr_delete">删除超分结果</string>
+    <string name="reader_sr_detail_conversion">解码 %1$ss · RGB 打包 %2$ss · RGB 回填 %3$ss\n设备：%4$s · 分块等待累计：%5$dms\n原图 %6$sMP · 输入 %7$sMP · 输出 %8$sMP</string>
 </resources>

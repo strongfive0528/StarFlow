@@ -40,6 +40,9 @@ enum class SrFailReason(@StringRes val messageRes: Int) {
 
     /** 选了模型但文件不在/是空的（没下载完、被删、被系统清理） */
     MODEL_FILE_MISSING(R.string.sr_fail_model_missing),
+    MODEL_CORRUPT(R.string.sr_fail_model_corrupt),
+    OUT_OF_MEMORY(R.string.sr_fail_out_of_memory),
+    CANCELLED(R.string.sr_fail_cancelled),
 
     /** 模型文件在，但 ONNX Runtime 加载会话失败（文件损坏 / 算子不支持 / halo 不合法） */
     ENGINE_INIT_FAILED(R.string.sr_fail_engine_init),

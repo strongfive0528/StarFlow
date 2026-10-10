@@ -48,11 +48,17 @@ data class ImportedPageSr(
     val finishedAtMs: Long = 0L,
     val updatedAtMs: Long = 0L,
     val mangaKey: String? = null,
+    val sourcePageKey: String? = null,
+    /** Immutable request, actual native parameters and monotonic stage timings. */
+    val executionJson: String? = null,
 ) {
     companion object {
         const val STATE_IDLE = 0     // 没超过
         const val STATE_RUNNING = 1  // 超分中
         const val STATE_SUCCESS = 2  // 完成
+        const val STATE_CANCELLED = 4
+        const val STATE_STOPPING = 5
+        const val STATE_RESULT_MISSING = 6
         const val STATE_FAILED = 3   // 失败
     }
 }
@@ -131,6 +137,6 @@ interface ImportedPageSrDao {
      * state 字面量 0/1 与 [ImportedPageSr.STATE_IDLE] / [STATE_RUNNING] 对应
      * —— @Query 里不能引用 Kotlin 常量，改这两个值时必须同步改这里。
      */
-    @Query("UPDATE imported_page_sr SET state = 0 WHERE mangaId = :mangaId AND mangaKey = :mangaKey AND state = 1")
+    @Query("UPDATE imported_page_sr SET state = 0 WHERE mangaId = :mangaId AND mangaKey = :mangaKey AND state IN (1, 5)")
     suspend fun resetRunning(mangaId: Long, mangaKey: String)
 }

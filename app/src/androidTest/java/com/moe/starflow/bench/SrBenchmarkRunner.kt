@@ -52,7 +52,7 @@ class SrBenchmarkRunner : AndroidJUnitRunner() {
             super.onStart()
             return
         }
-        com.moe.starflow.sr.SrBenchmark.run(targetContext)
+        com.moe.starflow.sr.SrNcnnBench.run(targetContext)
         val sb = StringBuilder()
         try {
             val ctx = targetContext

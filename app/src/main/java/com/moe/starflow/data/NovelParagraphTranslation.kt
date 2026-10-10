@@ -40,6 +40,7 @@ data class NovelParagraphTranslation(
     val targetLang: String? = null,
     val splitVersion: Int = 0,
     val updatedAt: Long = 0L,
+    val imagePayload: String? = null,
 ) {
     companion object {
         const val STATE_IDLE = 0          // 未翻译

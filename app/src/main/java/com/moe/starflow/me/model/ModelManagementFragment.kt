@@ -66,7 +66,6 @@ class ModelManagementFragment : Fragment() {
         private const val ARG_SHOW_SR = "show_sr_tab"
 
         /** 参照项目的 `maxSize` 默认值：1600×1600（超分参数面板的"目标分辨率"开关用它） */
-        private const val SKIP_MAX_SIDE = 1600
 
         /** 输入像素压缩阈值滑块的默认格点：`mpLimit[3]` = 1.5MP（见 setupSrOptionsPanel） */
         private const val MP_DEFAULT_INDEX = 3
@@ -326,16 +325,13 @@ class ModelManagementFragment : Fragment() {
      * | 这一栏 | 他们的键 | 默认 |
      * |---|---|---|
      * | 分块尺寸 | `pref_realcugan_tile_size` | 128（0 = 交给原生按显存自选） |
-     * | 性能档 | `pref_realcugan_performance_mode` | 0 = 90%（GPU 占用越低，块间休眠越长：0/5/15ms） |
+     * | 性能档 | `pref_realcugan_performance_mode` | 0 = 快速（块间等待 0/5/15ms） |
      * | 精度 | `pref_realcugan_precision` | 0 = FP16 存储（我们只提供 FP16/FP32 两档） |
      * | FP16 算术 | `pref_realcugan_fp16_arithmetic` | false |
-     * | 目标分辨率 | `realCuganSkipMaxSize*` | 他们的 `maxSize` = 1600×1600（超过就跳过） |
-     * | 预加载页数 | `pref_realcugan_preload_size` | 3 |
      *
      * ⚠️ 收口在 [SrOptions]（读写唯一入口）：**这里只写 prefs**，真正生效靠
-     * `SrProcessor`/`SuperResolutionEngines` 现读 —— 改完必须 `releaseSrModel()` 重建引擎
+     * `SrRequest` 冻结任务配置后由 `SrProcessor`/`SuperResolutionEngines` 使用 —— 改完必须 `releaseSrModel()` 重建引擎
      * （tile/精度/fp16 都是 net 级、load 时固化）。
-     * ⚠️ 预加载页数当前**没有生产读取方**（用户口径：翻页不预加载），这一栏只为与他们的设置一一对应。
      */
     private fun setupSrOptionsPanel() {
         val panel = rootView.findViewById<View>(R.id.sr_opt_panel) ?: return
@@ -343,7 +339,7 @@ class ModelManagementFragment : Fragment() {
         val prefs = PreferenceManager.getDefaultSharedPreferences(requireContext())
 
         // 他们的 modelpack 里给的候选：64/96/128/192/256（另加 0 = 自动、384 供大显存尝鲜）
-        val tiles = intArrayOf(0, 64, 96, 128, 192, 256, 384)
+        val tiles = intArrayOf(0, 32, 64, 96, 128, 192, 256, 384)
         // 输入像素压缩阈值（MP）：≤阈值直接送模型，超出按比例缩小；0 = 不限用户阈值
         val mpLimit = floatArrayOf(0.6f, 0.8f, 1.0f, 1.5f, 2.0f, 2.5f, 0f)
         val tileBar = rootView.findViewById<SeekBar>(R.id.sr_opt_tile_bar)
@@ -353,11 +349,11 @@ class ModelManagementFragment : Fragment() {
         val precBar = rootView.findViewById<SeekBar>(R.id.sr_opt_prec_bar)
         val precVal = rootView.findViewById<TextView>(R.id.sr_opt_prec_value)
         val fp16aSw = rootView.findViewById<Switch>(R.id.sr_opt_fp16a_switch)
-        val skipSw = rootView.findViewById<Switch>(R.id.sr_opt_skip_switch)
+
         val mpBar = rootView.findViewById<SeekBar>(R.id.sr_opt_maxinput_bar)
         val mpVal = rootView.findViewById<TextView>(R.id.sr_opt_maxinput_value)
-        val preloadBar = rootView.findViewById<SeekBar>(R.id.sr_opt_preload_bar)
-        val preloadVal = rootView.findViewById<TextView>(R.id.sr_opt_preload_value)
+
+
 
         val arrow = rootView.findViewById<View>(R.id.sr_opt_arrow)
         header.setOnClickListener {
@@ -373,6 +369,7 @@ class ModelManagementFragment : Fragment() {
         fun refresh() {
             val o = SrOptions.from(prefs)
             suppress = true
+            tileBar.max = tiles.lastIndex
             tileBar.progress = tiles.indexOf(o.tileSize).let { if (it >= 0) it else tiles.indexOf(SrOptions.DEFAULT_TILE_SIZE) }
             tileVal.text = if (o.tileSize <= 0) getString(R.string.sr_opt_tile_auto) else "%d px".format(o.tileSize)
             // 阈值落在哪个格点：找不到（老值/手改的 prefs）就落在"1.5MP"那一格（= 默认）
@@ -391,9 +388,10 @@ class ModelManagementFragment : Fragment() {
             precBar.progress = o.precision
             precVal.text = if (o.precision == SrOptions.PRECISION_FP32) "FP32" else "FP16"
             fp16aSw.isChecked = o.fp16Arithmetic
-            skipSw.isChecked = o.skipMaxWidth > 0 || o.skipMaxHeight > 0
-            preloadBar.progress = o.preloadPages
-            preloadVal.text = o.preloadPages.toString()
+            fp16aSw.isEnabled = o.precision == SrOptions.PRECISION_FP16
+
+
+
             suppress = false
         }
 
@@ -427,17 +425,7 @@ class ModelManagementFragment : Fragment() {
             override fun onStartTrackingTouch(sb: SeekBar?) = Unit
             override fun onStopTrackingTouch(sb: SeekBar?) = Unit
         })
-        preloadBar.setOnSeekBarChangeListener(object : SeekBar.OnSeekBarChangeListener {
-            override fun onProgressChanged(sb: SeekBar?, p: Int, fromUser: Boolean) = save { it.copy(preloadPages = p.coerceIn(0, 8)) }
-            override fun onStartTrackingTouch(sb: SeekBar?) = Unit
-            override fun onStopTrackingTouch(sb: SeekBar?) = Unit
-        })
         fp16aSw.setOnCheckedChangeListener { _, checked -> save { it.copy(fp16Arithmetic = checked) } }
-        skipSw.setOnCheckedChangeListener { _, checked ->
-            // 他们的 maxSize 默认 1600×1600：打开 = 超过就整页跳过（省电、避免大图白跑）
-            val v = if (checked) SKIP_MAX_SIDE else 0
-            save { it.copy(skipMaxWidth = v, skipMaxHeight = v) }
-        }
         rootView.findViewById<View>(R.id.sr_opt_reset)?.setOnClickListener {
             SrOptions.write(prefs, SrOptions())
             SuperResolutionEngines.releaseSrModel()
@@ -539,7 +527,10 @@ class ModelManagementFragment : Fragment() {
 
         when (state) {
             DownloadState.Idle, is DownloadState.Partial -> {
-                statusText.text = getString(R.string.model_status_undownloaded_format, expectedSize)
+                val validationError=if(modelKey in SrModelManager.allKeys && state is DownloadState.Partial)SrModelManager.validationError(requireContext(),modelKey) else null
+                statusText.text = if(validationError!=null && !validationError.contains("missing"))
+                    getString(R.string.sr_fail_model_corrupt)+"\n"+validationError
+                    else getString(R.string.model_status_undownloaded_format, expectedSize)
                 actionBtn.text = getString(R.string.model_download)
                 setButtonDeleteStyle(actionBtn, false)
                 actionBtn.setOnClickListener {

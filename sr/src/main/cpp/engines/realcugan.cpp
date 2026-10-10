@@ -1,6 +1,8 @@
 // realcugan implemented with ncnn library
 
 #include "realcugan.h"
+#include "sr_control.h"
+#include <cmath>
 
 #include <algorithm>
 #include <vector>
@@ -76,15 +78,16 @@ RealCUGAN::~RealCUGAN()
     {
         delete realcugan_preproc;
         delete realcugan_postproc;
+        delete realcugan_4x_postproc;
     }
 
-    bicubic_2x->destroy_pipeline(net.opt);
+    if (bicubic_2x) bicubic_2x->destroy_pipeline(net.opt);
     delete bicubic_2x;
 
-    bicubic_3x->destroy_pipeline(net.opt);
+    if (bicubic_3x) bicubic_3x->destroy_pipeline(net.opt);
     delete bicubic_3x;
 
-    bicubic_4x->destroy_pipeline(net.opt);
+    if (bicubic_4x) bicubic_4x->destroy_pipeline(net.opt);
     delete bicubic_4x;
 }
 
@@ -94,19 +97,16 @@ int RealCUGAN::load(const std::wstring& parampath, const std::wstring& modelpath
 int RealCUGAN::load(const std::string& parampath, const std::string& modelpath)
 #endif
 {
-    net.opt.use_vulkan_compute = vkdev ? true : false;
-    net.opt.use_fp16_packed = true;
-    net.opt.use_fp16_storage = vkdev ? true : false;
-    // ⚠️ 算力精度按「设备能力 + 上层开关」决定（策略照 TachiyomiX）：只开 fp16 存储省的是显存，
-    //    真正影响速度的是 use_fp16_arithmetic —— 只开存储、把算术留在 FP32 会平白慢一截。
-    //    `net.vulkan_device()` 在 use_vulkan_compute=false（CPU 路径）时为空 → 自动退回 FP32。
-    {
-        const ncnn::VulkanDevice* dev = net.vulkan_device();
-        net.opt.use_fp16_arithmetic = fp16_arithmetic && dev && dev->info.support_fp16_arithmetic();
-    }
+    net.opt.use_vulkan_compute = vkdev != nullptr;
+    if (vkdev) net.set_vulkan_device(vkdev);
+    effective_fp16 = storage_fp16 && vkdev && vkdev->info.support_fp16_storage();
+    effective_arithmetic = effective_fp16 && fp16_arithmetic && vkdev->info.support_fp16_arithmetic();
+    net.opt.use_fp16_packed = effective_fp16;
+    net.opt.use_fp16_storage = effective_fp16;
+    net.opt.use_fp16_arithmetic = effective_arithmetic;
     net.opt.use_int8_storage = true;
-
-    net.set_vulkan_device(vkdev);
+    net.opt.use_int8_arithmetic = false;
+    srSanitizeShaderOptions(net.opt, vkdev);
 
 #if _WIN32
     {
@@ -116,7 +116,7 @@ int RealCUGAN::load(const std::string& parampath, const std::string& modelpath)
             fwprintf(stderr, L"_wfopen %ls failed\n", parampath.c_str());
         }
 
-        net.load_param(fp);
+        srCheck(net.load_param(fp), "model load");
 
         fclose(fp);
     }
@@ -127,13 +127,13 @@ int RealCUGAN::load(const std::string& parampath, const std::string& modelpath)
             fwprintf(stderr, L"_wfopen %ls failed\n", modelpath.c_str());
         }
 
-        net.load_model(fp);
+        srCheck(net.load_model(fp), "model load");
 
         fclose(fp);
     }
 #else
-    net.load_param(parampath.c_str());
-    net.load_model(modelpath.c_str());
+    srCheck(net.load_param(parampath.c_str()), "model load");
+    srCheck(net.load_model(modelpath.c_str()), "model load");
 #endif
 
     // initialize preprocess and postprocess pipeline
@@ -147,60 +147,60 @@ int RealCUGAN::load(const std::string& parampath, const std::string& modelpath)
 #endif
 
         {
-            static std::vector<uint32_t> spirv;
+            std::vector<uint32_t> spirv;
             static ncnn::Mutex lock;
             {
                 ncnn::MutexLockGuard guard(lock);
                 if (spirv.empty())
                 {
                     if (tta_mode)
-                        compile_spirv_module(realcugan_preproc_tta_comp_data, net.opt, spirv);
+                        srCheck(compile_spirv_module(realcugan_preproc_tta_comp_data, net.opt, spirv), "shader compilation");
                     else
-                        compile_spirv_module(realcugan_preproc_comp_data, net.opt, spirv);
+                        srCheck(compile_spirv_module(realcugan_preproc_comp_data, net.opt, spirv), "shader compilation");
                 }
             }
 
             realcugan_preproc = new ncnn::Pipeline(vkdev);
             realcugan_preproc->set_optimal_local_size_xyz(8, 8, 3);
-            realcugan_preproc->create(spirv.data(), spirv.size() * 4, specializations);
+            srCheck(realcugan_preproc->create(spirv.data(), spirv.size() * 4, specializations), "shader pipeline");
         }
 
         {
-            static std::vector<uint32_t> spirv;
+            std::vector<uint32_t> spirv;
             static ncnn::Mutex lock;
             {
                 ncnn::MutexLockGuard guard(lock);
                 if (spirv.empty())
                 {
                     if (tta_mode)
-                        compile_spirv_module(realcugan_postproc_tta_comp_data, net.opt, spirv);
+                        srCheck(compile_spirv_module(realcugan_postproc_tta_comp_data, net.opt, spirv), "shader compilation");
                     else
-                        compile_spirv_module(realcugan_postproc_comp_data, net.opt, spirv);
+                        srCheck(compile_spirv_module(realcugan_postproc_comp_data, net.opt, spirv), "shader compilation");
                 }
             }
 
             realcugan_postproc = new ncnn::Pipeline(vkdev);
             realcugan_postproc->set_optimal_local_size_xyz(8, 8, 3);
-            realcugan_postproc->create(spirv.data(), spirv.size() * 4, specializations);
+            srCheck(realcugan_postproc->create(spirv.data(), spirv.size() * 4, specializations), "shader pipeline");
         }
 
         {
-            static std::vector<uint32_t> spirv;
+            std::vector<uint32_t> spirv;
             static ncnn::Mutex lock;
             {
                 ncnn::MutexLockGuard guard(lock);
                 if (spirv.empty())
                 {
                     if (tta_mode)
-                        compile_spirv_module(realcugan_postproc_tta_comp_data, net.opt, spirv);
+                        srCheck(compile_spirv_module(realcugan_postproc_tta_comp_data, net.opt, spirv), "shader compilation");
                     else
-                        compile_spirv_module(realcugan_postproc_comp_data, net.opt, spirv);
+                        srCheck(compile_spirv_module(realcugan_postproc_comp_data, net.opt, spirv), "shader compilation");
                 }
             }
 
             realcugan_4x_postproc = new ncnn::Pipeline(vkdev);
             realcugan_4x_postproc->set_optimal_local_size_xyz(8, 8, 3);
-            realcugan_4x_postproc->create(spirv.data(), spirv.size() * 4, specializations);
+            srCheck(realcugan_4x_postproc->create(spirv.data(), spirv.size() * 4, specializations), "shader pipeline");
         }
     }
 
@@ -213,9 +213,9 @@ int RealCUGAN::load(const std::string& parampath, const std::string& modelpath)
         pd.set(0, 3);// bicubic
         pd.set(1, 2.f);
         pd.set(2, 2.f);
-        bicubic_2x->load_param(pd);
+        srCheck(bicubic_2x->load_param(pd), "bicubic pipeline");
 
-        bicubic_2x->create_pipeline(net.opt);
+        srCheck(bicubic_2x->create_pipeline(net.opt), "bicubic pipeline");
     }
     {
         bicubic_3x = ncnn::create_layer("Interp");
@@ -225,9 +225,9 @@ int RealCUGAN::load(const std::string& parampath, const std::string& modelpath)
         pd.set(0, 3);// bicubic
         pd.set(1, 3.f);
         pd.set(2, 3.f);
-        bicubic_3x->load_param(pd);
+        srCheck(bicubic_3x->load_param(pd), "bicubic pipeline");
 
-        bicubic_3x->create_pipeline(net.opt);
+        srCheck(bicubic_3x->create_pipeline(net.opt), "bicubic pipeline");
     }
     {
         bicubic_4x = ncnn::create_layer("Interp");
@@ -237,9 +237,9 @@ int RealCUGAN::load(const std::string& parampath, const std::string& modelpath)
         pd.set(0, 3);// bicubic
         pd.set(1, 4.f);
         pd.set(2, 4.f);
-        bicubic_4x->load_param(pd);
+        srCheck(bicubic_4x->load_param(pd), "bicubic pipeline");
 
-        bicubic_4x->create_pipeline(net.opt);
+        srCheck(bicubic_4x->create_pipeline(net.opt), "bicubic pipeline");
     }
 
     return 0;
@@ -247,7 +247,7 @@ int RealCUGAN::load(const std::string& parampath, const std::string& modelpath)
 
 int RealCUGAN::process(const ncnn::Mat& inimage, ncnn::Mat& outimage) const
 {
-    bool syncgap_needed = tilesize < std::max(inimage.w, inimage.h);
+    bool syncgap_needed = syncgap != 0; // SE/Pro must use their SE branch, including a single tile.
 
     if (!vkdev)
     {
@@ -291,6 +291,7 @@ int RealCUGAN::process(const ncnn::Mat& inimage, ncnn::Mat& outimage) const
 
     ncnn::VkAllocator* blob_vkallocator = vkdev->acquire_blob_allocator();
     ncnn::VkAllocator* staging_vkallocator = vkdev->acquire_staging_allocator();
+    SrAllocatorGuard allocator_guard{vkdev, blob_vkallocator, staging_vkallocator};
 
     ncnn::Option opt = net.opt;
     opt.blob_vkallocator = blob_vkallocator;
@@ -332,16 +333,20 @@ int RealCUGAN::process(const ncnn::Mat& inimage, ncnn::Mat& outimage) const
             {
 #if _WIN32
                 in = ncnn::Mat::from_pixels(pixeldata + in_tile_y0 * w * channels, ncnn::Mat::PIXEL_BGR2RGB, w, (in_tile_y1 - in_tile_y0));
+                if(in.empty()) throw SrNativeError(-100,"input strip allocation failed; lower input MP threshold");
 #else
                 in = ncnn::Mat::from_pixels(pixeldata + in_tile_y0 * w * channels, ncnn::Mat::PIXEL_RGB, w, (in_tile_y1 - in_tile_y0));
+                if(in.empty()) throw SrNativeError(-100,"input strip allocation failed; lower input MP threshold");
 #endif
             }
             if (channels == 4)
             {
 #if _WIN32
                 in = ncnn::Mat::from_pixels(pixeldata + in_tile_y0 * w * channels, ncnn::Mat::PIXEL_BGRA2RGBA, w, (in_tile_y1 - in_tile_y0));
+                if(in.empty()) throw SrNativeError(-100,"input strip allocation failed; lower input MP threshold");
 #else
                 in = ncnn::Mat::from_pixels(pixeldata + in_tile_y0 * w * channels, ncnn::Mat::PIXEL_RGBA, w, (in_tile_y1 - in_tile_y0));
+                if(in.empty()) throw SrNativeError(-100,"input strip allocation failed; lower input MP threshold");
 #endif
             }
         }
@@ -355,7 +360,7 @@ int RealCUGAN::process(const ncnn::Mat& inimage, ncnn::Mat& outimage) const
 
             if (xtiles > 1)
             {
-                cmd.submit_and_wait();
+                srCheck(cmd.submit_and_wait(), "Vulkan submit");
                 cmd.reset();
             }
         }
@@ -366,15 +371,16 @@ int RealCUGAN::process(const ncnn::Mat& inimage, ncnn::Mat& outimage) const
         ncnn::VkMat out_gpu;
         if (opt.use_fp16_storage && opt.use_int8_storage)
         {
-            out_gpu.create(w * scale, (out_tile_y1 - out_tile_y0) * scale, (size_t)channels, 1, blob_vkallocator);
+            { out_gpu.create(w * scale, (out_tile_y1 - out_tile_y0) * scale, (size_t)channels, 1, blob_vkallocator); if(out_gpu.empty()) throw SrNativeError(-100,"tile/strip allocation failed; reduce tile size or input MP threshold"); }
         }
         else
         {
-            out_gpu.create(w * scale, (out_tile_y1 - out_tile_y0) * scale, channels, (size_t)4u, 1, blob_vkallocator);
+            { out_gpu.create(w * scale, (out_tile_y1 - out_tile_y0) * scale, channels, (size_t)4u, 1, blob_vkallocator); if(out_gpu.empty()) throw SrNativeError(-100,"tile/strip allocation failed; reduce tile size or input MP threshold"); }
         }
 
         for (int xi = 0; xi < xtiles; xi++)
         {
+            srTileCheckpoint();
             const int tile_w_nopad = std::min((xi + 1) * TILE_SIZE_X, w) - xi * TILE_SIZE_X;
 
             int prepadding_right = prepadding;
@@ -399,18 +405,18 @@ int RealCUGAN::process(const ncnn::Mat& inimage, ncnn::Mat& outimage) const
                     int tile_y0 = yi * TILE_SIZE_Y - prepadding;
                     int tile_y1 = std::min((yi + 1) * TILE_SIZE_Y, h) + prepadding_bottom;
 
-                    in_tile_gpu[0].create(tile_x1 - tile_x0, tile_y1 - tile_y0, 3, in_out_tile_elemsize, 1, blob_vkallocator);
-                    in_tile_gpu[1].create(tile_x1 - tile_x0, tile_y1 - tile_y0, 3, in_out_tile_elemsize, 1, blob_vkallocator);
-                    in_tile_gpu[2].create(tile_x1 - tile_x0, tile_y1 - tile_y0, 3, in_out_tile_elemsize, 1, blob_vkallocator);
-                    in_tile_gpu[3].create(tile_x1 - tile_x0, tile_y1 - tile_y0, 3, in_out_tile_elemsize, 1, blob_vkallocator);
-                    in_tile_gpu[4].create(tile_y1 - tile_y0, tile_x1 - tile_x0, 3, in_out_tile_elemsize, 1, blob_vkallocator);
-                    in_tile_gpu[5].create(tile_y1 - tile_y0, tile_x1 - tile_x0, 3, in_out_tile_elemsize, 1, blob_vkallocator);
-                    in_tile_gpu[6].create(tile_y1 - tile_y0, tile_x1 - tile_x0, 3, in_out_tile_elemsize, 1, blob_vkallocator);
-                    in_tile_gpu[7].create(tile_y1 - tile_y0, tile_x1 - tile_x0, 3, in_out_tile_elemsize, 1, blob_vkallocator);
+                    { in_tile_gpu[0].create(tile_x1 - tile_x0, tile_y1 - tile_y0, 3, in_out_tile_elemsize, 1, blob_vkallocator); if(in_tile_gpu[0].empty()) throw SrNativeError(-100,"tile/strip allocation failed; reduce tile size or input MP threshold"); }
+                    { in_tile_gpu[1].create(tile_x1 - tile_x0, tile_y1 - tile_y0, 3, in_out_tile_elemsize, 1, blob_vkallocator); if(in_tile_gpu[1].empty()) throw SrNativeError(-100,"tile/strip allocation failed; reduce tile size or input MP threshold"); }
+                    { in_tile_gpu[2].create(tile_x1 - tile_x0, tile_y1 - tile_y0, 3, in_out_tile_elemsize, 1, blob_vkallocator); if(in_tile_gpu[2].empty()) throw SrNativeError(-100,"tile/strip allocation failed; reduce tile size or input MP threshold"); }
+                    { in_tile_gpu[3].create(tile_x1 - tile_x0, tile_y1 - tile_y0, 3, in_out_tile_elemsize, 1, blob_vkallocator); if(in_tile_gpu[3].empty()) throw SrNativeError(-100,"tile/strip allocation failed; reduce tile size or input MP threshold"); }
+                    { in_tile_gpu[4].create(tile_y1 - tile_y0, tile_x1 - tile_x0, 3, in_out_tile_elemsize, 1, blob_vkallocator); if(in_tile_gpu[4].empty()) throw SrNativeError(-100,"tile/strip allocation failed; reduce tile size or input MP threshold"); }
+                    { in_tile_gpu[5].create(tile_y1 - tile_y0, tile_x1 - tile_x0, 3, in_out_tile_elemsize, 1, blob_vkallocator); if(in_tile_gpu[5].empty()) throw SrNativeError(-100,"tile/strip allocation failed; reduce tile size or input MP threshold"); }
+                    { in_tile_gpu[6].create(tile_y1 - tile_y0, tile_x1 - tile_x0, 3, in_out_tile_elemsize, 1, blob_vkallocator); if(in_tile_gpu[6].empty()) throw SrNativeError(-100,"tile/strip allocation failed; reduce tile size or input MP threshold"); }
+                    { in_tile_gpu[7].create(tile_y1 - tile_y0, tile_x1 - tile_x0, 3, in_out_tile_elemsize, 1, blob_vkallocator); if(in_tile_gpu[7].empty()) throw SrNativeError(-100,"tile/strip allocation failed; reduce tile size or input MP threshold"); }
 
                     if (channels == 4)
                     {
-                        in_alpha_tile_gpu.create(tile_w_nopad, tile_h_nopad, 1, in_out_tile_elemsize, 1, blob_vkallocator);
+                        { in_alpha_tile_gpu.create(tile_w_nopad, tile_h_nopad, 1, in_out_tile_elemsize, 1, blob_vkallocator); if(in_alpha_tile_gpu.empty()) throw SrNativeError(-100,"tile/strip allocation failed; reduce tile size or input MP threshold"); }
                     }
 
                     std::vector<ncnn::VkMat> bindings(10);
@@ -458,9 +464,9 @@ int RealCUGAN::process(const ncnn::Mat& inimage, ncnn::Mat& outimage) const
                     ex.set_workspace_vkallocator(blob_vkallocator);
                     ex.set_staging_vkallocator(staging_vkallocator);
 
-                    ex.input("in0", in_tile_gpu[ti]);
+                    srCheck(ex.input("in0", in_tile_gpu[ti]), "network input/extract");
 
-                    ex.extract("out0", out_tile_gpu[ti], cmd);
+                    srCheck(ex.extract("out0", out_tile_gpu[ti], cmd), "network input/extract");
                 }
 
                 ncnn::VkMat out_alpha_tile_gpu;
@@ -572,11 +578,11 @@ int RealCUGAN::process(const ncnn::Mat& inimage, ncnn::Mat& outimage) const
                     int tile_y0 = yi * TILE_SIZE_Y - prepadding;
                     int tile_y1 = std::min((yi + 1) * TILE_SIZE_Y, h) + prepadding_bottom;
 
-                    in_tile_gpu.create(tile_x1 - tile_x0, tile_y1 - tile_y0, 3, in_out_tile_elemsize, 1, blob_vkallocator);
+                    { in_tile_gpu.create(tile_x1 - tile_x0, tile_y1 - tile_y0, 3, in_out_tile_elemsize, 1, blob_vkallocator); if(in_tile_gpu.empty()) throw SrNativeError(-100,"tile/strip allocation failed; reduce tile size or input MP threshold"); }
 
                     if (channels == 4)
                     {
-                        in_alpha_tile_gpu.create(tile_w_nopad, tile_h_nopad, 1, in_out_tile_elemsize, 1, blob_vkallocator);
+                        { in_alpha_tile_gpu.create(tile_w_nopad, tile_h_nopad, 1, in_out_tile_elemsize, 1, blob_vkallocator); if(in_alpha_tile_gpu.empty()) throw SrNativeError(-100,"tile/strip allocation failed; reduce tile size or input MP threshold"); }
                     }
 
                     std::vector<ncnn::VkMat> bindings(3);
@@ -616,9 +622,9 @@ int RealCUGAN::process(const ncnn::Mat& inimage, ncnn::Mat& outimage) const
                     ex.set_workspace_vkallocator(blob_vkallocator);
                     ex.set_staging_vkallocator(staging_vkallocator);
 
-                    ex.input("in0", in_tile_gpu);
+                    srCheck(ex.input("in0", in_tile_gpu), "network input/extract");
 
-                    ex.extract("out0", out_tile_gpu, cmd);
+                    srCheck(ex.extract("out0", out_tile_gpu, cmd), "network input/extract");
                 }
 
                 ncnn::VkMat out_alpha_tile_gpu;
@@ -707,12 +713,12 @@ int RealCUGAN::process(const ncnn::Mat& inimage, ncnn::Mat& outimage) const
 
             if (xtiles > 1)
             {
-                cmd.submit_and_wait();
+                srCheck(cmd.submit_and_wait(), "Vulkan submit");
                 cmd.reset();
             }
 
             // Yield to let HWUI render frames between tiles
-            std::this_thread::sleep_for(std::chrono::milliseconds(2));
+            // Throttling is applied by srTileCheckpoint().
         }
 
         // download
@@ -726,7 +732,7 @@ int RealCUGAN::process(const ncnn::Mat& inimage, ncnn::Mat& outimage) const
 
             cmd.record_clone(out_gpu, out, opt);
 
-            cmd.submit_and_wait();
+            srCheck(cmd.submit_and_wait(), "Vulkan submit");
 
             if (!(opt.use_fp16_storage && opt.use_int8_storage))
             {
@@ -750,8 +756,7 @@ int RealCUGAN::process(const ncnn::Mat& inimage, ncnn::Mat& outimage) const
         }
     }
 
-    vkdev->reclaim_blob_allocator(blob_vkallocator);
-    vkdev->reclaim_staging_allocator(staging_vkallocator);
+
 
     return 0;
 }
@@ -797,6 +802,7 @@ int RealCUGAN::process_cpu(const ncnn::Mat& inimage, ncnn::Mat& outimage) const
 
         for (int xi = 0; xi < xtiles; xi++)
         {
+            srTileCheckpoint();
             const int tile_w_nopad = std::min((xi + 1) * TILE_SIZE_X, w) - xi * TILE_SIZE_X;
 
             int prepadding_right = prepadding;
@@ -819,16 +825,20 @@ int RealCUGAN::process_cpu(const ncnn::Mat& inimage, ncnn::Mat& outimage) const
                 {
 #if _WIN32
                     in = ncnn::Mat::from_pixels_roi(pixeldata, ncnn::Mat::PIXEL_BGR2RGB, w, h, in_tile_x0, in_tile_y0, in_tile_x1 - in_tile_x0, in_tile_y1 - in_tile_y0);
+                    if(in.empty()) throw SrNativeError(-100,"input strip allocation failed; lower input MP threshold");
 #else
                     in = ncnn::Mat::from_pixels_roi(pixeldata, ncnn::Mat::PIXEL_RGB, w, h, in_tile_x0, in_tile_y0, in_tile_x1 - in_tile_x0, in_tile_y1 - in_tile_y0);
+                    if(in.empty()) throw SrNativeError(-100,"input strip allocation failed; lower input MP threshold");
 #endif
                 }
                 if (channels == 4)
                 {
 #if _WIN32
                     in = ncnn::Mat::from_pixels_roi(pixeldata, ncnn::Mat::PIXEL_BGRA2RGBA, w, h, in_tile_x0, in_tile_y0, in_tile_x1 - in_tile_x0, in_tile_y1 - in_tile_y0);
+                    if(in.empty()) throw SrNativeError(-100,"input strip allocation failed; lower input MP threshold");
 #else
                     in = ncnn::Mat::from_pixels_roi(pixeldata, ncnn::Mat::PIXEL_RGBA, w, h, in_tile_x0, in_tile_y0, in_tile_x1 - in_tile_x0, in_tile_y1 - in_tile_y0);
+                    if(in.empty()) throw SrNativeError(-100,"input strip allocation failed; lower input MP threshold");
 #endif
                 }
             }
@@ -841,7 +851,7 @@ int RealCUGAN::process_cpu(const ncnn::Mat& inimage, ncnn::Mat& outimage) const
                 ncnn::Mat in_tile[8];
                 ncnn::Mat in_alpha_tile;
                 {
-                    in_tile[0].create(in.w, in.h, 3);
+                    { in_tile[0].create(in.w, in.h, 3); if(in_tile[0].empty()) throw SrNativeError(-100,"tile/strip allocation failed; reduce tile size or input MP threshold"); }
                     for (int q = 0; q < 3; q++)
                     {
                         const float* ptr = in.channel(q);
@@ -876,13 +886,13 @@ int RealCUGAN::process_cpu(const ncnn::Mat& inimage, ncnn::Mat& outimage) const
 
                 // the other 7 directions
                 {
-                    in_tile[1].create(in_tile[0].w, in_tile[0].h, 3);
-                    in_tile[2].create(in_tile[0].w, in_tile[0].h, 3);
-                    in_tile[3].create(in_tile[0].w, in_tile[0].h, 3);
-                    in_tile[4].create(in_tile[0].h, in_tile[0].w, 3);
-                    in_tile[5].create(in_tile[0].h, in_tile[0].w, 3);
-                    in_tile[6].create(in_tile[0].h, in_tile[0].w, 3);
-                    in_tile[7].create(in_tile[0].h, in_tile[0].w, 3);
+                    { in_tile[1].create(in_tile[0].w, in_tile[0].h, 3); if(in_tile[1].empty()) throw SrNativeError(-100,"tile/strip allocation failed; reduce tile size or input MP threshold"); }
+                    { in_tile[2].create(in_tile[0].w, in_tile[0].h, 3); if(in_tile[2].empty()) throw SrNativeError(-100,"tile/strip allocation failed; reduce tile size or input MP threshold"); }
+                    { in_tile[3].create(in_tile[0].w, in_tile[0].h, 3); if(in_tile[3].empty()) throw SrNativeError(-100,"tile/strip allocation failed; reduce tile size or input MP threshold"); }
+                    { in_tile[4].create(in_tile[0].h, in_tile[0].w, 3); if(in_tile[4].empty()) throw SrNativeError(-100,"tile/strip allocation failed; reduce tile size or input MP threshold"); }
+                    { in_tile[5].create(in_tile[0].h, in_tile[0].w, 3); if(in_tile[5].empty()) throw SrNativeError(-100,"tile/strip allocation failed; reduce tile size or input MP threshold"); }
+                    { in_tile[6].create(in_tile[0].h, in_tile[0].w, 3); if(in_tile[6].empty()) throw SrNativeError(-100,"tile/strip allocation failed; reduce tile size or input MP threshold"); }
+                    { in_tile[7].create(in_tile[0].h, in_tile[0].w, 3); if(in_tile[7].empty()) throw SrNativeError(-100,"tile/strip allocation failed; reduce tile size or input MP threshold"); }
 
                     for (int q = 0; q < 3; q++)
                     {
@@ -929,9 +939,9 @@ int RealCUGAN::process_cpu(const ncnn::Mat& inimage, ncnn::Mat& outimage) const
                 {
                     ncnn::Extractor ex = net.create_extractor();
 
-                    ex.input("in0", in_tile[ti]);
+                    srCheck(ex.input("in0", in_tile[ti]), "network input/extract");
 
-                    ex.extract("out0", out_tile[ti]);
+                    srCheck(ex.extract("out0", out_tile[ti]), "network input/extract");
                 }
 
                 ncnn::Mat out_alpha_tile;
@@ -957,7 +967,7 @@ int RealCUGAN::process_cpu(const ncnn::Mat& inimage, ncnn::Mat& outimage) const
 
                 // postproc and merge alpha
                 {
-                    out.create(tile_w_nopad * scale, tile_h_nopad * scale, channels);
+                    { out.create(tile_w_nopad * scale, tile_h_nopad * scale, channels); if(out.empty()) throw SrNativeError(-100,"tile/strip allocation failed; reduce tile size or input MP threshold"); }
                     if (scale == 4)
                     {
                         for (int q = 0; q < 3; q++)
@@ -1042,7 +1052,7 @@ int RealCUGAN::process_cpu(const ncnn::Mat& inimage, ncnn::Mat& outimage) const
                 ncnn::Mat in_tile;
                 ncnn::Mat in_alpha_tile;
                 {
-                    in_tile.create(in.w, in.h, 3);
+                    { in_tile.create(in.w, in.h, 3); if(in_tile.empty()) throw SrNativeError(-100,"tile/strip allocation failed; reduce tile size or input MP threshold"); }
                     for (int q = 0; q < 3; q++)
                     {
                         const float* ptr = in.channel(q);
@@ -1077,9 +1087,9 @@ int RealCUGAN::process_cpu(const ncnn::Mat& inimage, ncnn::Mat& outimage) const
                 {
                     ncnn::Extractor ex = net.create_extractor();
 
-                    ex.input("in0", in_tile);
+                    srCheck(ex.input("in0", in_tile), "network input/extract");
 
-                    ex.extract("out0", out_tile);
+                    srCheck(ex.extract("out0", out_tile), "network input/extract");
                 }
 
                 ncnn::Mat out_alpha_tile;
@@ -1105,7 +1115,7 @@ int RealCUGAN::process_cpu(const ncnn::Mat& inimage, ncnn::Mat& outimage) const
 
                 // postproc and merge alpha
                 {
-                    out.create(tile_w_nopad * scale, tile_h_nopad * scale, channels);
+                    { out.create(tile_w_nopad * scale, tile_h_nopad * scale, channels); if(out.empty()) throw SrNativeError(-100,"tile/strip allocation failed; reduce tile size or input MP threshold"); }
                     if (scale == 4)
                     {
                         for (int q = 0; q < 3; q++)
@@ -1177,6 +1187,7 @@ int RealCUGAN::process_se(const ncnn::Mat& inimage, ncnn::Mat& outimage) const
 {
     ncnn::VkAllocator* blob_vkallocator = vkdev->acquire_blob_allocator();
     ncnn::VkAllocator* staging_vkallocator = vkdev->acquire_staging_allocator();
+    SrAllocatorGuard allocator_guard{vkdev, blob_vkallocator, staging_vkallocator};
 
     ncnn::Option opt = net.opt;
     opt.blob_vkallocator = blob_vkallocator;
@@ -1218,8 +1229,7 @@ int RealCUGAN::process_se(const ncnn::Mat& inimage, ncnn::Mat& outimage) const
 
     cache.clear();
 
-    vkdev->reclaim_blob_allocator(blob_vkallocator);
-    vkdev->reclaim_staging_allocator(staging_vkallocator);
+
 
     return 0;
 }
@@ -1228,6 +1238,7 @@ int RealCUGAN::process_se_rough(const ncnn::Mat& inimage, ncnn::Mat& outimage) c
 {
     ncnn::VkAllocator* blob_vkallocator = vkdev->acquire_blob_allocator();
     ncnn::VkAllocator* staging_vkallocator = vkdev->acquire_staging_allocator();
+    SrAllocatorGuard allocator_guard{vkdev, blob_vkallocator, staging_vkallocator};
 
     ncnn::Option opt = net.opt;
     opt.blob_vkallocator = blob_vkallocator;
@@ -1248,8 +1259,7 @@ int RealCUGAN::process_se_rough(const ncnn::Mat& inimage, ncnn::Mat& outimage) c
 
     cache.clear();
 
-    vkdev->reclaim_blob_allocator(blob_vkallocator);
-    vkdev->reclaim_staging_allocator(staging_vkallocator);
+
 
     return 0;
 }
@@ -1258,6 +1268,7 @@ int RealCUGAN::process_se_very_rough(const ncnn::Mat& inimage, ncnn::Mat& outima
 {
     ncnn::VkAllocator* blob_vkallocator = vkdev->acquire_blob_allocator();
     ncnn::VkAllocator* staging_vkallocator = vkdev->acquire_staging_allocator();
+    SrAllocatorGuard allocator_guard{vkdev, blob_vkallocator, staging_vkallocator};
 
     ncnn::Option opt = net.opt;
     opt.blob_vkallocator = blob_vkallocator;
@@ -1278,8 +1289,7 @@ int RealCUGAN::process_se_very_rough(const ncnn::Mat& inimage, ncnn::Mat& outima
 
     cache.clear();
 
-    vkdev->reclaim_blob_allocator(blob_vkallocator);
-    vkdev->reclaim_staging_allocator(staging_vkallocator);
+
 
     return 0;
 }
@@ -1407,16 +1417,20 @@ int RealCUGAN::process_se_stage0(const ncnn::Mat& inimage, const std::vector<std
             {
 #if _WIN32
                 in = ncnn::Mat::from_pixels(pixeldata + in_tile_y0 * w * channels, ncnn::Mat::PIXEL_BGR2RGB, w, (in_tile_y1 - in_tile_y0));
+                if(in.empty()) throw SrNativeError(-100,"input strip allocation failed; lower input MP threshold");
 #else
                 in = ncnn::Mat::from_pixels(pixeldata + in_tile_y0 * w * channels, ncnn::Mat::PIXEL_RGB, w, (in_tile_y1 - in_tile_y0));
+                if(in.empty()) throw SrNativeError(-100,"input strip allocation failed; lower input MP threshold");
 #endif
             }
             if (channels == 4)
             {
 #if _WIN32
                 in = ncnn::Mat::from_pixels(pixeldata + in_tile_y0 * w * channels, ncnn::Mat::PIXEL_BGRA2RGBA, w, (in_tile_y1 - in_tile_y0));
+                if(in.empty()) throw SrNativeError(-100,"input strip allocation failed; lower input MP threshold");
 #else
                 in = ncnn::Mat::from_pixels(pixeldata + in_tile_y0 * w * channels, ncnn::Mat::PIXEL_RGBA, w, (in_tile_y1 - in_tile_y0));
+                if(in.empty()) throw SrNativeError(-100,"input strip allocation failed; lower input MP threshold");
 #endif
             }
         }
@@ -1430,7 +1444,7 @@ int RealCUGAN::process_se_stage0(const ncnn::Mat& inimage, const std::vector<std
 
             if (xtiles > 1)
             {
-                cmd.submit_and_wait();
+                srCheck(cmd.submit_and_wait(), "Vulkan submit");
                 cmd.reset();
             }
         }
@@ -1441,15 +1455,16 @@ int RealCUGAN::process_se_stage0(const ncnn::Mat& inimage, const std::vector<std
         ncnn::VkMat out_gpu;
         if (opt.use_fp16_storage && opt.use_int8_storage)
         {
-            out_gpu.create(w * scale, (out_tile_y1 - out_tile_y0) * scale, (size_t)channels, 1, opt.blob_vkallocator);
+            { out_gpu.create(w * scale, (out_tile_y1 - out_tile_y0) * scale, (size_t)channels, 1, opt.blob_vkallocator); if(out_gpu.empty()) throw SrNativeError(-100,"tile/strip allocation failed; reduce tile size or input MP threshold"); }
         }
         else
         {
-            out_gpu.create(w * scale, (out_tile_y1 - out_tile_y0) * scale, channels, (size_t)4u, 1, opt.blob_vkallocator);
+            { out_gpu.create(w * scale, (out_tile_y1 - out_tile_y0) * scale, channels, (size_t)4u, 1, opt.blob_vkallocator); if(out_gpu.empty()) throw SrNativeError(-100,"tile/strip allocation failed; reduce tile size or input MP threshold"); }
         }
 
         for (int xi = 0; xi < xtiles; xi++)
         {
+            srTileCheckpoint();
             const int tile_w_nopad = std::min((xi + 1) * TILE_SIZE_X, w) - xi * TILE_SIZE_X;
 
             int prepadding_right = prepadding;
@@ -1474,18 +1489,18 @@ int RealCUGAN::process_se_stage0(const ncnn::Mat& inimage, const std::vector<std
                     int tile_y0 = yi * TILE_SIZE_Y - prepadding;
                     int tile_y1 = std::min((yi + 1) * TILE_SIZE_Y, h) + prepadding_bottom;
 
-                    in_tile_gpu[0].create(tile_x1 - tile_x0, tile_y1 - tile_y0, 3, in_out_tile_elemsize, 1, opt.blob_vkallocator);
-                    in_tile_gpu[1].create(tile_x1 - tile_x0, tile_y1 - tile_y0, 3, in_out_tile_elemsize, 1, opt.blob_vkallocator);
-                    in_tile_gpu[2].create(tile_x1 - tile_x0, tile_y1 - tile_y0, 3, in_out_tile_elemsize, 1, opt.blob_vkallocator);
-                    in_tile_gpu[3].create(tile_x1 - tile_x0, tile_y1 - tile_y0, 3, in_out_tile_elemsize, 1, opt.blob_vkallocator);
-                    in_tile_gpu[4].create(tile_y1 - tile_y0, tile_x1 - tile_x0, 3, in_out_tile_elemsize, 1, opt.blob_vkallocator);
-                    in_tile_gpu[5].create(tile_y1 - tile_y0, tile_x1 - tile_x0, 3, in_out_tile_elemsize, 1, opt.blob_vkallocator);
-                    in_tile_gpu[6].create(tile_y1 - tile_y0, tile_x1 - tile_x0, 3, in_out_tile_elemsize, 1, opt.blob_vkallocator);
-                    in_tile_gpu[7].create(tile_y1 - tile_y0, tile_x1 - tile_x0, 3, in_out_tile_elemsize, 1, opt.blob_vkallocator);
+                    { in_tile_gpu[0].create(tile_x1 - tile_x0, tile_y1 - tile_y0, 3, in_out_tile_elemsize, 1, opt.blob_vkallocator); if(in_tile_gpu[0].empty()) throw SrNativeError(-100,"tile/strip allocation failed; reduce tile size or input MP threshold"); }
+                    { in_tile_gpu[1].create(tile_x1 - tile_x0, tile_y1 - tile_y0, 3, in_out_tile_elemsize, 1, opt.blob_vkallocator); if(in_tile_gpu[1].empty()) throw SrNativeError(-100,"tile/strip allocation failed; reduce tile size or input MP threshold"); }
+                    { in_tile_gpu[2].create(tile_x1 - tile_x0, tile_y1 - tile_y0, 3, in_out_tile_elemsize, 1, opt.blob_vkallocator); if(in_tile_gpu[2].empty()) throw SrNativeError(-100,"tile/strip allocation failed; reduce tile size or input MP threshold"); }
+                    { in_tile_gpu[3].create(tile_x1 - tile_x0, tile_y1 - tile_y0, 3, in_out_tile_elemsize, 1, opt.blob_vkallocator); if(in_tile_gpu[3].empty()) throw SrNativeError(-100,"tile/strip allocation failed; reduce tile size or input MP threshold"); }
+                    { in_tile_gpu[4].create(tile_y1 - tile_y0, tile_x1 - tile_x0, 3, in_out_tile_elemsize, 1, opt.blob_vkallocator); if(in_tile_gpu[4].empty()) throw SrNativeError(-100,"tile/strip allocation failed; reduce tile size or input MP threshold"); }
+                    { in_tile_gpu[5].create(tile_y1 - tile_y0, tile_x1 - tile_x0, 3, in_out_tile_elemsize, 1, opt.blob_vkallocator); if(in_tile_gpu[5].empty()) throw SrNativeError(-100,"tile/strip allocation failed; reduce tile size or input MP threshold"); }
+                    { in_tile_gpu[6].create(tile_y1 - tile_y0, tile_x1 - tile_x0, 3, in_out_tile_elemsize, 1, opt.blob_vkallocator); if(in_tile_gpu[6].empty()) throw SrNativeError(-100,"tile/strip allocation failed; reduce tile size or input MP threshold"); }
+                    { in_tile_gpu[7].create(tile_y1 - tile_y0, tile_x1 - tile_x0, 3, in_out_tile_elemsize, 1, opt.blob_vkallocator); if(in_tile_gpu[7].empty()) throw SrNativeError(-100,"tile/strip allocation failed; reduce tile size or input MP threshold"); }
 
                     if (channels == 4)
                     {
-                        in_alpha_tile_gpu.create(tile_w_nopad, tile_h_nopad, 1, in_out_tile_elemsize, 1, opt.blob_vkallocator);
+                        { in_alpha_tile_gpu.create(tile_w_nopad, tile_h_nopad, 1, in_out_tile_elemsize, 1, opt.blob_vkallocator); if(in_alpha_tile_gpu.empty()) throw SrNativeError(-100,"tile/strip allocation failed; reduce tile size or input MP threshold"); }
                     }
 
                     std::vector<ncnn::VkMat> bindings(10);
@@ -1533,20 +1548,20 @@ int RealCUGAN::process_se_stage0(const ncnn::Mat& inimage, const std::vector<std
                     ex.set_workspace_vkallocator(opt.blob_vkallocator);
                     ex.set_staging_vkallocator(opt.staging_vkallocator);
 
-                    ex.input("in0", in_tile_gpu[ti]);
+                    srCheck(ex.input("in0", in_tile_gpu[ti]), "network input/extract");
 
                     for (size_t i = 0; i < names.size(); i++)
                     {
                         ncnn::VkMat feat;
                         cache.load(yi, xi, ti, names[i], feat);
 
-                        ex.input(names[i].c_str(), feat);
+                        srCheck(ex.input(names[i].c_str(), feat), "network input/extract");
                     }
 
                     for (size_t i = 0; i < outnames.size(); i++)
                     {
                         ncnn::VkMat feat;
-                        ex.extract(outnames[i].c_str(), feat, cmd);
+                        srCheck(ex.extract(outnames[i].c_str(), feat, cmd), "network input/extract");
 
                         cache.save(yi, xi, ti, outnames[i], feat);
                     }
@@ -1564,11 +1579,11 @@ int RealCUGAN::process_se_stage0(const ncnn::Mat& inimage, const std::vector<std
                     int tile_y0 = yi * TILE_SIZE_Y - prepadding;
                     int tile_y1 = std::min((yi + 1) * TILE_SIZE_Y, h) + prepadding_bottom;
 
-                    in_tile_gpu.create(tile_x1 - tile_x0, tile_y1 - tile_y0, 3, in_out_tile_elemsize, 1, opt.blob_vkallocator);
+                    { in_tile_gpu.create(tile_x1 - tile_x0, tile_y1 - tile_y0, 3, in_out_tile_elemsize, 1, opt.blob_vkallocator); if(in_tile_gpu.empty()) throw SrNativeError(-100,"tile/strip allocation failed; reduce tile size or input MP threshold"); }
 
                     if (channels == 4)
                     {
-                        in_alpha_tile_gpu.create(tile_w_nopad, tile_h_nopad, 1, in_out_tile_elemsize, 1, opt.blob_vkallocator);
+                        { in_alpha_tile_gpu.create(tile_w_nopad, tile_h_nopad, 1, in_out_tile_elemsize, 1, opt.blob_vkallocator); if(in_alpha_tile_gpu.empty()) throw SrNativeError(-100,"tile/strip allocation failed; reduce tile size or input MP threshold"); }
                     }
 
                     std::vector<ncnn::VkMat> bindings(3);
@@ -1607,20 +1622,20 @@ int RealCUGAN::process_se_stage0(const ncnn::Mat& inimage, const std::vector<std
                     ex.set_workspace_vkallocator(opt.blob_vkallocator);
                     ex.set_staging_vkallocator(opt.staging_vkallocator);
 
-                    ex.input("in0", in_tile_gpu);
+                    srCheck(ex.input("in0", in_tile_gpu), "network input/extract");
 
                     for (size_t i = 0; i < names.size(); i++)
                     {
                         ncnn::VkMat feat;
                         cache.load(yi, xi, 0, names[i], feat);
 
-                        ex.input(names[i].c_str(), feat);
+                        srCheck(ex.input(names[i].c_str(), feat), "network input/extract");
                     }
 
                     for (size_t i = 0; i < outnames.size(); i++)
                     {
                         ncnn::VkMat feat;
-                        ex.extract(outnames[i].c_str(), feat, cmd);
+                        srCheck(ex.extract(outnames[i].c_str(), feat, cmd), "network input/extract");
 
                         cache.save(yi, xi, 0, outnames[i], feat);
                     }
@@ -1629,12 +1644,12 @@ int RealCUGAN::process_se_stage0(const ncnn::Mat& inimage, const std::vector<std
 
             if (xtiles > 1)
             {
-                cmd.submit_and_wait();
+                srCheck(cmd.submit_and_wait(), "Vulkan submit");
                 cmd.reset();
             }
         }
 
-        cmd.submit_and_wait();
+        srCheck(cmd.submit_and_wait(), "Vulkan submit");
         cmd.reset();
     }
 
@@ -1686,16 +1701,20 @@ int RealCUGAN::process_se_stage2(const ncnn::Mat& inimage, const std::vector<std
             {
 #if _WIN32
                 in = ncnn::Mat::from_pixels(pixeldata + in_tile_y0 * w * channels, ncnn::Mat::PIXEL_BGR2RGB, w, (in_tile_y1 - in_tile_y0));
+                if(in.empty()) throw SrNativeError(-100,"input strip allocation failed; lower input MP threshold");
 #else
                 in = ncnn::Mat::from_pixels(pixeldata + in_tile_y0 * w * channels, ncnn::Mat::PIXEL_RGB, w, (in_tile_y1 - in_tile_y0));
+                if(in.empty()) throw SrNativeError(-100,"input strip allocation failed; lower input MP threshold");
 #endif
             }
             if (channels == 4)
             {
 #if _WIN32
                 in = ncnn::Mat::from_pixels(pixeldata + in_tile_y0 * w * channels, ncnn::Mat::PIXEL_BGRA2RGBA, w, (in_tile_y1 - in_tile_y0));
+                if(in.empty()) throw SrNativeError(-100,"input strip allocation failed; lower input MP threshold");
 #else
                 in = ncnn::Mat::from_pixels(pixeldata + in_tile_y0 * w * channels, ncnn::Mat::PIXEL_RGBA, w, (in_tile_y1 - in_tile_y0));
+                if(in.empty()) throw SrNativeError(-100,"input strip allocation failed; lower input MP threshold");
 #endif
             }
         }
@@ -1709,7 +1728,7 @@ int RealCUGAN::process_se_stage2(const ncnn::Mat& inimage, const std::vector<std
 
             if (xtiles > 1)
             {
-                cmd.submit_and_wait();
+                srCheck(cmd.submit_and_wait(), "Vulkan submit");
                 cmd.reset();
             }
         }
@@ -1720,15 +1739,16 @@ int RealCUGAN::process_se_stage2(const ncnn::Mat& inimage, const std::vector<std
         ncnn::VkMat out_gpu;
         if (opt.use_fp16_storage && opt.use_int8_storage)
         {
-            out_gpu.create(w * scale, (out_tile_y1 - out_tile_y0) * scale, (size_t)channels, 1, opt.blob_vkallocator);
+            { out_gpu.create(w * scale, (out_tile_y1 - out_tile_y0) * scale, (size_t)channels, 1, opt.blob_vkallocator); if(out_gpu.empty()) throw SrNativeError(-100,"tile/strip allocation failed; reduce tile size or input MP threshold"); }
         }
         else
         {
-            out_gpu.create(w * scale, (out_tile_y1 - out_tile_y0) * scale, channels, (size_t)4u, 1, opt.blob_vkallocator);
+            { out_gpu.create(w * scale, (out_tile_y1 - out_tile_y0) * scale, channels, (size_t)4u, 1, opt.blob_vkallocator); if(out_gpu.empty()) throw SrNativeError(-100,"tile/strip allocation failed; reduce tile size or input MP threshold"); }
         }
 
         for (int xi = 0; xi < xtiles; xi++)
         {
+            srTileCheckpoint();
             const int tile_w_nopad = std::min((xi + 1) * TILE_SIZE_X, w) - xi * TILE_SIZE_X;
 
             int prepadding_right = prepadding;
@@ -1753,18 +1773,18 @@ int RealCUGAN::process_se_stage2(const ncnn::Mat& inimage, const std::vector<std
                     int tile_y0 = yi * TILE_SIZE_Y - prepadding;
                     int tile_y1 = std::min((yi + 1) * TILE_SIZE_Y, h) + prepadding_bottom;
 
-                    in_tile_gpu[0].create(tile_x1 - tile_x0, tile_y1 - tile_y0, 3, in_out_tile_elemsize, 1, opt.blob_vkallocator);
-                    in_tile_gpu[1].create(tile_x1 - tile_x0, tile_y1 - tile_y0, 3, in_out_tile_elemsize, 1, opt.blob_vkallocator);
-                    in_tile_gpu[2].create(tile_x1 - tile_x0, tile_y1 - tile_y0, 3, in_out_tile_elemsize, 1, opt.blob_vkallocator);
-                    in_tile_gpu[3].create(tile_x1 - tile_x0, tile_y1 - tile_y0, 3, in_out_tile_elemsize, 1, opt.blob_vkallocator);
-                    in_tile_gpu[4].create(tile_y1 - tile_y0, tile_x1 - tile_x0, 3, in_out_tile_elemsize, 1, opt.blob_vkallocator);
-                    in_tile_gpu[5].create(tile_y1 - tile_y0, tile_x1 - tile_x0, 3, in_out_tile_elemsize, 1, opt.blob_vkallocator);
-                    in_tile_gpu[6].create(tile_y1 - tile_y0, tile_x1 - tile_x0, 3, in_out_tile_elemsize, 1, opt.blob_vkallocator);
-                    in_tile_gpu[7].create(tile_y1 - tile_y0, tile_x1 - tile_x0, 3, in_out_tile_elemsize, 1, opt.blob_vkallocator);
+                    { in_tile_gpu[0].create(tile_x1 - tile_x0, tile_y1 - tile_y0, 3, in_out_tile_elemsize, 1, opt.blob_vkallocator); if(in_tile_gpu[0].empty()) throw SrNativeError(-100,"tile/strip allocation failed; reduce tile size or input MP threshold"); }
+                    { in_tile_gpu[1].create(tile_x1 - tile_x0, tile_y1 - tile_y0, 3, in_out_tile_elemsize, 1, opt.blob_vkallocator); if(in_tile_gpu[1].empty()) throw SrNativeError(-100,"tile/strip allocation failed; reduce tile size or input MP threshold"); }
+                    { in_tile_gpu[2].create(tile_x1 - tile_x0, tile_y1 - tile_y0, 3, in_out_tile_elemsize, 1, opt.blob_vkallocator); if(in_tile_gpu[2].empty()) throw SrNativeError(-100,"tile/strip allocation failed; reduce tile size or input MP threshold"); }
+                    { in_tile_gpu[3].create(tile_x1 - tile_x0, tile_y1 - tile_y0, 3, in_out_tile_elemsize, 1, opt.blob_vkallocator); if(in_tile_gpu[3].empty()) throw SrNativeError(-100,"tile/strip allocation failed; reduce tile size or input MP threshold"); }
+                    { in_tile_gpu[4].create(tile_y1 - tile_y0, tile_x1 - tile_x0, 3, in_out_tile_elemsize, 1, opt.blob_vkallocator); if(in_tile_gpu[4].empty()) throw SrNativeError(-100,"tile/strip allocation failed; reduce tile size or input MP threshold"); }
+                    { in_tile_gpu[5].create(tile_y1 - tile_y0, tile_x1 - tile_x0, 3, in_out_tile_elemsize, 1, opt.blob_vkallocator); if(in_tile_gpu[5].empty()) throw SrNativeError(-100,"tile/strip allocation failed; reduce tile size or input MP threshold"); }
+                    { in_tile_gpu[6].create(tile_y1 - tile_y0, tile_x1 - tile_x0, 3, in_out_tile_elemsize, 1, opt.blob_vkallocator); if(in_tile_gpu[6].empty()) throw SrNativeError(-100,"tile/strip allocation failed; reduce tile size or input MP threshold"); }
+                    { in_tile_gpu[7].create(tile_y1 - tile_y0, tile_x1 - tile_x0, 3, in_out_tile_elemsize, 1, opt.blob_vkallocator); if(in_tile_gpu[7].empty()) throw SrNativeError(-100,"tile/strip allocation failed; reduce tile size or input MP threshold"); }
 
                     if (channels == 4)
                     {
-                        in_alpha_tile_gpu.create(tile_w_nopad, tile_h_nopad, 1, in_out_tile_elemsize, 1, opt.blob_vkallocator);
+                        { in_alpha_tile_gpu.create(tile_w_nopad, tile_h_nopad, 1, in_out_tile_elemsize, 1, opt.blob_vkallocator); if(in_alpha_tile_gpu.empty()) throw SrNativeError(-100,"tile/strip allocation failed; reduce tile size or input MP threshold"); }
                     }
 
                     std::vector<ncnn::VkMat> bindings(10);
@@ -1812,17 +1832,17 @@ int RealCUGAN::process_se_stage2(const ncnn::Mat& inimage, const std::vector<std
                     ex.set_workspace_vkallocator(opt.blob_vkallocator);
                     ex.set_staging_vkallocator(opt.staging_vkallocator);
 
-                    ex.input("in0", in_tile_gpu[ti]);
+                    srCheck(ex.input("in0", in_tile_gpu[ti]), "network input/extract");
 
                     for (size_t i = 0; i < names.size(); i++)
                     {
                         ncnn::VkMat feat;
                         cache.load(yi, xi, ti, names[i], feat);
 
-                        ex.input(names[i].c_str(), feat);
+                        srCheck(ex.input(names[i].c_str(), feat), "network input/extract");
                     }
 
-                    ex.extract("out0", out_tile_gpu[ti], cmd);
+                    srCheck(ex.extract("out0", out_tile_gpu[ti], cmd), "network input/extract");
                 }
 
                 ncnn::VkMat out_alpha_tile_gpu;
@@ -1934,11 +1954,11 @@ int RealCUGAN::process_se_stage2(const ncnn::Mat& inimage, const std::vector<std
                     int tile_y0 = yi * TILE_SIZE_Y - prepadding;
                     int tile_y1 = std::min((yi + 1) * TILE_SIZE_Y, h) + prepadding_bottom;
 
-                    in_tile_gpu.create(tile_x1 - tile_x0, tile_y1 - tile_y0, 3, in_out_tile_elemsize, 1, opt.blob_vkallocator);
+                    { in_tile_gpu.create(tile_x1 - tile_x0, tile_y1 - tile_y0, 3, in_out_tile_elemsize, 1, opt.blob_vkallocator); if(in_tile_gpu.empty()) throw SrNativeError(-100,"tile/strip allocation failed; reduce tile size or input MP threshold"); }
 
                     if (channels == 4)
                     {
-                        in_alpha_tile_gpu.create(tile_w_nopad, tile_h_nopad, 1, in_out_tile_elemsize, 1, opt.blob_vkallocator);
+                        { in_alpha_tile_gpu.create(tile_w_nopad, tile_h_nopad, 1, in_out_tile_elemsize, 1, opt.blob_vkallocator); if(in_alpha_tile_gpu.empty()) throw SrNativeError(-100,"tile/strip allocation failed; reduce tile size or input MP threshold"); }
                     }
 
                     std::vector<ncnn::VkMat> bindings(3);
@@ -1978,17 +1998,17 @@ int RealCUGAN::process_se_stage2(const ncnn::Mat& inimage, const std::vector<std
                     ex.set_workspace_vkallocator(opt.blob_vkallocator);
                     ex.set_staging_vkallocator(opt.staging_vkallocator);
 
-                    ex.input("in0", in_tile_gpu);
+                    srCheck(ex.input("in0", in_tile_gpu), "network input/extract");
 
                     for (size_t i = 0; i < names.size(); i++)
                     {
                         ncnn::VkMat feat;
                         cache.load(yi, xi, 0, names[i], feat);
 
-                        ex.input(names[i].c_str(), feat);
+                        srCheck(ex.input(names[i].c_str(), feat), "network input/extract");
                     }
 
-                    ex.extract("out0", out_tile_gpu, cmd);
+                    srCheck(ex.extract("out0", out_tile_gpu, cmd), "network input/extract");
                 }
 
                 ncnn::VkMat out_alpha_tile_gpu;
@@ -2077,7 +2097,7 @@ int RealCUGAN::process_se_stage2(const ncnn::Mat& inimage, const std::vector<std
 
             if (xtiles > 1)
             {
-                cmd.submit_and_wait();
+                srCheck(cmd.submit_and_wait(), "Vulkan submit");
                 cmd.reset();
             }
         }
@@ -2093,7 +2113,7 @@ int RealCUGAN::process_se_stage2(const ncnn::Mat& inimage, const std::vector<std
 
             cmd.record_clone(out_gpu, out, opt);
 
-            cmd.submit_and_wait();
+            srCheck(cmd.submit_and_wait(), "Vulkan submit");
 
             if (!(opt.use_fp16_storage && opt.use_int8_storage))
             {
@@ -2139,6 +2159,7 @@ int RealCUGAN::process_se_sync_gap(const ncnn::Mat& inimage, const std::vector<s
     {
         for (int xi = 0; xi < xtiles; xi++)
         {
+            srTileCheckpoint();
             {
                 for (size_t i = 0; i < names.size(); i++)
                 {
@@ -2180,7 +2201,7 @@ int RealCUGAN::process_se_sync_gap(const ncnn::Mat& inimage, const std::vector<s
         }
     }
 
-    cmd.submit_and_wait();
+    srCheck(cmd.submit_and_wait(), "Vulkan submit");
     cmd.reset();
 
     // global average
@@ -2232,7 +2253,7 @@ int RealCUGAN::process_se_sync_gap(const ncnn::Mat& inimage, const std::vector<s
         }
     }
 
-    cmd.submit_and_wait();
+    srCheck(cmd.submit_and_wait(), "Vulkan submit");
     cmd.reset();
 
 
@@ -2240,6 +2261,7 @@ int RealCUGAN::process_se_sync_gap(const ncnn::Mat& inimage, const std::vector<s
     {
         for (int xi = 0; xi < xtiles; xi++)
         {
+            srTileCheckpoint();
             {
                 for (size_t i = 0; i < names.size(); i++)
                 {
@@ -2307,16 +2329,20 @@ int RealCUGAN::process_se_very_rough_stage0(const ncnn::Mat& inimage, const std:
             {
 #if _WIN32
                 in = ncnn::Mat::from_pixels(pixeldata + in_tile_y0 * w * channels, ncnn::Mat::PIXEL_BGR2RGB, w, (in_tile_y1 - in_tile_y0));
+                if(in.empty()) throw SrNativeError(-100,"input strip allocation failed; lower input MP threshold");
 #else
                 in = ncnn::Mat::from_pixels(pixeldata + in_tile_y0 * w * channels, ncnn::Mat::PIXEL_RGB, w, (in_tile_y1 - in_tile_y0));
+                if(in.empty()) throw SrNativeError(-100,"input strip allocation failed; lower input MP threshold");
 #endif
             }
             if (channels == 4)
             {
 #if _WIN32
                 in = ncnn::Mat::from_pixels(pixeldata + in_tile_y0 * w * channels, ncnn::Mat::PIXEL_BGRA2RGBA, w, (in_tile_y1 - in_tile_y0));
+                if(in.empty()) throw SrNativeError(-100,"input strip allocation failed; lower input MP threshold");
 #else
                 in = ncnn::Mat::from_pixels(pixeldata + in_tile_y0 * w * channels, ncnn::Mat::PIXEL_RGBA, w, (in_tile_y1 - in_tile_y0));
+                if(in.empty()) throw SrNativeError(-100,"input strip allocation failed; lower input MP threshold");
 #endif
             }
         }
@@ -2330,7 +2356,7 @@ int RealCUGAN::process_se_very_rough_stage0(const ncnn::Mat& inimage, const std:
 
             if (xtiles > 1)
             {
-                cmd.submit_and_wait();
+                srCheck(cmd.submit_and_wait(), "Vulkan submit");
                 cmd.reset();
             }
         }
@@ -2341,15 +2367,16 @@ int RealCUGAN::process_se_very_rough_stage0(const ncnn::Mat& inimage, const std:
         ncnn::VkMat out_gpu;
         if (opt.use_fp16_storage && opt.use_int8_storage)
         {
-            out_gpu.create(w * scale, (out_tile_y1 - out_tile_y0) * scale, (size_t)channels, 1, opt.blob_vkallocator);
+            { out_gpu.create(w * scale, (out_tile_y1 - out_tile_y0) * scale, (size_t)channels, 1, opt.blob_vkallocator); if(out_gpu.empty()) throw SrNativeError(-100,"tile/strip allocation failed; reduce tile size or input MP threshold"); }
         }
         else
         {
-            out_gpu.create(w * scale, (out_tile_y1 - out_tile_y0) * scale, channels, (size_t)4u, 1, opt.blob_vkallocator);
+            { out_gpu.create(w * scale, (out_tile_y1 - out_tile_y0) * scale, channels, (size_t)4u, 1, opt.blob_vkallocator); if(out_gpu.empty()) throw SrNativeError(-100,"tile/strip allocation failed; reduce tile size or input MP threshold"); }
         }
 
         for (int xi = 0; xi + 2 < xtiles; xi += 3)
         {
+            srTileCheckpoint();
             const int tile_w_nopad = std::min((xi + 1) * TILE_SIZE_X, w) - xi * TILE_SIZE_X;
 
             int prepadding_right = prepadding;
@@ -2374,18 +2401,18 @@ int RealCUGAN::process_se_very_rough_stage0(const ncnn::Mat& inimage, const std:
                     int tile_y0 = yi * TILE_SIZE_Y - prepadding;
                     int tile_y1 = std::min((yi + 1) * TILE_SIZE_Y, h) + prepadding_bottom;
 
-                    in_tile_gpu[0].create(tile_x1 - tile_x0, tile_y1 - tile_y0, 3, in_out_tile_elemsize, 1, opt.blob_vkallocator);
-                    in_tile_gpu[1].create(tile_x1 - tile_x0, tile_y1 - tile_y0, 3, in_out_tile_elemsize, 1, opt.blob_vkallocator);
-                    in_tile_gpu[2].create(tile_x1 - tile_x0, tile_y1 - tile_y0, 3, in_out_tile_elemsize, 1, opt.blob_vkallocator);
-                    in_tile_gpu[3].create(tile_x1 - tile_x0, tile_y1 - tile_y0, 3, in_out_tile_elemsize, 1, opt.blob_vkallocator);
-                    in_tile_gpu[4].create(tile_y1 - tile_y0, tile_x1 - tile_x0, 3, in_out_tile_elemsize, 1, opt.blob_vkallocator);
-                    in_tile_gpu[5].create(tile_y1 - tile_y0, tile_x1 - tile_x0, 3, in_out_tile_elemsize, 1, opt.blob_vkallocator);
-                    in_tile_gpu[6].create(tile_y1 - tile_y0, tile_x1 - tile_x0, 3, in_out_tile_elemsize, 1, opt.blob_vkallocator);
-                    in_tile_gpu[7].create(tile_y1 - tile_y0, tile_x1 - tile_x0, 3, in_out_tile_elemsize, 1, opt.blob_vkallocator);
+                    { in_tile_gpu[0].create(tile_x1 - tile_x0, tile_y1 - tile_y0, 3, in_out_tile_elemsize, 1, opt.blob_vkallocator); if(in_tile_gpu[0].empty()) throw SrNativeError(-100,"tile/strip allocation failed; reduce tile size or input MP threshold"); }
+                    { in_tile_gpu[1].create(tile_x1 - tile_x0, tile_y1 - tile_y0, 3, in_out_tile_elemsize, 1, opt.blob_vkallocator); if(in_tile_gpu[1].empty()) throw SrNativeError(-100,"tile/strip allocation failed; reduce tile size or input MP threshold"); }
+                    { in_tile_gpu[2].create(tile_x1 - tile_x0, tile_y1 - tile_y0, 3, in_out_tile_elemsize, 1, opt.blob_vkallocator); if(in_tile_gpu[2].empty()) throw SrNativeError(-100,"tile/strip allocation failed; reduce tile size or input MP threshold"); }
+                    { in_tile_gpu[3].create(tile_x1 - tile_x0, tile_y1 - tile_y0, 3, in_out_tile_elemsize, 1, opt.blob_vkallocator); if(in_tile_gpu[3].empty()) throw SrNativeError(-100,"tile/strip allocation failed; reduce tile size or input MP threshold"); }
+                    { in_tile_gpu[4].create(tile_y1 - tile_y0, tile_x1 - tile_x0, 3, in_out_tile_elemsize, 1, opt.blob_vkallocator); if(in_tile_gpu[4].empty()) throw SrNativeError(-100,"tile/strip allocation failed; reduce tile size or input MP threshold"); }
+                    { in_tile_gpu[5].create(tile_y1 - tile_y0, tile_x1 - tile_x0, 3, in_out_tile_elemsize, 1, opt.blob_vkallocator); if(in_tile_gpu[5].empty()) throw SrNativeError(-100,"tile/strip allocation failed; reduce tile size or input MP threshold"); }
+                    { in_tile_gpu[6].create(tile_y1 - tile_y0, tile_x1 - tile_x0, 3, in_out_tile_elemsize, 1, opt.blob_vkallocator); if(in_tile_gpu[6].empty()) throw SrNativeError(-100,"tile/strip allocation failed; reduce tile size or input MP threshold"); }
+                    { in_tile_gpu[7].create(tile_y1 - tile_y0, tile_x1 - tile_x0, 3, in_out_tile_elemsize, 1, opt.blob_vkallocator); if(in_tile_gpu[7].empty()) throw SrNativeError(-100,"tile/strip allocation failed; reduce tile size or input MP threshold"); }
 
                     if (channels == 4)
                     {
-                        in_alpha_tile_gpu.create(tile_w_nopad, tile_h_nopad, 1, in_out_tile_elemsize, 1, opt.blob_vkallocator);
+                        { in_alpha_tile_gpu.create(tile_w_nopad, tile_h_nopad, 1, in_out_tile_elemsize, 1, opt.blob_vkallocator); if(in_alpha_tile_gpu.empty()) throw SrNativeError(-100,"tile/strip allocation failed; reduce tile size or input MP threshold"); }
                     }
 
                     std::vector<ncnn::VkMat> bindings(10);
@@ -2433,20 +2460,20 @@ int RealCUGAN::process_se_very_rough_stage0(const ncnn::Mat& inimage, const std:
                     ex.set_workspace_vkallocator(opt.blob_vkallocator);
                     ex.set_staging_vkallocator(opt.staging_vkallocator);
 
-                    ex.input("in0", in_tile_gpu[ti]);
+                    srCheck(ex.input("in0", in_tile_gpu[ti]), "network input/extract");
 
                     for (size_t i = 0; i < names.size(); i++)
                     {
                         ncnn::VkMat feat;
                         cache.load(yi, xi, ti, names[i], feat);
 
-                        ex.input(names[i].c_str(), feat);
+                        srCheck(ex.input(names[i].c_str(), feat), "network input/extract");
                     }
 
                     for (size_t i = 0; i < outnames.size(); i++)
                     {
                         ncnn::VkMat feat;
-                        ex.extract(outnames[i].c_str(), feat, cmd);
+                        srCheck(ex.extract(outnames[i].c_str(), feat, cmd), "network input/extract");
 
                         cache.save(yi, xi, ti, outnames[i], feat);
                     }
@@ -2464,11 +2491,11 @@ int RealCUGAN::process_se_very_rough_stage0(const ncnn::Mat& inimage, const std:
                     int tile_y0 = yi * TILE_SIZE_Y - prepadding;
                     int tile_y1 = std::min((yi + 1) * TILE_SIZE_Y, h) + prepadding_bottom;
 
-                    in_tile_gpu.create(tile_x1 - tile_x0, tile_y1 - tile_y0, 3, in_out_tile_elemsize, 1, opt.blob_vkallocator);
+                    { in_tile_gpu.create(tile_x1 - tile_x0, tile_y1 - tile_y0, 3, in_out_tile_elemsize, 1, opt.blob_vkallocator); if(in_tile_gpu.empty()) throw SrNativeError(-100,"tile/strip allocation failed; reduce tile size or input MP threshold"); }
 
                     if (channels == 4)
                     {
-                        in_alpha_tile_gpu.create(tile_w_nopad, tile_h_nopad, 1, in_out_tile_elemsize, 1, opt.blob_vkallocator);
+                        { in_alpha_tile_gpu.create(tile_w_nopad, tile_h_nopad, 1, in_out_tile_elemsize, 1, opt.blob_vkallocator); if(in_alpha_tile_gpu.empty()) throw SrNativeError(-100,"tile/strip allocation failed; reduce tile size or input MP threshold"); }
                     }
 
                     std::vector<ncnn::VkMat> bindings(3);
@@ -2507,20 +2534,20 @@ int RealCUGAN::process_se_very_rough_stage0(const ncnn::Mat& inimage, const std:
                     ex.set_workspace_vkallocator(opt.blob_vkallocator);
                     ex.set_staging_vkallocator(opt.staging_vkallocator);
 
-                    ex.input("in0", in_tile_gpu);
+                    srCheck(ex.input("in0", in_tile_gpu), "network input/extract");
 
                     for (size_t i = 0; i < names.size(); i++)
                     {
                         ncnn::VkMat feat;
                         cache.load(yi, xi, 0, names[i], feat);
 
-                        ex.input(names[i].c_str(), feat);
+                        srCheck(ex.input(names[i].c_str(), feat), "network input/extract");
                     }
 
                     for (size_t i = 0; i < outnames.size(); i++)
                     {
                         ncnn::VkMat feat;
-                        ex.extract(outnames[i].c_str(), feat, cmd);
+                        srCheck(ex.extract(outnames[i].c_str(), feat, cmd), "network input/extract");
 
                         cache.save(yi, xi, 0, outnames[i], feat);
                     }
@@ -2529,12 +2556,12 @@ int RealCUGAN::process_se_very_rough_stage0(const ncnn::Mat& inimage, const std:
 
             if (xtiles > 1)
             {
-                cmd.submit_and_wait();
+                srCheck(cmd.submit_and_wait(), "Vulkan submit");
                 cmd.reset();
             }
         }
 
-        cmd.submit_and_wait();
+        srCheck(cmd.submit_and_wait(), "Vulkan submit");
         cmd.reset();
     }
 
@@ -2560,6 +2587,7 @@ int RealCUGAN::process_se_very_rough_sync_gap(const ncnn::Mat& inimage, const st
     {
         for (int xi = 0; xi + 2 < xtiles; xi += 3)
         {
+            srTileCheckpoint();
             {
                 for (size_t i = 0; i < names.size(); i++)
                 {
@@ -2601,7 +2629,7 @@ int RealCUGAN::process_se_very_rough_sync_gap(const ncnn::Mat& inimage, const st
         }
     }
 
-    cmd.submit_and_wait();
+    srCheck(cmd.submit_and_wait(), "Vulkan submit");
     cmd.reset();
 
     // global average
@@ -2653,7 +2681,7 @@ int RealCUGAN::process_se_very_rough_sync_gap(const ncnn::Mat& inimage, const st
         }
     }
 
-    cmd.submit_and_wait();
+    srCheck(cmd.submit_and_wait(), "Vulkan submit");
     cmd.reset();
 
 
@@ -2661,6 +2689,7 @@ int RealCUGAN::process_se_very_rough_sync_gap(const ncnn::Mat& inimage, const st
     {
         for (int xi = 0; xi + 2 < xtiles; xi += 3)
         {
+            srTileCheckpoint();
             {
                 for (size_t i = 0; i < names.size(); i++)
                 {
@@ -2734,6 +2763,7 @@ int RealCUGAN::process_cpu_se_stage0(const ncnn::Mat& inimage, const std::vector
 
         for (int xi = 0; xi < xtiles; xi++)
         {
+            srTileCheckpoint();
             const int tile_w_nopad = std::min((xi + 1) * TILE_SIZE_X, w) - xi * TILE_SIZE_X;
 
             int prepadding_right = prepadding;
@@ -2756,16 +2786,20 @@ int RealCUGAN::process_cpu_se_stage0(const ncnn::Mat& inimage, const std::vector
                 {
 #if _WIN32
                     in = ncnn::Mat::from_pixels_roi(pixeldata, ncnn::Mat::PIXEL_BGR2RGB, w, h, in_tile_x0, in_tile_y0, in_tile_x1 - in_tile_x0, in_tile_y1 - in_tile_y0);
+                    if(in.empty()) throw SrNativeError(-100,"input strip allocation failed; lower input MP threshold");
 #else
                     in = ncnn::Mat::from_pixels_roi(pixeldata, ncnn::Mat::PIXEL_RGB, w, h, in_tile_x0, in_tile_y0, in_tile_x1 - in_tile_x0, in_tile_y1 - in_tile_y0);
+                    if(in.empty()) throw SrNativeError(-100,"input strip allocation failed; lower input MP threshold");
 #endif
                 }
                 if (channels == 4)
                 {
 #if _WIN32
                     in = ncnn::Mat::from_pixels_roi(pixeldata, ncnn::Mat::PIXEL_BGRA2RGBA, w, h, in_tile_x0, in_tile_y0, in_tile_x1 - in_tile_x0, in_tile_y1 - in_tile_y0);
+                    if(in.empty()) throw SrNativeError(-100,"input strip allocation failed; lower input MP threshold");
 #else
                     in = ncnn::Mat::from_pixels_roi(pixeldata, ncnn::Mat::PIXEL_RGBA, w, h, in_tile_x0, in_tile_y0, in_tile_x1 - in_tile_x0, in_tile_y1 - in_tile_y0);
+                    if(in.empty()) throw SrNativeError(-100,"input strip allocation failed; lower input MP threshold");
 #endif
                 }
             }
@@ -2778,7 +2812,7 @@ int RealCUGAN::process_cpu_se_stage0(const ncnn::Mat& inimage, const std::vector
                 ncnn::Mat in_tile[8];
                 ncnn::Mat in_alpha_tile;
                 {
-                    in_tile[0].create(in.w, in.h, 3);
+                    { in_tile[0].create(in.w, in.h, 3); if(in_tile[0].empty()) throw SrNativeError(-100,"tile/strip allocation failed; reduce tile size or input MP threshold"); }
                     for (int q = 0; q < 3; q++)
                     {
                         const float* ptr = in.channel(q);
@@ -2813,13 +2847,13 @@ int RealCUGAN::process_cpu_se_stage0(const ncnn::Mat& inimage, const std::vector
 
                 // the other 7 directions
                 {
-                    in_tile[1].create(in_tile[0].w, in_tile[0].h, 3);
-                    in_tile[2].create(in_tile[0].w, in_tile[0].h, 3);
-                    in_tile[3].create(in_tile[0].w, in_tile[0].h, 3);
-                    in_tile[4].create(in_tile[0].h, in_tile[0].w, 3);
-                    in_tile[5].create(in_tile[0].h, in_tile[0].w, 3);
-                    in_tile[6].create(in_tile[0].h, in_tile[0].w, 3);
-                    in_tile[7].create(in_tile[0].h, in_tile[0].w, 3);
+                    { in_tile[1].create(in_tile[0].w, in_tile[0].h, 3); if(in_tile[1].empty()) throw SrNativeError(-100,"tile/strip allocation failed; reduce tile size or input MP threshold"); }
+                    { in_tile[2].create(in_tile[0].w, in_tile[0].h, 3); if(in_tile[2].empty()) throw SrNativeError(-100,"tile/strip allocation failed; reduce tile size or input MP threshold"); }
+                    { in_tile[3].create(in_tile[0].w, in_tile[0].h, 3); if(in_tile[3].empty()) throw SrNativeError(-100,"tile/strip allocation failed; reduce tile size or input MP threshold"); }
+                    { in_tile[4].create(in_tile[0].h, in_tile[0].w, 3); if(in_tile[4].empty()) throw SrNativeError(-100,"tile/strip allocation failed; reduce tile size or input MP threshold"); }
+                    { in_tile[5].create(in_tile[0].h, in_tile[0].w, 3); if(in_tile[5].empty()) throw SrNativeError(-100,"tile/strip allocation failed; reduce tile size or input MP threshold"); }
+                    { in_tile[6].create(in_tile[0].h, in_tile[0].w, 3); if(in_tile[6].empty()) throw SrNativeError(-100,"tile/strip allocation failed; reduce tile size or input MP threshold"); }
+                    { in_tile[7].create(in_tile[0].h, in_tile[0].w, 3); if(in_tile[7].empty()) throw SrNativeError(-100,"tile/strip allocation failed; reduce tile size or input MP threshold"); }
 
                     for (int q = 0; q < 3; q++)
                     {
@@ -2866,20 +2900,20 @@ int RealCUGAN::process_cpu_se_stage0(const ncnn::Mat& inimage, const std::vector
                 {
                     ncnn::Extractor ex = net.create_extractor();
 
-                    ex.input("in0", in_tile[ti]);
+                    srCheck(ex.input("in0", in_tile[ti]), "network input/extract");
 
                     for (size_t i = 0; i < names.size(); i++)
                     {
                         ncnn::Mat feat;
                         cache.load(yi, xi, ti, names[i], feat);
 
-                        ex.input(names[i].c_str(), feat);
+                        srCheck(ex.input(names[i].c_str(), feat), "network input/extract");
                     }
 
                     for (size_t i = 0; i < outnames.size(); i++)
                     {
                         ncnn::Mat feat;
-                        ex.extract(outnames[i].c_str(), feat);
+                        srCheck(ex.extract(outnames[i].c_str(), feat), "network input/extract");
 
                         cache.save(yi, xi, ti, outnames[i], feat);
                     }
@@ -2891,7 +2925,7 @@ int RealCUGAN::process_cpu_se_stage0(const ncnn::Mat& inimage, const std::vector
                 ncnn::Mat in_tile;
                 ncnn::Mat in_alpha_tile;
                 {
-                    in_tile.create(in.w, in.h, 3);
+                    { in_tile.create(in.w, in.h, 3); if(in_tile.empty()) throw SrNativeError(-100,"tile/strip allocation failed; reduce tile size or input MP threshold"); }
                     for (int q = 0; q < 3; q++)
                     {
                         const float* ptr = in.channel(q);
@@ -2924,20 +2958,20 @@ int RealCUGAN::process_cpu_se_stage0(const ncnn::Mat& inimage, const std::vector
                 {
                     ncnn::Extractor ex = net.create_extractor();
 
-                    ex.input("in0", in_tile);
+                    srCheck(ex.input("in0", in_tile), "network input/extract");
 
                     for (size_t i = 0; i < names.size(); i++)
                     {
                         ncnn::Mat feat;
                         cache.load(yi, xi, 0, names[i], feat);
 
-                        ex.input(names[i].c_str(), feat);
+                        srCheck(ex.input(names[i].c_str(), feat), "network input/extract");
                     }
 
                     for (size_t i = 0; i < outnames.size(); i++)
                     {
                         ncnn::Mat feat;
-                        ex.extract(outnames[i].c_str(), feat);
+                        srCheck(ex.extract(outnames[i].c_str(), feat), "network input/extract");
 
                         cache.save(yi, xi, 0, outnames[i], feat);
                     }
@@ -2984,6 +3018,7 @@ int RealCUGAN::process_cpu_se_stage2(const ncnn::Mat& inimage, const std::vector
 
         for (int xi = 0; xi < xtiles; xi++)
         {
+            srTileCheckpoint();
             const int tile_w_nopad = std::min((xi + 1) * TILE_SIZE_X, w) - xi * TILE_SIZE_X;
 
             int prepadding_right = prepadding;
@@ -3006,16 +3041,20 @@ int RealCUGAN::process_cpu_se_stage2(const ncnn::Mat& inimage, const std::vector
                 {
 #if _WIN32
                     in = ncnn::Mat::from_pixels_roi(pixeldata, ncnn::Mat::PIXEL_BGR2RGB, w, h, in_tile_x0, in_tile_y0, in_tile_x1 - in_tile_x0, in_tile_y1 - in_tile_y0);
+                    if(in.empty()) throw SrNativeError(-100,"input strip allocation failed; lower input MP threshold");
 #else
                     in = ncnn::Mat::from_pixels_roi(pixeldata, ncnn::Mat::PIXEL_RGB, w, h, in_tile_x0, in_tile_y0, in_tile_x1 - in_tile_x0, in_tile_y1 - in_tile_y0);
+                    if(in.empty()) throw SrNativeError(-100,"input strip allocation failed; lower input MP threshold");
 #endif
                 }
                 if (channels == 4)
                 {
 #if _WIN32
                     in = ncnn::Mat::from_pixels_roi(pixeldata, ncnn::Mat::PIXEL_BGRA2RGBA, w, h, in_tile_x0, in_tile_y0, in_tile_x1 - in_tile_x0, in_tile_y1 - in_tile_y0);
+                    if(in.empty()) throw SrNativeError(-100,"input strip allocation failed; lower input MP threshold");
 #else
                     in = ncnn::Mat::from_pixels_roi(pixeldata, ncnn::Mat::PIXEL_RGBA, w, h, in_tile_x0, in_tile_y0, in_tile_x1 - in_tile_x0, in_tile_y1 - in_tile_y0);
+                    if(in.empty()) throw SrNativeError(-100,"input strip allocation failed; lower input MP threshold");
 #endif
                 }
             }
@@ -3028,7 +3067,7 @@ int RealCUGAN::process_cpu_se_stage2(const ncnn::Mat& inimage, const std::vector
                 ncnn::Mat in_tile[8];
                 ncnn::Mat in_alpha_tile;
                 {
-                    in_tile[0].create(in.w, in.h, 3);
+                    { in_tile[0].create(in.w, in.h, 3); if(in_tile[0].empty()) throw SrNativeError(-100,"tile/strip allocation failed; reduce tile size or input MP threshold"); }
                     for (int q = 0; q < 3; q++)
                     {
                         const float* ptr = in.channel(q);
@@ -3063,13 +3102,13 @@ int RealCUGAN::process_cpu_se_stage2(const ncnn::Mat& inimage, const std::vector
 
                 // the other 7 directions
                 {
-                    in_tile[1].create(in_tile[0].w, in_tile[0].h, 3);
-                    in_tile[2].create(in_tile[0].w, in_tile[0].h, 3);
-                    in_tile[3].create(in_tile[0].w, in_tile[0].h, 3);
-                    in_tile[4].create(in_tile[0].h, in_tile[0].w, 3);
-                    in_tile[5].create(in_tile[0].h, in_tile[0].w, 3);
-                    in_tile[6].create(in_tile[0].h, in_tile[0].w, 3);
-                    in_tile[7].create(in_tile[0].h, in_tile[0].w, 3);
+                    { in_tile[1].create(in_tile[0].w, in_tile[0].h, 3); if(in_tile[1].empty()) throw SrNativeError(-100,"tile/strip allocation failed; reduce tile size or input MP threshold"); }
+                    { in_tile[2].create(in_tile[0].w, in_tile[0].h, 3); if(in_tile[2].empty()) throw SrNativeError(-100,"tile/strip allocation failed; reduce tile size or input MP threshold"); }
+                    { in_tile[3].create(in_tile[0].w, in_tile[0].h, 3); if(in_tile[3].empty()) throw SrNativeError(-100,"tile/strip allocation failed; reduce tile size or input MP threshold"); }
+                    { in_tile[4].create(in_tile[0].h, in_tile[0].w, 3); if(in_tile[4].empty()) throw SrNativeError(-100,"tile/strip allocation failed; reduce tile size or input MP threshold"); }
+                    { in_tile[5].create(in_tile[0].h, in_tile[0].w, 3); if(in_tile[5].empty()) throw SrNativeError(-100,"tile/strip allocation failed; reduce tile size or input MP threshold"); }
+                    { in_tile[6].create(in_tile[0].h, in_tile[0].w, 3); if(in_tile[6].empty()) throw SrNativeError(-100,"tile/strip allocation failed; reduce tile size or input MP threshold"); }
+                    { in_tile[7].create(in_tile[0].h, in_tile[0].w, 3); if(in_tile[7].empty()) throw SrNativeError(-100,"tile/strip allocation failed; reduce tile size or input MP threshold"); }
 
                     for (int q = 0; q < 3; q++)
                     {
@@ -3116,17 +3155,17 @@ int RealCUGAN::process_cpu_se_stage2(const ncnn::Mat& inimage, const std::vector
                 {
                     ncnn::Extractor ex = net.create_extractor();
 
-                    ex.input("in0", in_tile[ti]);
+                    srCheck(ex.input("in0", in_tile[ti]), "network input/extract");
 
                     for (size_t i = 0; i < names.size(); i++)
                     {
                         ncnn::Mat feat;
                         cache.load(yi, xi, ti, names[i], feat);
 
-                        ex.input(names[i].c_str(), feat);
+                        srCheck(ex.input(names[i].c_str(), feat), "network input/extract");
                     }
 
-                    ex.extract("out0", out_tile[ti]);
+                    srCheck(ex.extract("out0", out_tile[ti]), "network input/extract");
                 }
 
                 ncnn::Mat out_alpha_tile;
@@ -3152,7 +3191,7 @@ int RealCUGAN::process_cpu_se_stage2(const ncnn::Mat& inimage, const std::vector
 
                 // postproc and merge alpha
                 {
-                    out.create(tile_w_nopad * scale, tile_h_nopad * scale, channels);
+                    { out.create(tile_w_nopad * scale, tile_h_nopad * scale, channels); if(out.empty()) throw SrNativeError(-100,"tile/strip allocation failed; reduce tile size or input MP threshold"); }
                     if (scale == 4)
                     {
                         for (int q = 0; q < 3; q++)
@@ -3237,7 +3276,7 @@ int RealCUGAN::process_cpu_se_stage2(const ncnn::Mat& inimage, const std::vector
                 ncnn::Mat in_tile;
                 ncnn::Mat in_alpha_tile;
                 {
-                    in_tile.create(in.w, in.h, 3);
+                    { in_tile.create(in.w, in.h, 3); if(in_tile.empty()) throw SrNativeError(-100,"tile/strip allocation failed; reduce tile size or input MP threshold"); }
                     for (int q = 0; q < 3; q++)
                     {
                         const float* ptr = in.channel(q);
@@ -3272,17 +3311,17 @@ int RealCUGAN::process_cpu_se_stage2(const ncnn::Mat& inimage, const std::vector
                 {
                     ncnn::Extractor ex = net.create_extractor();
 
-                    ex.input("in0", in_tile);
+                    srCheck(ex.input("in0", in_tile), "network input/extract");
 
                     for (size_t i = 0; i < names.size(); i++)
                     {
                         ncnn::Mat feat;
                         cache.load(yi, xi, 0, names[i], feat);
 
-                        ex.input(names[i].c_str(), feat);
+                        srCheck(ex.input(names[i].c_str(), feat), "network input/extract");
                     }
 
-                    ex.extract("out0", out_tile);
+                    srCheck(ex.extract("out0", out_tile), "network input/extract");
                 }
 
                 ncnn::Mat out_alpha_tile;
@@ -3308,7 +3347,7 @@ int RealCUGAN::process_cpu_se_stage2(const ncnn::Mat& inimage, const std::vector
 
                 // postproc and merge alpha
                 {
-                    out.create(tile_w_nopad * scale, tile_h_nopad * scale, channels);
+                    { out.create(tile_w_nopad * scale, tile_h_nopad * scale, channels); if(out.empty()) throw SrNativeError(-100,"tile/strip allocation failed; reduce tile size or input MP threshold"); }
                     if (scale == 4)
                     {
                         for (int q = 0; q < 3; q++)
@@ -3397,6 +3436,7 @@ int RealCUGAN::process_cpu_se_sync_gap(const ncnn::Mat& inimage, const std::vect
     {
         for (int xi = 0; xi < xtiles; xi++)
         {
+            srTileCheckpoint();
             {
                 for (size_t i = 0; i < names.size(); i++)
                 {
@@ -3459,6 +3499,7 @@ int RealCUGAN::process_cpu_se_sync_gap(const ncnn::Mat& inimage, const std::vect
     {
         for (int xi = 0; xi < xtiles; xi++)
         {
+            srTileCheckpoint();
             {
                 for (size_t i = 0; i < names.size(); i++)
                 {
@@ -3516,6 +3557,7 @@ int RealCUGAN::process_cpu_se_very_rough_stage0(const ncnn::Mat& inimage, const 
 
         for (int xi = 0; xi + 2 < xtiles; xi += 3)
         {
+            srTileCheckpoint();
             const int tile_w_nopad = std::min((xi + 1) * TILE_SIZE_X, w) - xi * TILE_SIZE_X;
 
             int prepadding_right = prepadding;
@@ -3538,16 +3580,20 @@ int RealCUGAN::process_cpu_se_very_rough_stage0(const ncnn::Mat& inimage, const 
                 {
 #if _WIN32
                     in = ncnn::Mat::from_pixels_roi(pixeldata, ncnn::Mat::PIXEL_BGR2RGB, w, h, in_tile_x0, in_tile_y0, in_tile_x1 - in_tile_x0, in_tile_y1 - in_tile_y0);
+                    if(in.empty()) throw SrNativeError(-100,"input strip allocation failed; lower input MP threshold");
 #else
                     in = ncnn::Mat::from_pixels_roi(pixeldata, ncnn::Mat::PIXEL_RGB, w, h, in_tile_x0, in_tile_y0, in_tile_x1 - in_tile_x0, in_tile_y1 - in_tile_y0);
+                    if(in.empty()) throw SrNativeError(-100,"input strip allocation failed; lower input MP threshold");
 #endif
                 }
                 if (channels == 4)
                 {
 #if _WIN32
                     in = ncnn::Mat::from_pixels_roi(pixeldata, ncnn::Mat::PIXEL_BGRA2RGBA, w, h, in_tile_x0, in_tile_y0, in_tile_x1 - in_tile_x0, in_tile_y1 - in_tile_y0);
+                    if(in.empty()) throw SrNativeError(-100,"input strip allocation failed; lower input MP threshold");
 #else
                     in = ncnn::Mat::from_pixels_roi(pixeldata, ncnn::Mat::PIXEL_RGBA, w, h, in_tile_x0, in_tile_y0, in_tile_x1 - in_tile_x0, in_tile_y1 - in_tile_y0);
+                    if(in.empty()) throw SrNativeError(-100,"input strip allocation failed; lower input MP threshold");
 #endif
                 }
             }
@@ -3560,7 +3606,7 @@ int RealCUGAN::process_cpu_se_very_rough_stage0(const ncnn::Mat& inimage, const 
                 ncnn::Mat in_tile[8];
                 ncnn::Mat in_alpha_tile;
                 {
-                    in_tile[0].create(in.w, in.h, 3);
+                    { in_tile[0].create(in.w, in.h, 3); if(in_tile[0].empty()) throw SrNativeError(-100,"tile/strip allocation failed; reduce tile size or input MP threshold"); }
                     for (int q = 0; q < 3; q++)
                     {
                         const float* ptr = in.channel(q);
@@ -3595,13 +3641,13 @@ int RealCUGAN::process_cpu_se_very_rough_stage0(const ncnn::Mat& inimage, const 
 
                 // the other 7 directions
                 {
-                    in_tile[1].create(in_tile[0].w, in_tile[0].h, 3);
-                    in_tile[2].create(in_tile[0].w, in_tile[0].h, 3);
-                    in_tile[3].create(in_tile[0].w, in_tile[0].h, 3);
-                    in_tile[4].create(in_tile[0].h, in_tile[0].w, 3);
-                    in_tile[5].create(in_tile[0].h, in_tile[0].w, 3);
-                    in_tile[6].create(in_tile[0].h, in_tile[0].w, 3);
-                    in_tile[7].create(in_tile[0].h, in_tile[0].w, 3);
+                    { in_tile[1].create(in_tile[0].w, in_tile[0].h, 3); if(in_tile[1].empty()) throw SrNativeError(-100,"tile/strip allocation failed; reduce tile size or input MP threshold"); }
+                    { in_tile[2].create(in_tile[0].w, in_tile[0].h, 3); if(in_tile[2].empty()) throw SrNativeError(-100,"tile/strip allocation failed; reduce tile size or input MP threshold"); }
+                    { in_tile[3].create(in_tile[0].w, in_tile[0].h, 3); if(in_tile[3].empty()) throw SrNativeError(-100,"tile/strip allocation failed; reduce tile size or input MP threshold"); }
+                    { in_tile[4].create(in_tile[0].h, in_tile[0].w, 3); if(in_tile[4].empty()) throw SrNativeError(-100,"tile/strip allocation failed; reduce tile size or input MP threshold"); }
+                    { in_tile[5].create(in_tile[0].h, in_tile[0].w, 3); if(in_tile[5].empty()) throw SrNativeError(-100,"tile/strip allocation failed; reduce tile size or input MP threshold"); }
+                    { in_tile[6].create(in_tile[0].h, in_tile[0].w, 3); if(in_tile[6].empty()) throw SrNativeError(-100,"tile/strip allocation failed; reduce tile size or input MP threshold"); }
+                    { in_tile[7].create(in_tile[0].h, in_tile[0].w, 3); if(in_tile[7].empty()) throw SrNativeError(-100,"tile/strip allocation failed; reduce tile size or input MP threshold"); }
 
                     for (int q = 0; q < 3; q++)
                     {
@@ -3648,20 +3694,20 @@ int RealCUGAN::process_cpu_se_very_rough_stage0(const ncnn::Mat& inimage, const 
                 {
                     ncnn::Extractor ex = net.create_extractor();
 
-                    ex.input("in0", in_tile[ti]);
+                    srCheck(ex.input("in0", in_tile[ti]), "network input/extract");
 
                     for (size_t i = 0; i < names.size(); i++)
                     {
                         ncnn::Mat feat;
                         cache.load(yi, xi, ti, names[i], feat);
 
-                        ex.input(names[i].c_str(), feat);
+                        srCheck(ex.input(names[i].c_str(), feat), "network input/extract");
                     }
 
                     for (size_t i = 0; i < outnames.size(); i++)
                     {
                         ncnn::Mat feat;
-                        ex.extract(outnames[i].c_str(), feat);
+                        srCheck(ex.extract(outnames[i].c_str(), feat), "network input/extract");
 
                         cache.save(yi, xi, ti, outnames[i], feat);
                     }
@@ -3673,7 +3719,7 @@ int RealCUGAN::process_cpu_se_very_rough_stage0(const ncnn::Mat& inimage, const 
                 ncnn::Mat in_tile;
                 ncnn::Mat in_alpha_tile;
                 {
-                    in_tile.create(in.w, in.h, 3);
+                    { in_tile.create(in.w, in.h, 3); if(in_tile.empty()) throw SrNativeError(-100,"tile/strip allocation failed; reduce tile size or input MP threshold"); }
                     for (int q = 0; q < 3; q++)
                     {
                         const float* ptr = in.channel(q);
@@ -3706,20 +3752,20 @@ int RealCUGAN::process_cpu_se_very_rough_stage0(const ncnn::Mat& inimage, const 
                 {
                     ncnn::Extractor ex = net.create_extractor();
 
-                    ex.input("in0", in_tile);
+                    srCheck(ex.input("in0", in_tile), "network input/extract");
 
                     for (size_t i = 0; i < names.size(); i++)
                     {
                         ncnn::Mat feat;
                         cache.load(yi, xi, 0, names[i], feat);
 
-                        ex.input(names[i].c_str(), feat);
+                        srCheck(ex.input(names[i].c_str(), feat), "network input/extract");
                     }
 
                     for (size_t i = 0; i < outnames.size(); i++)
                     {
                         ncnn::Mat feat;
-                        ex.extract(outnames[i].c_str(), feat);
+                        srCheck(ex.extract(outnames[i].c_str(), feat), "network input/extract");
 
                         cache.save(yi, xi, 0, outnames[i], feat);
                     }
@@ -3752,6 +3798,7 @@ int RealCUGAN::process_cpu_se_very_rough_sync_gap(const ncnn::Mat& inimage, cons
     {
         for (int xi = 0; xi + 2 < xtiles; xi += 3)
         {
+            srTileCheckpoint();
             {
                 for (size_t i = 0; i < names.size(); i++)
                 {
@@ -3814,6 +3861,7 @@ int RealCUGAN::process_cpu_se_very_rough_sync_gap(const ncnn::Mat& inimage, cons
     {
         for (int xi = 0; xi + 2 < xtiles; xi += 3)
         {
+            srTileCheckpoint();
             {
                 for (size_t i = 0; i < names.size(); i++)
                 {

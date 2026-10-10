@@ -103,7 +103,7 @@ object SrBenchInput {
         }
     }
 
-    /** IEEE754 半精度编码（与 `AnimeJaNaiEngine` 同一实现） */
+    /** IEEE754 半精度编码 */
     private fun floatToHalf(f: Float): Short {
         val bits = java.lang.Float.floatToIntBits(f)
         val sign = (bits ushr 16) and 0x8000

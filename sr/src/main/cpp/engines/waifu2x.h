@@ -24,6 +24,9 @@ public:
 
     int process(const ncnn::Mat& inimage, ncnn::Mat& outimage) const;
 
+    int process_same(const ncnn::Mat& inimage, ncnn::Mat& outimage) const;
+    bool same_padding = false;
+
     int process_cpu(const ncnn::Mat& inimage, ncnn::Mat& outimage) const;
 
 public:
@@ -39,6 +42,9 @@ public:
      * ⚠️ 只开 `use_fp16_storage` 只省显存；**开了本项才是真的用 FP16 算**（移动 GPU 上明显更快）。
      */
     bool fp16_arithmetic = false;
+    bool storage_fp16 = true;
+    bool effective_fp16 = false;
+    bool effective_arithmetic = false;
 
     /**
      * 通用 ncnn 模型的**输入/输出 blob 名**（默认 = nihui waifu2x 那套）。

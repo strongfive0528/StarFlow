@@ -10,42 +10,15 @@ import java.io.File
 import java.nio.ByteBuffer
 import java.nio.ByteOrder
 
-/**
- * **ncnn 超分模型真机基准**（开发者工具，**不是产品路径**）。
- *
- * 与 [SrBenchmark]（ONNX/AnimeJaNai 那套）并列：那个跑 `files/sr/` 下的 `.onnx`，
- * 这个跑 `files/sr/` 下的 `.param` + `.bin`（ncnn 族，即产品实际用的那一套）。
- *
- * ## 怎么跑（debug 包有效；正式包 `BuildConfig.DEBUG` 直接 return）
- * ```
- * adb shell am broadcast -a com.moe.starflow.SR_BENCH --ez ncnn true
- * adb shell am broadcast -a com.moe.starflow.SR_BENCH --ez ncnn true --es model nose
- * adb shell am broadcast -a com.moe.starflow.SR_BENCH --ez ncnn true --ei tile 128 --ez fp16a true
- * adb shell cat /storage/emulated/0/Android/data/com.moe.starflow/files/sr_ncnn_benchmark.txt
- * ```
- *
- * ## 为什么直接调 `SrNcnnNative` 而不是 `NcnnSrEngine`
- * 为了把**三段耗时拆开**：`NcnnSrEngine.upscale()` 一次调用里混着
- * ① Bitmap→紧凑 RGB8 拆包 ② native `process()`（真正的推理）③ 紧凑 RGB8→Bitmap 回填。
- * 混在一起只有一个总数，出了"慢"又要靠猜。这里三段各自计时，但**参数与产品完全一致**
- * （同一份清单、同一个 `create()`/`process()` 签名、同一个 tile/精度）。
- *
- * ## 两套参数（`mode`）
- * | mode | 含义 |
- * |---|---|
- * | `theirs`（默认） | 尽可能贴参照项目 `mihon_img_upscale` 的设置：tile **128**、fp16 算术 **off**、通用族 padding 按它的 `w2xExModel`（W2xEX/sudo/AnimeJaNai = **10**、SPAN = **24**） |
- * | `ours` | 按我们自己清单里的 `prepad`（W2xEX = 16 等），其余同上 |
- *
- * ⚠️ 单位口径：报告里 `ms/MP` 按**输出**百万像素算，方便不同模型/不同倍率横向比。
- */
+/** Developer-only ncnn benchmark. Uses current model contracts and 1.5MP input compression. */
 object SrNcnnBench {
 
     private const val TAG = "SrNcnnBench"
     private const val WARMUP = 1
     private const val RUNS = 3
 
-    /** 4x 模型在同样输入下输出是 2x 的 4 倍 → 先把输入压到输出 ≤ ~10MP，避免基准本身 OOM。 */
-    private const val MAX_OUTPUT_PIXELS = 10_000_000L
+    /** Same default input threshold as the reader. */
+    private const val MAX_INPUT_PIXELS = 1_500_000L
 
     private data class Entry(
         val key: String,
@@ -59,6 +32,7 @@ object SrNcnnBench {
         val blobIn: String,
         val blobOut: String,
         val bgr: Boolean,
+        val syncGap: Int,
     )
 
     fun run(
@@ -66,7 +40,7 @@ object SrNcnnBench {
         filter: String? = null,
         tile: Int = 128,
         fp16a: Boolean = false,
-        mode: String = "theirs",
+        mode: String = "ours",
         threads: Int = srThreads(),
         /** true = 把每一档的产物 PNG 存到 files/sr_bench_out/（偏移/接缝实测用） */
         saveOutput: Boolean = false,
@@ -138,10 +112,10 @@ object SrNcnnBench {
         saveOutput: Boolean,
         app: android.content.Context,
     ): String {
-        val prepad = if (mode == "ours") e.prepad else theirPadding(e)
-        // 4x：把源图压到输出 ≤ MAX_OUTPUT_PIXELS，否则基准自己就先 OOM 了
+        val prepad = e.prepad
+        // Apply the default input compression threshold.
         var src = src0
-        val cap = MAX_OUTPUT_PIXELS / (e.scale.toLong() * e.scale.toLong())
+        val cap = MAX_INPUT_PIXELS
         if (src0.width.toLong() * src0.height.toLong() > cap) {
             val k = kotlin.math.sqrt(cap.toDouble() / (src0.width.toLong() * src0.height.toLong()))
             val w = (src0.width * k).toInt().coerceAtLeast(16)
@@ -158,7 +132,7 @@ object SrNcnnBench {
             e.family,
             File(srDir, e.paramName).absolutePath,
             File(srDir, e.binName).absolutePath,
-            0, threads, fp16a, e.blobIn, e.blobOut, e.bgr,
+            0, threads, fp16a, e.blobIn, e.blobOut, e.bgr, 0, e.syncGap,
         )
         val loadMs = SystemClock.elapsedRealtime() - tLoad
         if (handle == 0L) {
@@ -296,7 +270,6 @@ object SrNcnnBench {
             val fam = o.optString("family", "")
             val familyInt = when (fam) {
                 "waifu2x" -> SrNcnnNative.FAMILY_WAIFU2X
-                "srmd" -> SrNcnnNative.FAMILY_SRMD
                 "realcugan" -> SrNcnnNative.FAMILY_REALCUGAN
                 "realesrgan" -> SrNcnnNative.FAMILY_REALESRGAN
                 "generic" -> SrNcnnNative.FAMILY_GENERIC
@@ -326,6 +299,7 @@ object SrNcnnBench {
                 blobIn = o.optString("blobIn", ""),
                 blobOut = o.optString("blobOut", ""),
                 bgr = o.optBoolean("bgr", false),
+                syncGap = o.optInt("syncGap",3),
             )
         }
         return list
@@ -335,9 +309,5 @@ object SrNcnnBench {
      * 参照项目 `Waifu2x.w2xExModel(...)` 的 padding（它的通用族默认 **10**，SPAN 显式 **24**）。
      * 其余族（waifu2x/srmd/realcugan/realesrgan）按我们清单里的值 —— 那是 nihui 各工具的口径。
      */
-    private fun theirPadding(e: Entry): Int = when {
-        e.key.contains("SPAN") -> 24
-        e.key.contains("W2XEX") || e.key.contains("SUDO") -> 10
-        else -> e.prepad
-    }
+    private fun theirPadding(e: Entry): Int = e.prepad
 }

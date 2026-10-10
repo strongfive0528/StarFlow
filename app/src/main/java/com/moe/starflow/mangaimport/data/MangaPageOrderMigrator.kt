@@ -1,6 +1,7 @@
 package com.moe.starflow.mangaimport.data
 
 import android.content.Context
+import androidx.room.withTransaction
 import com.moe.starflow.data.TranslationHistoryDatabase
 import com.moe.starflow.mangaimport.reader.ReaderPageSource
 import com.moe.starflow.utils.LogCollector
@@ -39,8 +40,11 @@ object MangaPageOrderMigrator {
             val db = TranslationHistoryDatabase.getInstance(context)
             val dao = db.importedPageTranslationDao()
             val rows = runCatching { dao.countFor(manga.id, manga.translationKey) }.getOrDefault(0)
+            db.withTransaction {
+                db.importedPageSrDao().rekeyPages(manga.id,manga.translationKey,plan)
+                if(rows>0)dao.rekeyPages(manga.id,manga.translationKey,plan)
+            }
             if (rows > 0) {
-                dao.rekeyPages(manga.id, manga.translationKey, plan)
                 rekeyed = true
                 LogCollector.w(
                     TAG,
