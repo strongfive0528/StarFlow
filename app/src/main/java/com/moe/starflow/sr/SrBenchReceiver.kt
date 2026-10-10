@@ -26,6 +26,20 @@ class SrBenchReceiver : BroadcastReceiver() {
         if (intent.action != ACTION) return
         val filter = intent.getStringExtra("model")
         val threads = intent.getIntExtra("threads", srThreads())
+        // `--ez ncnn true` → 跑 **ncnn 族**（`.param`/`.bin`，产品实际用的那套）；
+        // 不带就走原来的 ONNX 族基准。两者的报告文件也是分开的两份。
+        if (intent.getBooleanExtra("ncnn", false)) {
+            SrNcnnBench.run(
+                context = context.applicationContext,
+                filter = filter,
+                tile = intent.getIntExtra("tile", 128),
+                fp16a = intent.getBooleanExtra("fp16a", false),
+                mode = intent.getStringExtra("mode") ?: "theirs",
+                threads = threads,
+                saveOutput = intent.getBooleanExtra("save", false),
+            )
+            return
+        }
         SrBenchmark.run(context.applicationContext, filter, threads)
     }
 

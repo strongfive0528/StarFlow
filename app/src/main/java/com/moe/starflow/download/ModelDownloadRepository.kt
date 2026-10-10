@@ -457,22 +457,15 @@ class ModelDownloadRepository private constructor(private val context: Context) 
         ModelKey.PP_OCR_V5_DET, ModelKey.PP_OCR_V5_REC_ZH,
         ModelKey.PP_OCR_V5_REC_EN, ModelKey.PP_OCR_V5_REC_KO,
         ModelKey.PP_OCR_V5_REC_RU -> File(context.getExternalFilesDir(null), "ppocrv5")
+        ModelKey.SR_REALCUGAN_SE, ModelKey.SR_REALCUGAN_PRO, ModelKey.SR_REALCUGAN_NOSE, ModelKey.SR_WAIFU2X_CUNET,
+        ModelKey.SR_WAIFU2X_FAST, ModelKey.SR_REALESRGAN, ModelKey.SR_W2XEX_UNIVERSAL_FAST,
+        ModelKey.SR_W2XEX_OMNI_MINI_V2, ModelKey.SR_W2XEX_PHOTO_SMALL, ModelKey.SR_SUDO_ULTRA_COMPACT,
+        ModelKey.SR_SPAN_NOMOSUNI ->
+            File(context.getExternalFilesDir(null), "sr")
         // 超分模型统一放一个目录；文件名自带族/档位前缀，不会重名
         // （⚠️ waifu2x 的 cunet 与 upconv_7 上游**同名**，清单里的 file_name 必须各自改名）
         // ⚠️ 5 族 13 档（upconv_7 有动漫/照片两套权重，各两档），别漏也别重复
         //（这里曾把 SR_W2X_UP7_PHOTO_M1 写了两次、看起来像"少了一档"）
-        ModelKey.SR_W2X_UP7_ANIME_M1, ModelKey.SR_W2X_UP7_ANIME_N2,
-        ModelKey.SR_W2X_UP7_PHOTO_M1, ModelKey.SR_W2X_UP7_PHOTO_N2,
-        ModelKey.SR_W2X_CUNET_M1, ModelKey.SR_W2X_CUNET_N1, ModelKey.SR_W2X_CUNET_N2,
-        ModelKey.SR_SRMD_X2, ModelKey.SR_SRMD_NF_X2,
-        ModelKey.SR_REALCUGAN_NODENOISE, ModelKey.SR_REALCUGAN_CONSERVATIVE,
-        ModelKey.SR_REALCUGAN_DENOISE3X,
-        ModelKey.SR_REALCUGAN_PRO_NODENOISE, ModelKey.SR_REALCUGAN_PRO_CONSERVATIVE,
-        ModelKey.SR_REALCUGAN_NOSE_2X, ModelKey.SR_REALESRGAN_V3_ANIME_X2,
-        ModelKey.SR_SPAN_UNI_2X, ModelKey.SR_SUDO_UC_2X,
-        ModelKey.SR_W2XEX_UNIVERSAL_FAST_2X, ModelKey.SR_W2XEX_OMNI_MINI_V2_2X, ModelKey.SR_W2XEX_PHOTO_SMALL_2X,
-        ModelKey.SR_REALCUGAN_PRO_DENOISE3X,
-        ModelKey.SR_REALESRGAN_ANIME6B -> File(context.getExternalFilesDir(null), "sr")
     }
 
     /** 返回某模型的目标文件（未下载时为期望路径；仅用于已完整下载的模型）。 */

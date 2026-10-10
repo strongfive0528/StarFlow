@@ -65,6 +65,13 @@ object SrBenchInput {
         bmp = null
     }
 
+    /**
+     * 测试图本体（未回收的共享实例，**调用方不得 recycle**）。
+     * 给 `SrNcnnBench`（ncnn 族基准）用：那套要走 Bitmap→RGB8 的完整产品路径，
+     * 而不是 [fill] 的 NCHW 缓冲。
+     */
+    fun bitmap(): Bitmap? = bmp
+
     fun align16(v: Int) = ((v + 15) / 16) * 16
 
     /** 按当前测试图填 NCHW 缓冲（fp32 / fp16）。 */

@@ -11,17 +11,15 @@ import org.robolectric.RobolectricTestRunner
 import org.robolectric.RuntimeEnvironment
 
 /**
- * `sr_active_model_key` 的档位迁移守卫（2026-10）。
+ * `sr_active_model_key` 的档位迁移守卫。
  *
- * 历史：upconv_7 一度从 4 档（动漫 M1/N3 + 照片 M1/N3）精简为 2 档（动漫 M1/N2），照片族整体下架。
- * **2026-10 底照片族回归**（用户口径：「upconv 的照片放大模型丢了，需要加到 upconv 的那个组里面，
- * 一共 4 个才对」）——现在是「动漫 M1/N2 + 照片 M1/N2」四档。
+ * 历史：档位改过两轮（upconv_7 精简、照片族下架又回归），**2026-10-10 整套换成
+ * 参照项目 `mihon_img_upscale` 的 11 档**（旧档位全部下架）。所以现在的规矩是：
  *
- * 两条不变式：
- * 1. 用户 prefs 里存着**已不存在**的档位名时，[SrModelManager.getActiveKey] 必须**就近迁移**
- *    而不是当作"未选择"（否则超分开着却没有模型，用户看到的是功能坏了）；
- * 2. **仍然存在的档位名绝不能被重定向** —— 照片键回归之后还往动漫上映射，就是
- *    "用户选了照片模型、实际跑动漫模型"的静默错误。
+ * 1. 用户 prefs 里存着**已下架**的旧档位名 → [SrModelManager.getActiveKey] 必须**就近迁移**
+ *    到语义最接近的新档位并回写，而不是当作"未选择"（否则超分开着却没有模型，用户以为功能坏了）；
+ * 2. **仍在架上的档位名绝不能被重定向**（"选了 A 却跑 B"是最难查的静默错误）；
+ * 3. 完全不认识的值仍然是「未选择」（走得通 [SrOutcome] 的 no-model 分支）。
  */
 @RunWith(RobolectricTestRunner::class)
 class SrModelKeyMigrationTest {
@@ -36,63 +34,71 @@ class SrModelKeyMigrationTest {
 
     @Test
     fun activeKeyRoundTrips() {
-        SrModelManager.setActive(prefs, ModelKey.SR_W2X_UP7_ANIME_N2)
-        assertEquals(ModelKey.SR_W2X_UP7_ANIME_N2, SrModelManager.getActiveKey(prefs))
+        SrModelManager.setActive(prefs, ModelKey.SR_REALCUGAN_SE)
+        assertEquals(ModelKey.SR_REALCUGAN_SE, SrModelManager.getActiveKey(prefs))
     }
 
-    /** 旧的「极强降噪 N3」→ 现行的「强力降噪 N2」（官方示例档），并回写 prefs。 */
+    /** 旧 upconv_7 动漫档 → 现行的 Waifu2x Fast（同一族、同一套权重）。 */
     @Test
-    fun legacyN3MigratesToN2() {
-        store("SR_W2X_UP7_ANIME_N3")
-        assertEquals(ModelKey.SR_W2X_UP7_ANIME_N2, SrModelManager.getActiveKey(prefs))
-        assertEquals(
-            "迁移结果要回写，别每次读都再迁一遍",
-            ModelKey.SR_W2X_UP7_ANIME_N2.name,
-            prefs.getString(SrModelManager.PREF_ACTIVE_KEY, null),
-        )
+    fun legacyUpconv7MigratesToWaifu2xFast() {
+        for (legacy in listOf("SR_W2X_UP7_ANIME_M1", "SR_W2X_UP7_ANIME_N2", "SR_W2X_UP7_ANIME_N3")) {
+            store(legacy)
+            assertEquals("$legacy 必须迁到 Waifu2x Fast", ModelKey.SR_WAIFU2X_FAST, SrModelManager.getActiveKey(prefs))
+            assertEquals(
+                "迁移结果要回写，别每次读都再迁一遍",
+                ModelKey.SR_WAIFU2X_FAST.name,
+                prefs.getString(SrModelManager.PREF_ACTIVE_KEY, null),
+            )
+        }
     }
 
-    /** 照片族已**回归**：两个键都是真档位，谁也不许再被重定向到动漫键。 */
+    /** 旧照片族（已整族下架）→ Waifu2x Fast（就近的同族权重）。 */
     @Test
-    fun photoKeysAreRealTiersNotAliases() {
-        store("SR_W2X_UP7_PHOTO_M1")
-        assertEquals(
-            "照片不降噪必须解析成它自己（重定向到动漫 = 用户选了照片却跑动漫）",
-            ModelKey.SR_W2X_UP7_PHOTO_M1,
-            SrModelManager.getActiveKey(prefs),
-        )
-        store("SR_W2X_UP7_PHOTO_N2")
-        assertEquals(ModelKey.SR_W2X_UP7_PHOTO_N2, SrModelManager.getActiveKey(prefs))
+    fun legacyUpconvPhotoMigratesToWaifu2xFast() {
+        for (legacy in listOf("SR_W2X_UP7_PHOTO_M1", "SR_W2X_UP7_PHOTO_N2", "SR_W2X_UP7_PHOTO_N3")) {
+            store(legacy)
+            assertEquals(ModelKey.SR_WAIFU2X_FAST, SrModelManager.getActiveKey(prefs))
+        }
     }
 
-    /** 照片族的极强降噪 N3 仍然没有 → 就近迁到同族的 N2（**不是**动漫族）。 */
+    /** 旧 Real-CUGAN 各档 → 新的 SE / Pro。 */
     @Test
-    fun legacyPhotoN3MigratesWithinTheSameFamily() {
-        store("SR_W2X_UP7_PHOTO_N3")
-        assertEquals(
-            "跨族迁移会让「照片」变成「动漫」，用户完全看不出来",
-            ModelKey.SR_W2X_UP7_PHOTO_N2,
-            SrModelManager.getActiveKey(prefs),
-        )
+    fun legacyRealCuganMigratesToSeOrPro() {
+        store("SR_REALCUGAN_NODENOISE")
+        assertEquals(ModelKey.SR_REALCUGAN_SE, SrModelManager.getActiveKey(prefs))
+        store("SR_REALCUGAN_PRO_CONSERVATIVE")
+        assertEquals(ModelKey.SR_REALCUGAN_PRO, SrModelManager.getActiveKey(prefs))
+        store("SR_REALCUGAN_NOSE_2X")
+        assertEquals(ModelKey.SR_REALCUGAN_NOSE, SrModelManager.getActiveKey(prefs))
     }
 
-    /** 完全不认识的值仍然是「未选择」（走得通 [SrOutcome] 的 no-model 分支）。 */
+    /** 旧的 SRMD / Real-ESRGAN 6B → 新集里最接近的档位。 */
+    @Test
+    fun legacySrmdAndEsrganMigrate() {
+        store("SR_SRMD_X2")
+        assertEquals(ModelKey.SR_WAIFU2X_CUNET, SrModelManager.getActiveKey(prefs))
+        store("SR_REALESRGAN_ANIME6B")
+        assertEquals(ModelKey.SR_REALESRGAN, SrModelManager.getActiveKey(prefs))
+    }
+
+    /** 完全不认识的值仍然是「未选择」。 */
     @Test
     fun unknownKeyStaysNull() {
         store("NOT_A_MODEL_KEY")
         assertNull(SrModelManager.getActiveKey(prefs))
     }
 
-    /** upconv_7 族 = **4 档**：动漫两档 + 照片两档（用户口径 2026-10）。 */
+    /** 在架档位 = 参照项目那 11 档，顺序与 `downloadinfo.json` 一致。 */
     @Test
-    fun upconvFamilyHasFourTiersTwoPerWeightSet() {
-        val up7 = SrModelManager.allKeys.filter { it.name.startsWith("SR_W2X_UP7_") }
+    fun activeCatalogIsTheReferenceProjectSet() {
         assertEquals(
             listOf(
-                ModelKey.SR_W2X_UP7_ANIME_M1, ModelKey.SR_W2X_UP7_ANIME_N2,
-                ModelKey.SR_W2X_UP7_PHOTO_M1, ModelKey.SR_W2X_UP7_PHOTO_N2,
+                ModelKey.SR_REALCUGAN_SE, ModelKey.SR_REALCUGAN_PRO, ModelKey.SR_REALCUGAN_NOSE,
+                ModelKey.SR_WAIFU2X_CUNET, ModelKey.SR_WAIFU2X_FAST, ModelKey.SR_REALESRGAN,
+                ModelKey.SR_W2XEX_UNIVERSAL_FAST, ModelKey.SR_W2XEX_OMNI_MINI_V2, ModelKey.SR_W2XEX_PHOTO_SMALL,
+                ModelKey.SR_SUDO_ULTRA_COMPACT, ModelKey.SR_SPAN_NOMOSUNI,
             ),
-            up7,
+            SrModelManager.allKeys,
         )
     }
 

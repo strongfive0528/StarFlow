@@ -197,48 +197,18 @@ class SrDisplayBaseTest {
         assertNotEquals("换模型必须重渲染", a, b)
     }
 
-    // ---------- isUsableBase：超分产物能不能当"比原图更大"的底图 ----------
-
-    /**
-     * **这就是 2026-10 真机反馈「超分显示完成但没作用」的那个算式**（纯算术，无需设备）。
-     *
-     * 链路：`SrDownscale` 把喂给模型的图压到短边 1080 → 引擎 2× → 产物宽度 = 2×feed。
-     * 只要原图宽 > 2160px，产物就**不比原图宽** → 显示侧丢弃 → 画面不变。
-     * 300 DPI 的 PDF 页正好落在这里（A4 = 2480px 宽）。
-     */
-    @Test
-    fun a4SizedPageCannotProduceAUsableBase_whileA5Can() {
-        // A4 @300dpi（PDF 栅格化的常见页）：2480×3508
-        val a4 = SrDownscale.plan(2480, 3508, SrDownscale.DEFAULT_MAX_FEED_PIXELS)
-        assertNotEquals("A4 页必须走压缩路径（否则引擎吃不下）", null, a4)
-        assertEquals("短边对齐 1080 → 宽 1080", 1080, a4!!.width)
-        assertTrue(
-            "2× 产物 2160px ≤ 原图 2480px → 不可用（这正是「记录完成但画面没变」的根因）",
-            !SrDisplayBase.isUsableBase(a4.width * 2, 2480),
-        )
-
-        // A5 @300dpi（本项目 PDF 的另一个常见页）：1746×2479
-        val a5 = SrDownscale.plan(1746, 2479, SrDownscale.DEFAULT_MAX_FEED_PIXELS)
-        assertEquals(1080, a5!!.width)
-        assertTrue(
-            "2× 产物 2160px > 原图 1746px → 可用（虽然只有 1.24×）",
-            SrDisplayBase.isUsableBase(a5.width * 2, 1746),
-        )
-
-        // 低分辨率扫描页（超分真正要服务的对象）：800×1200 → 不需要压缩
-        assertEquals("短边 ≤1080 时不压缩", null, SrDownscale.plan(800, 1200, SrDownscale.DEFAULT_MAX_FEED_PIXELS))
-        assertTrue("2× 产物 1600px > 原图 800px → 可用", SrDisplayBase.isUsableBase(800 * 2, 800))
-    }
+    // ---------- isUsableBase：只检查底图与坐标空间尺寸有效 ----------
 
     @Test
-    fun usableBase_needsStrictlyMorePixelsThanTheSource() {
-        // 恰好一样宽 = 没有更多像素 = 不可用（否则会白换一次渲染缓存 key）
-        assertTrue("1px 的差在视觉上等于没变，不算可用", !SrDisplayBase.isUsableBase(1746, 1746))
-        assertTrue(!SrDisplayBase.isUsableBase(1745, 1746))
-        assertTrue(SrDisplayBase.isUsableBase(1749, 1746))
-        // 脏数据兜底：不许因为 0 宽就判成"可用"
-        assertTrue(!SrDisplayBase.isUsableBase(0, 1746))
-        assertTrue(!SrDisplayBase.isUsableBase(2160, 0))
+    fun smallerSrOutputCanStillBeUsedAsBase() {
+        val feed = SrDownscale.plan(1729, 2367, 2_500_000L, 1.0f)!!
+        assertEquals("1MP 阈值下宽度约 854px", 854, feed.width)
+        assertEquals("1MP 阈值下高度约 1170px", 1170, feed.height)
+        val productWidth = feed.width * 2
+        assertTrue("2× 产物即使比原图窄也允许显示", productWidth < 1729 && SrDisplayBase.isUsableBase(productWidth, 1729))
+        assertTrue("等宽产物也允许显示", SrDisplayBase.isUsableBase(1729, 1729))
+        assertTrue("只拒绝无效尺寸", !SrDisplayBase.isUsableBase(0, 1729))
+        assertTrue(!SrDisplayBase.isUsableBase(1708, 0))
     }
 
     // ---------- SrSettings.KEY_AUTO（「翻译时自动超分」子开关） ----------

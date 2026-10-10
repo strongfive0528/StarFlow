@@ -40,10 +40,8 @@ import com.moe.starflow.translate.TranslationTextAPI
 import com.moe.starflow.translate.isLocalHeavyEngine
 import com.moe.starflow.sr.SrBaseKind
 import com.moe.starflow.sr.SrDisplayBase
-import com.moe.starflow.sr.SrEnhanceQueue
 import com.moe.starflow.sr.SrFailReason
 import com.moe.starflow.sr.SrModelManager
-import com.moe.starflow.sr.SrOptions
 import com.moe.starflow.sr.SrOutcome
 import com.moe.starflow.sr.SrProcessor
 import com.moe.starflow.sr.SrSettings
@@ -74,6 +72,8 @@ import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.isActive
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
+import kotlinx.coroutines.sync.Mutex
+import kotlinx.coroutines.sync.withLock
 import translationapi.TranslatorFactory
 import java.util.LinkedList
 import java.util.concurrent.ConcurrentHashMap
@@ -249,6 +249,8 @@ class ReaderTranslationController(
     /** 超分逐页记录（面板的「超分记录」列表用它）。与 [rows] 平行、互不覆盖。 */
     private val srDao = db.importedPageSrDao()
     private val srRows = MutableStateFlow<Map<Int, ImportedPageSr>>(emptyMap())
+    /** 串行化超分记录的初次载入与运行中写入，避免旧 DB 快照覆盖刚完成的页。 */
+    private val srRowsMutex = Mutex()
 
     /**
      * **超分调度队列** —— 复刻 `HaoweiLi97/mihon_img_upscale` 的 `ImageEnhancer`：
@@ -258,16 +260,30 @@ class ReaderTranslationController(
      * 原图加载 / 推理 / 落盘 / 写记录），成功后调 [onBaseChanged] 让**正在屏上的那一页就地重绑**
      * —— 这就是他们的"渐进替换"（先原图，超分完无缝换）。
      */
-    private val srQueue: SrEnhanceQueue by lazy {
-        // ⚠️ 必须用**具名参数**：构造参数最后一个是 `autoStart`，尾随 lambda 会绑到它上面
-        SrEnhanceQueue(
-            scope = scope,
-            runPage = { page ->
-                val outcome = enhancePage(page)
-                if (outcome.ok) onBaseChanged(page)
-            },
-        )
-    }
+    /**
+     * ⚠️ **这里刻意没有"翻页预加载超分队列"**（2026-10-05 用户口径）：
+     *
+     * > 「只要点击阅读器的超分按钮，就会自动向后进行超分，完全无法关闭！！阅读器的超分按钮
+     * >   应该是只对当前页生效才对。自动向后超分只存在于开启"翻译时自动超分"的情况下使用
+     * >   自动翻译或者增量翻译，或者是启动了"超分本章"。]
+     *
+     * 曾经接过 `SrEnhanceQueue`（复刻参照项目的 `preload_size`）：翻页 → 当前页 ± 3 页排进队列。
+     * 那是**错的**，而且是"关不掉"的：队列的唯一生产者是翻页，而每翻一页又排 7 页，
+     * 手动点一次超分→渲染→`notifyItemChanged` 就可能再触发一次翻页回调，于是同一批页被
+     * 反复重跑（失败页永远不会变成"已经超好了"）。真机上表现就是"点一下超分按钮，它就自己
+     * 一路超下去，退出阅读器/开面板都停不掉"。
+     *
+     * 现在**自动超分只有两个入口**，都与用户口径一一对应：
+     * | 入口 | 什么时候跑 |
+     * |---|---|
+     * | [startAutoSr] / [maybeStartAutoSr] | 「翻译时自动超分」开关开着时，**跟着翻译走**：自动模式只翻当前页 → 只超当前页；增量模式的翻译窗口往后走 → 超分也跟着往后走 |
+     * | [startSrChapterJob] | 用户显式点「超分本章」 |
+     * 手动按钮（[onSrButtonClicked]）**只跑参数里那一页**，不排任何后续页。
+     *
+     * `SrEnhanceQueue` 那个类还在（`sr/`，带 9 条纯逻辑单测），但**当前没有任何生产调用点** ——
+     * 将来要做"预加载"必须先说清触发条件与停止条件再来接，不要再挂到"翻页"上。
+     */
+
 
     private val appPrefs get() = PreferenceManager.getDefaultSharedPreferences(context)
     private val customPrefs get() = CustomPreference.getInstance(context)
@@ -488,13 +504,11 @@ class ReaderTranslationController(
                 return null
             }
             val scale = stored.width.toFloat() / spaceWidth
-            // ⚠️ 判据与**产出侧**（`SrProcessor`）同源：`SrDisplayBase.isUsableBase`。
-            //    不看"存储有没有成功"，只看"这张图是不是真的比原图大" ——
-            //    不比原图大就只会比原图糊（像素来自被压过的输入），宁可回落原图。
+            // 输出即使比原图像素尺寸小也照常显示；这里只拦截无法计算底图倍率的无效尺寸。
             if (!SrDisplayBase.isUsableBase(stored.width, spaceWidth)) {
                 LogCollector.w(
                     TAG,
-                    "超分底图不比原图大 ${stored.width}x${stored.height} vs 原图宽 $spaceWidth" +
+                    "超分底图尺寸无效 ${stored.width}x${stored.height} vs 坐标宽 $spaceWidth" +
                         " page=$pageIndex → 回落原图",
                 )
                 stored.recycle()
@@ -659,15 +673,17 @@ class ReaderTranslationController(
         // 记录同步：面板行内的「删除」要连记录一起清掉（否则删完文件还留着一行「完成」）；
         // 右下角那枚删除按钮走默认（记录退回「未超分」，面板上仍能看到"这页超过、现在没了"）。
         if (dropRecord) {
-            srRows.update { it - pageIndex }
-            runCatching { srDao.deletePage(manga.id, mangaKey, pageIndex) }
-                .onFailure { LogCollector.e(TAG, "删除超分记录失败 page=$pageIndex", it) }
+            srRowsMutex.withLock {
+                srRows.update { it - pageIndex }
+                runCatching { srDao.deletePage(manga.id, mangaKey, pageIndex) }
+                    .onFailure { LogCollector.e(TAG, "删除超分记录失败 page=$pageIndex", it) }
+                srVersion.value += 1
+            }
         } else {
             upsertSrRow(pageIndex) {
                 it.copy(state = ImportedPageSr.STATE_IDLE, failCode = null, failMessage = null)
             }
         }
-        srVersion.value += 1
         withContext(Dispatchers.Main) { if (uiAttached) onVisual() }
         LogCollector.d(TAG, "删除超分结果 page=$pageIndex ok=$deleted dropRecord=$dropRecord")
         return deleted
@@ -688,10 +704,12 @@ class ReaderTranslationController(
             srModelByPage.remove(p)
             srVisualByPage.remove(p)
         }
-        srRows.update { m -> m.filterKeys { it < chapter.startPage || it > chapter.endPage } }
-        srVersion.value += 1
-        runCatching { srDao.deletePageRange(manga.id, mangaKey, chapter.startPage, chapter.endPage) }
-            .onFailure { LogCollector.e(TAG, "清除本章超分记录失败 ch=$chapterIndex", it) }
+        srRowsMutex.withLock {
+            srRows.update { m -> m.filterKeys { it < chapter.startPage || it > chapter.endPage } }
+            runCatching { srDao.deletePageRange(manga.id, mangaKey, chapter.startPage, chapter.endPage) }
+                .onFailure { LogCollector.e(TAG, "清除本章超分记录失败 ch=$chapterIndex", it) }
+            srVersion.value += 1
+        }
         evictAllRendersForChapter()
         LogCollector.d(
             TAG,
@@ -795,20 +813,22 @@ class ReaderTranslationController(
      * 就让用户看不到超分结果。
      */
     private suspend fun upsertSrRow(page: Int, transform: (ImportedPageSr) -> ImportedPageSr) {
-        val old = srRows.value[page] ?: ImportedPageSr(
-            mangaId = manga.id, pageIndex = page,
-            state = ImportedPageSr.STATE_IDLE, mangaKey = mangaKey,
-        )
-        val row = transform(old).copy(
-            mangaId = manga.id, pageIndex = page, mangaKey = mangaKey,
-            updatedAtMs = System.currentTimeMillis(),
-        )
-        srRows.update { it + (page to row) }
-        srVersion.value += 1
-        try {
-            srDao.upsert(row)
-        } catch (e: Exception) {
-            LogCollector.e(TAG, "写超分记录失败 page=$page", e)
+        srRowsMutex.withLock {
+            val old = srRows.value[page] ?: ImportedPageSr(
+                mangaId = manga.id, pageIndex = page,
+                state = ImportedPageSr.STATE_IDLE, mangaKey = mangaKey,
+            )
+            val row = transform(old).copy(
+                mangaId = manga.id, pageIndex = page, mangaKey = mangaKey,
+                updatedAtMs = System.currentTimeMillis(),
+            )
+            srRows.update { it + (page to row) }
+            srVersion.value += 1
+            try {
+                srDao.upsert(row)
+            } catch (e: Exception) {
+                LogCollector.e(TAG, "写超分记录失败 page=$page", e)
+            }
         }
     }
 
@@ -829,24 +849,6 @@ class ReaderTranslationController(
             // 尺寸/模型/字节都从**磁盘上的真实产物**读回来（标记 + 文件本身就是真值），
             // 不从内存里的 bitmap 猜 —— 两处读会漂移。
             val info = SrStore.infoOf(context, manga.id, page, manga.translationKey)
-            // ⚠️ **自愈**：老版本会把"不比原图大"的产物落盘（那时还没有产出侧判据），
-            //    而显示侧 `srBaseFor` 一律丢弃它 → 记录写「完成」、画面永远是原图。
-            //    今天再跑一次超分时就把这种行改写成**真实原因**，让面板与真机画面一致。
-            if (info != null && old.srcWidth > 0 && !SrDisplayBase.isUsableBase(info.width, old.srcWidth)) {
-                LogCollector.w(
-                    TAG,
-                    "超分记录自愈：产物 ${info.width}px 不比原图 ${old.srcWidth}px 大，改记为未产出可用底图 page=$page",
-                )
-                return@upsertSrRow old.copy(
-                    state = ImportedPageSr.STATE_FAILED,
-                    failCode = SrFailReason.NOT_LARGER_THAN_SOURCE.name,
-                    failMessage = SrOutcome.fail(
-                        SrFailReason.NOT_LARGER_THAN_SOURCE,
-                        "stored ${info.width}x${info.height}, source ${old.srcWidth}x${old.srcHeight}",
-                    ).message(context),
-                    finishedAtMs = now,
-                )
-            }
             old.copy(
                 state = ImportedPageSr.STATE_SUCCESS,
                 failCode = null, failMessage = null,
@@ -1208,8 +1210,6 @@ class ReaderTranslationController(
      */
     fun onReaderClosed() {
         cancelEverything()
-        // 超分调度队列也要停：它的预加载会在后台继续解码+推理，退出阅读器后没人需要它
-        srQueue.cancelAll()
         // ⚠️ **超分本章必须停下来**（与章节翻译刻意不同）：章节翻译有前台服务 + 通知栏，
         //    关掉阅读器用户仍能看进度、能暂停取消；超分本章**没有通知栏入口**，而它的
         //    「正在超分第 N 页…」是**系统级浮层窗口** —— 跟着跑到后台就会把芯片贴到别的应用上，
@@ -1225,7 +1225,6 @@ class ReaderTranslationController(
     fun shutdownAll() {
         closed = true
         cancelEverything()
-        srQueue.cancelAll()
         cancelSrChapterJob()
         chapterRunner.shutdown()
         translateMode.value = MODE_MANUAL
@@ -1259,43 +1258,15 @@ class ReaderTranslationController(
     /**
      * 翻页落定后调用。
      *
-     * 两件事：
-     * 1. **若队列已跑完（窗口没活了）而模式仍是自动/增量，则重新启动** ——
-     *    窗口是跟着当前页滑动的，翻页后就有了新工作，不重启的话用户翻到新页会一直不翻。
-     * 2. 面板打开期间不启动（等退出面板）。
+     * **若队列已跑完（窗口没活了）而模式仍是自动/增量，则重新启动** —— 窗口是跟着当前页滑动的，
+     * 翻页后就有了新工作，不重启的话用户翻到新页会一直不翻。（面板打开期间不启动，等退出面板。）
+     *
+     * ⚠️ **这里刻意不做任何超分动作**：翻页不等于要超分（见类注释里 2026-10-05 的用户口径），
+     * 超分只跟「翻译时自动超分」开关 + 翻译模式 / 手动按钮 / 超分本章走。
      */
     fun onCurrentPageChanged() {
         if (translateMode.value != MODE_MANUAL && queueJob?.isActive != true) {
             restartQueue()
-        }
-        scheduleSrAroundCurrentPage()
-    }
-
-    /**
-     * 按参照项目的路径喂超分队列：**当前页高优先 + 预加载当前页 ± `SrOptions.preloadPages`**。
-     *
-     * - 只在「阅读器超分开关」开着时排（手动按钮、章节批量各有自己的入口与提示，不受影响）
-     * - 跳过**已经按当前模型超分过**的页（`srAlreadyCurrent`，与手动/章节路径同一判据）
-     * - 预加载不越过书的首页/末页
-     *
-     * ⚠️ 不在这里判 `OcrLock`：让路逻辑在 [SrProcessor] 里（超分等锁时若 `hasOcrDemand()` 就排队等），
-     *    这里只是"把活儿排好顺序"，不能因为当时 OCR 忙就把预加载整个丢掉。
-     */
-    private fun scheduleSrAroundCurrentPage() {
-        if (!SrSettings.isEnabledForReader(appPrefs)) return
-        val total = pageCount()
-        if (total <= 0) return
-        val cur = currentPageProvider().coerceIn(0, total - 1)
-        srQueue.setTarget(cur)
-        if (!srAlreadyCurrent(cur)) srQueue.enqueue(cur, highPriority = true)
-        val radius = SrOptions.from(appPrefs).preloadPages
-        if (radius > 0) {
-            for (d in 1..radius) {
-                val next = cur + d
-                val prev = cur - d
-                if (next in 0 until total && !srAlreadyCurrent(next)) srQueue.enqueue(next)
-                if (prev in 0 until total && !srAlreadyCurrent(prev)) srQueue.enqueue(prev)
-            }
         }
     }
 
@@ -2027,12 +1998,13 @@ class ReaderTranslationController(
             withContext(kotlinx.coroutines.NonCancellable) { runCatching { fail(page, "PROCESS_EXCEPTION", msg) } }
             return null
         }
+        // 识别调用可能超过 OcrLock 的 30s 自愈窗口；必须在整个锁区间持续心跳，
+        // 否则下一页等待时会误判当前 PP-OCR 单例已失主并并发进入同一会话。
+        val heartbeatJob = OcrLock.startHeartbeat(ocrToken)
         try {
             val (det, ocr) = try {
-                // ⚠️ 持锁期间**必须打心跳**：OcrLock 有 30s 无心跳就判定"持有者已死"并强制释放，
-                // 而引擎就绪（模型加载）可能很久 —— 误放会让两个线程同时用单例 ONNX 引擎。
-                OcrLock.heartbeat(ocrToken)
-                TranslationEngineInit.ensureReady(context).also { OcrLock.heartbeat(ocrToken) }
+                // startHeartbeat 覆盖模型加载和后续 native OCR，避免长页识别触发 30s 锁自愈。
+                TranslationEngineInit.ensureReady(context)
             } catch (e: Exception) {
                 LogCollector.e(TAG, "engine init failed page=$page", e)
                 val msg = context.getString(R.string.reader_translate_model_missing, e.message.orEmpty())
@@ -2084,6 +2056,7 @@ class ReaderTranslationController(
                 null
             }
         } finally {
+            heartbeatJob.cancel()
             OcrLock.release(ocrToken)
         }
     }
@@ -2555,13 +2528,18 @@ class ReaderTranslationController(
             LogCollector.e(TAG, "migrateLegacyMangaKey failed", e)
         }
         rows.value = dao.forManga(manga.id, mangaKey).associateBy { it.pageIndex }
-        // 超分侧同款：先清残留的「超分中」（理由与 resetTranslating 完全一致），再载入
-        try {
-            srDao.resetRunning(manga.id, mangaKey)
-        } catch (e: Exception) {
-            LogCollector.e(TAG, "resetRunning(sr) failed", e)
+        // 超分侧同款：先清残留的「超分中」（理由与 resetTranslating 完全一致），再载入。
+        // 与运行中的写入共用一把 Mutex，否则启动队列可能先完成超分，随后这份旧查询快照
+        // 再把 srRows 覆盖回 STATE_RUNNING/IDLE，紫色进度线就一直显示未超分。
+        srRowsMutex.withLock {
+            try {
+                srDao.resetRunning(manga.id, mangaKey)
+            } catch (e: Exception) {
+                LogCollector.e(TAG, "resetRunning(sr) failed", e)
+            }
+            srRows.value = srDao.forManga(manga.id, mangaKey).associateBy { it.pageIndex }
+            srVersion.value += 1
         }
-        srRows.value = srDao.forManga(manga.id, mangaKey).associateBy { it.pageIndex }
         version.value += 1
     }
 
@@ -2696,12 +2674,7 @@ class ReaderTranslationController(
         // ⚠️ 本方法**从 OCR 一直持锁到翻译结束**（自动模式要页内分批+流式），一次最长可达分钟级，
         // 而 OcrLock 的 30s 无心跳自愈会把仍活着的持有者误判成死锁 → 强制释放 → 单例引擎被并发调用。
         // 这里整段持锁期间后台打心跳（5s 一次），把这个误判的窗口堵死。
-        val heartbeatJob = scope.launch(Dispatchers.IO) {
-            while (isActive) {
-                OcrLock.heartbeat(ocrToken)
-                delay(OCR_LOCK_POLL_MS * 100)
-            }
-        }
+        val heartbeatJob = OcrLock.startHeartbeat(ocrToken, OCR_LOCK_POLL_MS * 100)
 
         // ⚠️ 必须在 try 之外定义：catch 分支也要用它上报失败阶段
         // （`shouldRender` / `phase` 已提到方法开头 —— 复用分支在拿锁之前就要报阶段）
@@ -2716,9 +2689,7 @@ class ReaderTranslationController(
                 runCatching { fail(page, "OCR_MODEL_MISSING", msg) }
             }
             phase(ReaderTranslatePhase.FAILED, msg)
-            // ⚠️ 这条提前 return **在下面那个 try/finally 之外**：不在这里停掉心跳，
-            // ticker 会以 5s 一次永远活在应用级 scope 上（`OcrLock.heartbeat()` 一直有人打
-            // → 30s 自愈永远不触发，漏放锁的路径再也没人兜底）。
+            // ⚠️ 这条提前 return **在下面那个 try/finally 之外**：必须显式停掉独立心跳 ticker。
             heartbeatJob.cancel()
             OcrLock.release(ocrToken)
             // ⚠️ 注销取消标志 —— 这条 return 在下面那个 try/finally **之外**，漏掉的话每失败
@@ -2875,8 +2846,7 @@ class ReaderTranslationController(
             fail(page, "PROCESS_EXCEPTION", msg)
             phase(ReaderTranslatePhase.FAILED, msg)
         } finally {
-            // ⚠️ 心跳必须停：这条 finally 是唯一兜底点，漏停会让 ticker 以 5s 一次**永远**活在
-            // 应用级 scope 上（heartbeat 一直有人打 → 30s 自愈永不触发 → 漏放锁的路径再没人兜底）。
+            // ⚠️ 心跳必须停：这条 finally 是唯一兜底点，漏停会让独立 ticker 永久运行。
             heartbeatJob.cancel()
             // ⚠️ **注销与登记必须配对**：不注销的话 `readerCancel` 集合会一直涨
             //    （每页一个永不回收的 AtomicBoolean，一本 200 页的书翻一遍就多 200 个）。

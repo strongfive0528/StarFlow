@@ -176,15 +176,23 @@ class ModelManagementLayoutTest {
 
         // 5 个族（2026-10 精简后：upconv_7、cunet、SRMD、Real-CUGAN、Real-ESRGAN）。
         // AnimeJaNai（ONNX）与 swin 族已整体移除 —— 前者体积/画质都不划算，后者 16MB/档、15-19 秒/页且转不了 ncnn。
+        // 5 组（2026-10-10 整套换成参照项目 mihon_img_upscale 的模型）：
+        // Real-CUGAN / Waifu2x / Real-ESRGAN / W2xEX / 其他通用
         val titles = listOf(
-            R.id.sr_w2x_group_title, R.id.sr_cunet_group_title,
-            R.id.sr_srmd_group_title, R.id.sr_cugan_group_title, R.id.sr_rsrgan_group_title
+            R.id.sr_cugan_group_title,
+            R.id.sr_w2x_group_title,
+            R.id.sr_rsrgan_group_title,
+            R.id.sr_w2xex_group_title,
+            R.id.sr_generic_group_title
         )
         for (id in titles) assertNotNull("缺超分组标题 $id", root.findViewById<View>(id))
 
         val selecteds = listOf(
-            R.id.sr_w2x_group_selected, R.id.sr_cunet_group_selected,
-            R.id.sr_srmd_group_selected, R.id.sr_cugan_group_selected, R.id.sr_rsrgan_group_selected
+            R.id.sr_cugan_group_selected,
+            R.id.sr_w2x_group_selected,
+            R.id.sr_rsrgan_group_selected,
+            R.id.sr_w2xex_group_selected,
+            R.id.sr_generic_group_selected
         )
         for (id in selecteds) assertNotNull("缺超分组「当前使用」$id", root.findViewById<View>(id))
 
@@ -305,13 +313,17 @@ class ModelManagementLayoutTest {
         // 每一行都要有 title id（置灰要用），缺一个那行就不置灰
         val layout = java.io.File("src/main/res/layout/fragment_model_management.xml").readText()
         for (base in listOf(
-            "sr_w2x_anime_m1", "sr_w2x_anime_n2", "sr_cunet_m1",
-            "sr_cunet_n1", "sr_cunet_n2", "sr_srmd_x2", "sr_srmd_nf_x2", "sr_cugan_dn",
-            "sr_cugan_cons", "sr_cugan_d3", "sr_cugan_pro_dn", "sr_cugan_pro_cons",
-        "sr_cugan_nose", "sr_rsrgan_v3_x2",
-        "sr_span_uni", "sr_sudo_uc",
-        "sr_w2xex_uf", "sr_w2xex_omni", "sr_w2xex_photo",
-            "sr_cugan_pro_d3", "sr_rsrgan_a6b"
+            "sr_cugan_se",
+            "sr_cugan_pro",
+            "sr_cugan_nose",
+            "sr_w2x_cunet",
+            "sr_w2x_fast",
+            "sr_esrgan_av3",
+            "sr_w2xex_uf",
+            "sr_w2xex_omni",
+            "sr_w2xex_photo",
+            "sr_sudo_uc",
+            "sr_span_uni"
         )) {
             assertTrue("$base 缺标题 id（置灰要用）", layout.contains("android:id=\"@+id/${base}_title\""))
         }
@@ -326,33 +338,17 @@ class ModelManagementLayoutTest {
      * 上一轮就是这样把单元测试留在了编译不通过的状态（只跑了 assembleDebug，没编译测试）。
      */
     private fun srRowIds() = listOf(
-        // upconv_7：4 档（动漫 2 + 照片 2）—— ⚠️ 照片族 2026-10 底回归，本清单当时漏补这两行
-        R.id.sr_w2x_anime_m1_row,
-        R.id.sr_w2x_anime_n2_row,
-        R.id.sr_w2x_photo_m1_row,
-        R.id.sr_w2x_photo_n2_row,
-        // cunet 3 档
-        R.id.sr_cunet_m1_row,
-        R.id.sr_cunet_n1_row,
-        R.id.sr_cunet_n2_row,
-        // SRMD 2 档
-        R.id.sr_srmd_x2_row,
-        R.id.sr_srmd_nf_x2_row,
-        // Real-CUGAN 6 档（SE 3 + Pro 3）
-        R.id.sr_cugan_dn_row,
-        R.id.sr_cugan_cons_row,
-        R.id.sr_cugan_d3_row,
-        R.id.sr_cugan_pro_dn_row,
-        R.id.sr_cugan_pro_cons_row,
+        // 参照项目 mihon_img_upscale 的 11 档（2026-10-10）
+        R.id.sr_cugan_se_row,
+        R.id.sr_cugan_pro_row,
         R.id.sr_cugan_nose_row,
-        R.id.sr_rsrgan_v3_x2_row,
-        R.id.sr_span_uni_row,
-        R.id.sr_sudo_uc_row,
+        R.id.sr_w2x_cunet_row,
+        R.id.sr_w2x_fast_row,
+        R.id.sr_esrgan_av3_row,
         R.id.sr_w2xex_uf_row,
         R.id.sr_w2xex_omni_row,
         R.id.sr_w2xex_photo_row,
-        R.id.sr_cugan_pro_d3_row,
-        // Real-ESRGAN 1 档（4x）
-        R.id.sr_rsrgan_a6b_row,
+        R.id.sr_sudo_uc_row,
+        R.id.sr_span_uni_row,
     )
 }

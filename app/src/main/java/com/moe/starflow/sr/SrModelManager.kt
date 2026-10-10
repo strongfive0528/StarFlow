@@ -35,29 +35,17 @@ object SrModelManager {
      * 新增模型时**同时**要加：`ModelKey`、`downloadinfo.json`、以及本列表。
      */
     val allKeys: List<ModelKey> = listOf(
-        ModelKey.SR_W2X_UP7_ANIME_M1,
-        ModelKey.SR_W2X_UP7_ANIME_N2,
-        ModelKey.SR_W2X_UP7_PHOTO_M1,
-        ModelKey.SR_W2X_UP7_PHOTO_N2,
-        ModelKey.SR_W2X_CUNET_M1,
-        ModelKey.SR_W2X_CUNET_N1,
-        ModelKey.SR_W2X_CUNET_N2,
-        ModelKey.SR_SRMD_X2,
-        ModelKey.SR_SRMD_NF_X2,
-        ModelKey.SR_REALCUGAN_NODENOISE,
-        ModelKey.SR_REALCUGAN_CONSERVATIVE,
-        ModelKey.SR_REALCUGAN_DENOISE3X,
-        ModelKey.SR_REALCUGAN_PRO_NODENOISE,
-        ModelKey.SR_REALCUGAN_PRO_CONSERVATIVE,
-    ModelKey.SR_REALCUGAN_NOSE_2X,
-    ModelKey.SR_REALESRGAN_V3_ANIME_X2,
-    ModelKey.SR_SPAN_UNI_2X,
-    ModelKey.SR_SUDO_UC_2X,
-    ModelKey.SR_W2XEX_UNIVERSAL_FAST_2X,
-    ModelKey.SR_W2XEX_OMNI_MINI_V2_2X,
-    ModelKey.SR_W2XEX_PHOTO_SMALL_2X,
-        ModelKey.SR_REALCUGAN_PRO_DENOISE3X,
-        ModelKey.SR_REALESRGAN_ANIME6B,
+        ModelKey.SR_REALCUGAN_SE,
+        ModelKey.SR_REALCUGAN_PRO,
+        ModelKey.SR_REALCUGAN_NOSE,
+        ModelKey.SR_WAIFU2X_CUNET,
+        ModelKey.SR_WAIFU2X_FAST,
+        ModelKey.SR_REALESRGAN,
+        ModelKey.SR_W2XEX_UNIVERSAL_FAST,
+        ModelKey.SR_W2XEX_OMNI_MINI_V2,
+        ModelKey.SR_W2XEX_PHOTO_SMALL,
+        ModelKey.SR_SUDO_ULTRA_COMPACT,
+        ModelKey.SR_SPAN_NOMOSUNI
     )
 
     /**
@@ -69,9 +57,33 @@ object SrModelManager {
      * 这里只剩两条真正"键已不存在"的迁移：动漫 N3（改档为 N2）与照片 N3（改档为 N2）。
      */
     private val LEGACY_KEY_MAP = mapOf(
-        "SR_W2X_UP7_ANIME_N3" to ModelKey.SR_W2X_UP7_ANIME_N2,
-        "SR_W2X_UP7_PHOTO_N3" to ModelKey.SR_W2X_UP7_PHOTO_N2,
-    )
+
+        "SR_REALCUGAN_NODENOISE" to ModelKey.SR_REALCUGAN_SE,
+        "SR_REALCUGAN_PRO_NODENOISE" to ModelKey.SR_REALCUGAN_PRO,
+        "SR_REALCUGAN_NOSE_2X" to ModelKey.SR_REALCUGAN_NOSE,
+        "SR_W2X_CUNET_M1" to ModelKey.SR_WAIFU2X_CUNET,
+        "SR_W2X_CUNET_N1" to ModelKey.SR_WAIFU2X_CUNET,
+        "SR_W2X_CUNET_N2" to ModelKey.SR_WAIFU2X_CUNET,
+        "SR_W2X_UP7_ANIME_M1" to ModelKey.SR_WAIFU2X_FAST,
+        "SR_W2X_UP7_ANIME_N2" to ModelKey.SR_WAIFU2X_FAST,
+        "SR_W2X_UP7_PHOTO_M1" to ModelKey.SR_WAIFU2X_FAST,
+        "SR_W2X_UP7_PHOTO_N2" to ModelKey.SR_WAIFU2X_FAST,
+        "SR_REALESRGAN_V3_ANIME_X2" to ModelKey.SR_REALESRGAN,
+        "SR_REALESRGAN_ANIME6B" to ModelKey.SR_REALESRGAN,
+        "SR_W2XEX_UNIVERSAL_FAST_2X" to ModelKey.SR_W2XEX_UNIVERSAL_FAST,
+        "SR_W2XEX_OMNI_MINI_V2_2X" to ModelKey.SR_W2XEX_OMNI_MINI_V2,
+        "SR_W2XEX_PHOTO_SMALL_2X" to ModelKey.SR_W2XEX_PHOTO_SMALL,
+        "SR_SUDO_UC_2X" to ModelKey.SR_SUDO_ULTRA_COMPACT,
+        "SR_SPAN_UNI_2X" to ModelKey.SR_SPAN_NOMOSUNI,
+    
+        "SR_REALCUGAN_CONSERVATIVE" to ModelKey.SR_REALCUGAN_SE,
+        "SR_REALCUGAN_DENOISE3X" to ModelKey.SR_REALCUGAN_SE,
+        "SR_REALCUGAN_PRO_CONSERVATIVE" to ModelKey.SR_REALCUGAN_PRO,
+        "SR_REALCUGAN_PRO_DENOISE3X" to ModelKey.SR_REALCUGAN_PRO,
+        "SR_W2X_UP7_ANIME_N3" to ModelKey.SR_WAIFU2X_FAST,
+        "SR_W2X_UP7_PHOTO_N3" to ModelKey.SR_WAIFU2X_FAST,
+        "SR_SRMD_X2" to ModelKey.SR_WAIFU2X_CUNET,
+        "SR_SRMD_NF_X2" to ModelKey.SR_WAIFU2X_CUNET,)
 
     /** 当前启用的模型；未选 / 存了非法值 → null（旧档位名先按 [LEGACY_KEY_MAP] 迁移并回写）。 */
     fun getActiveKey(prefs: SharedPreferences): ModelKey? {
@@ -87,29 +99,18 @@ object SrModelManager {
      * 两处各写一套必然漂移（改了一个忘了另一个 → 同一个模型两个名字）。
      */
     fun nameResOf(key: ModelKey): Int = when (key) {
-        ModelKey.SR_W2X_UP7_ANIME_M1 -> R.string.sr_model_w2x_up7_anime_m1
-        ModelKey.SR_W2X_UP7_ANIME_N2 -> R.string.sr_model_w2x_up7_anime_n2
-        ModelKey.SR_W2X_UP7_PHOTO_M1 -> R.string.sr_model_w2x_up7_photo_m1
-        ModelKey.SR_W2X_UP7_PHOTO_N2 -> R.string.sr_model_w2x_up7_photo_n2
-        ModelKey.SR_W2X_CUNET_M1 -> R.string.sr_model_w2x_cunet_m1
-        ModelKey.SR_W2X_CUNET_N1 -> R.string.sr_model_w2x_cunet_n1
-        ModelKey.SR_W2X_CUNET_N2 -> R.string.sr_model_w2x_cunet_n2
-        ModelKey.SR_SRMD_X2 -> R.string.sr_model_srmd_x2
-        ModelKey.SR_SRMD_NF_X2 -> R.string.sr_model_srmd_nf_x2
-        ModelKey.SR_REALCUGAN_NODENOISE -> R.string.sr_model_cugan_dn
-        ModelKey.SR_REALCUGAN_CONSERVATIVE -> R.string.sr_model_cugan_cons
-        ModelKey.SR_REALCUGAN_DENOISE3X -> R.string.sr_model_cugan_d3
-        ModelKey.SR_REALCUGAN_PRO_NODENOISE -> R.string.sr_model_cugan_pro_dn
-        ModelKey.SR_REALCUGAN_PRO_CONSERVATIVE -> R.string.sr_model_cugan_pro_cons
-        ModelKey.SR_REALCUGAN_NOSE_2X -> R.string.sr_model_cugan_nose_2x
-        ModelKey.SR_REALESRGAN_V3_ANIME_X2 -> R.string.sr_model_esrgan_v3_anime_x2
-        ModelKey.SR_SPAN_UNI_2X -> R.string.sr_model_span_uni_2x
-        ModelKey.SR_SUDO_UC_2X -> R.string.sr_model_sudo_uc_2x
-        ModelKey.SR_W2XEX_UNIVERSAL_FAST_2X -> R.string.sr_model_sr_w2xex_universal_fast_2x
-        ModelKey.SR_W2XEX_OMNI_MINI_V2_2X -> R.string.sr_model_sr_w2xex_omni_mini_v2_2x
-        ModelKey.SR_W2XEX_PHOTO_SMALL_2X -> R.string.sr_model_sr_w2xex_photo_small_2x
-        ModelKey.SR_REALCUGAN_PRO_DENOISE3X -> R.string.sr_model_cugan_pro_d3
-        ModelKey.SR_REALESRGAN_ANIME6B -> R.string.sr_model_rsrgan_a6b
+        ModelKey.SR_REALCUGAN_SE -> R.string.sr_model_realcugan_se
+        ModelKey.SR_REALCUGAN_PRO -> R.string.sr_model_realcugan_pro
+        ModelKey.SR_REALCUGAN_NOSE -> R.string.sr_model_realcugan_nose
+        ModelKey.SR_WAIFU2X_CUNET -> R.string.sr_model_waifu2x_cunet
+        ModelKey.SR_WAIFU2X_FAST -> R.string.sr_model_waifu2x_fast
+        ModelKey.SR_REALESRGAN -> R.string.sr_model_realesrgan_av3
+        ModelKey.SR_W2XEX_UNIVERSAL_FAST -> R.string.sr_model_w2xex_uf
+        ModelKey.SR_W2XEX_OMNI_MINI_V2 -> R.string.sr_model_w2xex_omni
+        ModelKey.SR_W2XEX_PHOTO_SMALL -> R.string.sr_model_w2xex_photo
+        ModelKey.SR_SUDO_ULTRA_COMPACT -> R.string.sr_model_sudo_uc
+        ModelKey.SR_SPAN_NOMOSUNI -> R.string.sr_model_span_nomosuni
+        // 非超分档位（OCR/翻译模型）不在本表里：调用方只用它对超分档位取文案
         else -> 0
     }
 

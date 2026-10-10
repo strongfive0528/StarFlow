@@ -160,8 +160,17 @@ class NcnnSrEngine(
                 }
             }
 
+            // ⚠️ **通用族（family=generic：Nose / sudo / SPAN / W2xEX）必须走"零 padding + 单块"**：
+            //    这几个模型的 param 内部**没有任何 pad**（×2 由 `Interp(nearest) 当 base` 或
+            //    `PixelShuffle` 在网格上直接做），而载体那条"加边 → 网络 → 按 prepad 裁边"的路径
+            //    是给**内部自带 pad 的模型**（Real-CUGAN SE/Pro、waifu2x cunet/upconv7）准备的：
+            //    对它们用非零 prepad，产物相对原图会出现**整体平移/分块接缝**（真机反馈）。
+            //    单块（tile 覆盖整张图）顺带彻底消掉分块接缝；输入已由像素预算压到 ≤1MP，显存可控。
+            val generic = family == com.moe.starflow.sr.ncnn.SrNcnnNative.FAMILY_GENERIC
+            val effPrepad = if (generic) 0 else prepadding
+            val effTile = if (generic) maxOf(ht, w).coerceAtMost(4096) else tileSize
             val ok = SrNcnnNative.process(
-                h, inBuf, outBuf, w, ht, scale, noise, prepadding, tileSize
+                h, inBuf, outBuf, w, ht, scale, noise, effPrepad, effTile
             )
             if (!ok) {
                 failDetail = "ncnn process failed: ${paramFile.name} ${w}x$ht @${scale}x"

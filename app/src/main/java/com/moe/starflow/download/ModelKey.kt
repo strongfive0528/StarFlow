@@ -59,64 +59,26 @@ enum class ModelKey(val stableId: Int) {
     // 与 OCR 用同一套下载/状态/浏览器机制（见 ModelManagementFragment）。
     // ══════════════════════════════════════════════════════════════════
 
-    // ── ncnn + Vulkan 超分（waifu2x / SRMD / Real-CUGAN / Real-ESRGAN）──
-    // 模型全部走下载；引擎参数取自 downloadinfo.json，不在这里硬编码。
-    // 2026-10 底：upconv_7 恢复为**动漫 + 照片两套权重、各两档 = 4 档**（用户口径：「upconv 的照片
-    // 放大模型丢了，需要加到 upconv 的那个组里面，一共 4 个才对」）。中间一度精简成只剩动漫两档，
-    // 照片族（真人照片/彩页/网点更重的图源）随之消失 —— 那是一刀切错了。
-    // 降噪档用 N2 而不是 N3：官方 README（ncnn 版）全部示例都是 -n 2，N3 是最激进的档，
-    // 容易把线条当噪点抹掉。
-    /** 动漫族·不降噪（noise = -1） */
-    SR_W2X_UP7_ANIME_M1(3040),
-    /** 动漫族·强力降噪（noise = 2） */
-    SR_W2X_UP7_ANIME_N2(3043),
-    /** 照片族·不降噪（noise = -1） */
-    SR_W2X_UP7_PHOTO_M1(3041),
-    /** 照片族·强力降噪（noise = 2） */
-    SR_W2X_UP7_PHOTO_N2(3042),
-    /** 不降噪 */
-    SR_W2X_CUNET_M1(3020),
-    /** 中度降噪 */
-    SR_W2X_CUNET_N1(3022),
-    /** 强力降噪 */
-    SR_W2X_CUNET_N2(3023),
-    /** 带降噪 */
-    SR_SRMD_X2(3060),
-    /** 不降噪 */
-    SR_SRMD_NF_X2(3061),
-    /** 不降噪 */
-    SR_REALCUGAN_NODENOISE(3074),
-    /** 保守 */
-    SR_REALCUGAN_CONSERVATIVE(3070),
-    /** 降噪 3x */
-    SR_REALCUGAN_DENOISE3X(3073),
-
-    // ── Real-CUGAN **Pro**（`models-pro`；与 SE 同族同接口，只是换一套权重文件）──
-    // 2026-10：PC 端实测（Asterix 300dpi 彩页 + 89338.zip 黑白页）Pro 全面优于 SE：
-    // 同页 PSNR +1.5~2.5 dB、**锐度反而更低**（= 更少乱改线条）。
-    // ⚠️ 文件名必须与 SE 的三档区分（否则同一 files/sr/ 目录下互相覆盖）。
-    /** Pro · 不降噪 */
-    SR_REALCUGAN_PRO_NODENOISE(3075),
-    /** Pro · 保守 */
-    SR_REALCUGAN_PRO_CONSERVATIVE(3071),
-    /** Pro · 降噪 3x */
-    SR_REALCUGAN_PRO_DENOISE3X(3076),
-    /** Real-CUGAN **Nose** · 不降噪（参照项目 mihon_img_upscale 的模型档之一） */
-    SR_REALCUGAN_NOSE_2X(3077),
-    /** Real-ESRGAN **animevideov3** · 2x（参照项目同款；x2/x3/x4 共用同一份权重，只有 param 不同） */
-    SR_REALESRGAN_V3_ANIME_X2(3078),
-    /** SPAN NomosUni Photo · 2x（通用 ncnn：in0 → out0，BGR） */
-    SR_SPAN_UNI_2X(3079),
-    /** sudo UltraCompact · 2x（通用 ncnn：input → output，RGB） */
-    SR_SUDO_UC_2X(3080),
-    /** W2xEX Universal-Fast-W2xEX · 2x（通用 ncnn：data → output，BGR） */
-    SR_W2XEX_UNIVERSAL_FAST_2X(3081),
-    /** W2xEX Omni-MiniV2-W2xEX · 2x（通用 ncnn：data → output，BGR） */
-    SR_W2XEX_OMNI_MINI_V2_2X(3082),
-    /** W2xEX Photo-Small-W2xEX · 2x（通用 ncnn：data → output，BGR） */
-    SR_W2XEX_PHOTO_SMALL_2X(3083),
-
-    /** 4 倍放大 */
-    SR_REALESRGAN_ANIME6B(3080);
-
+    /** Real-CUGAN SE（models-se/up2x-no-denoise；参照项目档位 0 · No Denoise） */
+    SR_REALCUGAN_SE(3040),
+    /** Real-CUGAN Pro（models-pro/up2x-no-denoise；参照项目档位 1 · No Denoise） */
+    SR_REALCUGAN_PRO(3041),
+    /** Real-CUGAN Nose（models-nose/up2x-no-denoise；单段网络 in0→out0，走通用入口） */
+    SR_REALCUGAN_NOSE(3042),
+    /** Waifu2x cunet（noise2_scale2.0x；参照项目档位 4 · Waifu2x，默认 noise=2） */
+    SR_WAIFU2X_CUNET(3043),
+    /** Waifu2x Fast / upconv_7（noise2_scale2.0x；参照项目档位 5） */
+    SR_WAIFU2X_FAST(3044),
+    /** Real-ESRGAN animevideov3 x2（参照项目档位 2 · 倍率 2） */
+    SR_REALESRGAN(3045),
+    /** W2xEX Universal Fast（data→output，BGR，padding 10；参照项目档位 6） */
+    SR_W2XEX_UNIVERSAL_FAST(3046),
+    /** W2xEX Omni Mini V2（data→output，BGR，padding 10；参照项目档位 8） */
+    SR_W2XEX_OMNI_MINI_V2(3047),
+    /** W2xEX Photo Small（data→output，BGR，padding 10；参照项目档位 9） */
+    SR_W2XEX_PHOTO_SMALL(3048),
+    /** sudo UltraCompact（input→output，RGB，padding 10；参照项目档位 18） */
+    SR_SUDO_ULTRA_COMPACT(3049),
+    /** SPAN NomosUni Photo（in0→out0，BGR，padding 24；参照项目档位 19） */
+    SR_SPAN_NOMOSUNI(3050);
 }

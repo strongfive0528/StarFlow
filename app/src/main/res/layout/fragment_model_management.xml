@@ -544,464 +544,237 @@
             android:layout_width="match_parent"
             android:layout_height="wrap_content"
             android:orientation="vertical">
-              <TextView
-                  android:id="@+id/sr_w2x_group_title"
-                  android:layout_width="wrap_content"
+                            <!-- ════ 超分参数（对齐参照项目 mihon_img_upscale 的设置面）════ -->
+              <LinearLayout
+                  android:id="@+id/sr_opt_header"
+                  android:layout_width="match_parent"
                   android:layout_height="wrap_content"
-                  android:text="@string/sr_w2x_group"
-                  android:textSize="14sp"
-                  android:textStyle="bold"
+                  android:orientation="horizontal"
+                  android:gravity="center_vertical"
                   android:padding="4dp"
                   android:layout_marginTop="8dp"
                   android:background="@drawable/ocr_group_selector"
-                  android:clickable="true"/>
-              <TextView
-                  android:id="@+id/sr_w2x_group_selected"
-                  android:layout_width="wrap_content"
-                  android:layout_height="wrap_content"
-                  android:text="@string/ocr_group_selected"
-                  android:textColor="@color/success"
-                  android:textSize="12sp"
-                  android:visibility="gone"/>
+                  android:clickable="true">
 
+                  <TextView
+                      android:layout_width="0dp"
+                      android:layout_height="wrap_content"
+                      android:layout_weight="1"
+                      android:text="@string/sr_opt_title"
+                      android:textSize="14sp"
+                      android:textStyle="bold"/>
+
+                  <ImageView
+                      android:id="@+id/sr_opt_arrow"
+                      android:layout_width="20dp"
+                      android:layout_height="20dp"
+                      android:src="@drawable/ic_sr_chevron"
+                      android:contentDescription="@null"/>
+              </LinearLayout>
               <LinearLayout
+                  android:id="@+id/sr_opt_panel"
                   android:layout_width="match_parent"
                   android:layout_height="wrap_content"
                   android:orientation="vertical"
                   android:background="@drawable/setting_shape"
                   android:padding="12dp"
-                  android:layout_marginTop="8dp">
-
-                  <TextView
-                      android:layout_width="wrap_content"
-                      android:layout_height="wrap_content"
-                      android:text="@string/sr_w2x_group_desc"
-                      android:textSize="11sp"
-                      android:textColor="#888"
-                      android:layout_marginBottom="8dp"/>
-                  <LinearLayout
-                      android:id="@+id/sr_w2x_anime_m1_row"
-                      android:layout_width="match_parent"
-                      android:layout_height="wrap_content"
-                      android:orientation="vertical"
-                      android:clickable="true">
-
-                      <LinearLayout
-                          android:layout_width="match_parent"
-                          android:layout_height="wrap_content"
-                          android:orientation="horizontal"
-                          android:gravity="center_vertical">
-
-                          <TextView
-                              android:id="@+id/sr_w2x_anime_m1_title"
-                                  android:layout_width="0dp"
-                                  android:layout_height="wrap_content"
-                                  android:layout_weight="1"
-                                  android:text="@string/sr_model_w2x_up7_anime_m1"
-                                  android:textSize="14sp"
-                                  android:textStyle="bold"/>
-
-                          <RadioButton
-                              android:id="@+id/sr_w2x_anime_m1_radio"
-                              android:layout_width="wrap_content"
-                              android:layout_height="wrap_content"
-                              android:clickable="false"
-                              android:focusable="false"/>
-                      </LinearLayout>
-
-                      <include
-                          layout="@layout/item_model_row_browser"/>
-                  </LinearLayout>
-
-                  <View
-                      android:layout_width="match_parent"
-                      android:layout_height="1dp"
-                      android:background="#1A000000"/>
-
-                  <LinearLayout
-                      android:id="@+id/sr_w2x_anime_n2_row"
-                      android:layout_width="match_parent"
-                      android:layout_height="wrap_content"
-                      android:orientation="vertical"
-                      android:clickable="true">
-
-                      <LinearLayout
-                          android:layout_width="match_parent"
-                          android:layout_height="wrap_content"
-                          android:orientation="horizontal"
-                          android:gravity="center_vertical">
-
-                          <TextView
-                              android:id="@+id/sr_w2x_anime_n2_title"
-                                  android:layout_width="0dp"
-                                  android:layout_height="wrap_content"
-                                  android:layout_weight="1"
-                                  android:text="@string/sr_model_w2x_up7_anime_n2"
-                                  android:textSize="14sp"
-                                  android:textStyle="bold"/>
-
-                          <RadioButton
-                              android:id="@+id/sr_w2x_anime_n2_radio"
-                              android:layout_width="wrap_content"
-                              android:layout_height="wrap_content"
-                              android:clickable="false"
-                              android:focusable="false"/>
-                      </LinearLayout>
-
-                      <include
-                          layout="@layout/item_model_row_browser"/>
-                  </LinearLayout>
-
-                  <View
-                      android:layout_width="match_parent"
-                      android:layout_height="1dp"
-                      android:background="#1A000000"/>
-
-                  <!-- 照片族：与动漫族同一族（upconv_7），只是权重不同 —— 真人照片/彩页/网点重
-                       的图源用动漫权重会明显更糊。用户口径 2026-10：upconv 组一共 4 档。 -->
-                  <LinearLayout
-                      android:id="@+id/sr_w2x_photo_m1_row"
-                      android:layout_width="match_parent"
-                      android:layout_height="wrap_content"
-                      android:orientation="vertical"
-                      android:clickable="true">
-
-                      <LinearLayout
-                          android:layout_width="match_parent"
-                          android:layout_height="wrap_content"
-                          android:orientation="horizontal"
-                          android:gravity="center_vertical">
-
-                          <TextView
-                              android:id="@+id/sr_w2x_photo_m1_title"
-                                  android:layout_width="0dp"
-                                  android:layout_height="wrap_content"
-                                  android:layout_weight="1"
-                                  android:text="@string/sr_model_w2x_up7_photo_m1"
-                                  android:textSize="14sp"
-                                  android:textStyle="bold"/>
-
-                          <RadioButton
-                              android:id="@+id/sr_w2x_photo_m1_radio"
-                              android:layout_width="wrap_content"
-                              android:layout_height="wrap_content"
-                              android:clickable="false"
-                              android:focusable="false"/>
-                      </LinearLayout>
-
-                      <include
-                          layout="@layout/item_model_row_browser"/>
-                  </LinearLayout>
-
-                  <View
-                      android:layout_width="match_parent"
-                      android:layout_height="1dp"
-                      android:background="#1A000000"/>
-
-                  <LinearLayout
-                      android:id="@+id/sr_w2x_photo_n2_row"
-                      android:layout_width="match_parent"
-                      android:layout_height="wrap_content"
-                      android:orientation="vertical"
-                      android:clickable="true">
-
-                      <LinearLayout
-                          android:layout_width="match_parent"
-                          android:layout_height="wrap_content"
-                          android:orientation="horizontal"
-                          android:gravity="center_vertical">
-
-                          <TextView
-                              android:id="@+id/sr_w2x_photo_n2_title"
-                                  android:layout_width="0dp"
-                                  android:layout_height="wrap_content"
-                                  android:layout_weight="1"
-                                  android:text="@string/sr_model_w2x_up7_photo_n2"
-                                  android:textSize="14sp"
-                                  android:textStyle="bold"/>
-
-                          <RadioButton
-                              android:id="@+id/sr_w2x_photo_n2_radio"
-                              android:layout_width="wrap_content"
-                              android:layout_height="wrap_content"
-                              android:clickable="false"
-                              android:focusable="false"/>
-                      </LinearLayout>
-
-                      <include
-                          layout="@layout/item_model_row_browser"/>
-                  </LinearLayout>
-
-              </LinearLayout>
-
-              <TextView
-                  android:id="@+id/sr_cunet_group_title"
-                  android:layout_width="wrap_content"
-                  android:layout_height="wrap_content"
-                  android:text="@string/sr_cunet_group"
-                  android:textSize="14sp"
-                  android:textStyle="bold"
-                  android:padding="4dp"
                   android:layout_marginTop="8dp"
-                  android:background="@drawable/ocr_group_selector"
-                  android:clickable="true"/>
-              <TextView
-                  android:id="@+id/sr_cunet_group_selected"
-                  android:layout_width="wrap_content"
-                  android:layout_height="wrap_content"
-                  android:text="@string/ocr_group_selected"
-                  android:textColor="@color/success"
-                  android:textSize="12sp"
-                  android:visibility="gone"/>
+                  android:layout_marginBottom="28dp"
+                  android:visibility="gone">
 
-              <LinearLayout
-                  android:layout_width="match_parent"
-                  android:layout_height="wrap_content"
-                  android:orientation="vertical"
-                  android:background="@drawable/setting_shape"
-                  android:padding="12dp"
-                  android:layout_marginTop="8dp">
+                  <TextView
+                      android:layout_width="match_parent"
+                      android:layout_height="wrap_content"
+                      android:text="@string/sr_opt_hint"
+                      android:textSize="11sp"
+                      android:textColor="#888"
+                      android:layout_marginBottom="8dp"/>
+
+                  <TextView
+                      android:id="@+id/sr_opt_tile_label"
+                      android:layout_width="wrap_content"
+                      android:layout_height="wrap_content"
+                      android:text="@string/sr_opt_tile"
+                      android:textSize="12sp"/>
+                  <LinearLayout
+                      android:layout_width="match_parent"
+                      android:layout_height="wrap_content"
+                      android:orientation="horizontal"
+                      android:gravity="center_vertical">
+                      <SeekBar
+                          android:id="@+id/sr_opt_tile_bar"
+                          android:layout_width="0dp"
+                          android:layout_height="wrap_content"
+                          android:layout_weight="1"
+                          android:max="6"/>
+                      <TextView
+                          android:id="@+id/sr_opt_tile_value"
+                          android:layout_width="wrap_content"
+                          android:layout_height="wrap_content"
+                          android:minWidth="56dp"
+                          android:gravity="end"
+                          android:textSize="12sp"
+                          android:textColor="#888"/>
+                  </LinearLayout>
 
                   <TextView
                       android:layout_width="wrap_content"
                       android:layout_height="wrap_content"
-                      android:text="@string/sr_cunet_group_desc"
-                      android:textSize="11sp"
-                      android:textColor="#888"
-                      android:layout_marginBottom="8dp"/>
+                      android:text="@string/sr_opt_maxinput"
+                      android:textSize="12sp"
+                      android:layout_marginTop="6dp"/>
                   <LinearLayout
-                      android:id="@+id/sr_cunet_m1_row"
                       android:layout_width="match_parent"
                       android:layout_height="wrap_content"
-                      android:orientation="vertical"
-                      android:clickable="true">
-
-                      <LinearLayout
-                          android:layout_width="match_parent"
+                      android:orientation="horizontal"
+                      android:gravity="center_vertical">
+                      <SeekBar
+                          android:id="@+id/sr_opt_maxinput_bar"
+                          android:layout_width="0dp"
                           android:layout_height="wrap_content"
-                          android:orientation="horizontal"
-                          android:gravity="center_vertical">
-
-                          <TextView
-                              android:id="@+id/sr_cunet_m1_title"
-                                  android:layout_width="0dp"
-                                  android:layout_height="wrap_content"
-                                  android:layout_weight="1"
-                                  android:text="@string/sr_model_w2x_cunet_m1"
-                                  android:textSize="14sp"
-                                  android:textStyle="bold"/>
-
-                          <RadioButton
-                              android:id="@+id/sr_cunet_m1_radio"
-                              android:layout_width="wrap_content"
-                              android:layout_height="wrap_content"
-                              android:clickable="false"
-                              android:focusable="false"/>
-                      </LinearLayout>
-
-                      <include
-                          layout="@layout/item_model_row_browser"/>
-                  </LinearLayout>
-
-                  <View
-                      android:layout_width="match_parent"
-                      android:layout_height="1dp"
-                      android:background="#1A000000"/>
-
-                  <LinearLayout
-                      android:id="@+id/sr_cunet_n1_row"
-                      android:layout_width="match_parent"
-                      android:layout_height="wrap_content"
-                      android:orientation="vertical"
-                      android:clickable="true">
-
-                      <LinearLayout
-                          android:layout_width="match_parent"
+                          android:layout_weight="1"
+                          android:max="6"/>
+                      <TextView
+                          android:id="@+id/sr_opt_maxinput_value"
+                          android:layout_width="wrap_content"
                           android:layout_height="wrap_content"
-                          android:orientation="horizontal"
-                          android:gravity="center_vertical">
-
-                          <TextView
-                              android:id="@+id/sr_cunet_n1_title"
-                                  android:layout_width="0dp"
-                                  android:layout_height="wrap_content"
-                                  android:layout_weight="1"
-                                  android:text="@string/sr_model_w2x_cunet_n1"
-                                  android:textSize="14sp"
-                                  android:textStyle="bold"/>
-
-                          <RadioButton
-                              android:id="@+id/sr_cunet_n1_radio"
-                              android:layout_width="wrap_content"
-                              android:layout_height="wrap_content"
-                              android:clickable="false"
-                              android:focusable="false"/>
-                      </LinearLayout>
-
-                      <include
-                          layout="@layout/item_model_row_browser"/>
+                          android:minWidth="56dp"
+                          android:gravity="end"
+                          android:textSize="12sp"
+                          android:textColor="#888"/>
                   </LinearLayout>
-
-                  <View
-                      android:layout_width="match_parent"
-                      android:layout_height="1dp"
-                      android:background="#1A000000"/>
-
-                  <LinearLayout
-                      android:id="@+id/sr_cunet_n2_row"
-                      android:layout_width="match_parent"
-                      android:layout_height="wrap_content"
-                      android:orientation="vertical"
-                      android:clickable="true">
-
-                      <LinearLayout
-                          android:layout_width="match_parent"
-                          android:layout_height="wrap_content"
-                          android:orientation="horizontal"
-                          android:gravity="center_vertical">
-
-                          <TextView
-                              android:id="@+id/sr_cunet_n2_title"
-                                  android:layout_width="0dp"
-                                  android:layout_height="wrap_content"
-                                  android:layout_weight="1"
-                                  android:text="@string/sr_model_w2x_cunet_n2"
-                                  android:textSize="14sp"
-                                  android:textStyle="bold"/>
-
-                          <RadioButton
-                              android:id="@+id/sr_cunet_n2_radio"
-                              android:layout_width="wrap_content"
-                              android:layout_height="wrap_content"
-                              android:clickable="false"
-                              android:focusable="false"/>
-                      </LinearLayout>
-
-                      <include
-                          layout="@layout/item_model_row_browser"/>
-                  </LinearLayout>
-
-                  <View
-                      android:layout_width="match_parent"
-                      android:layout_height="1dp"
-                      android:background="#1A000000"/>
-
-              </LinearLayout>
-
-              <TextView
-                  android:id="@+id/sr_srmd_group_title"
-                  android:layout_width="wrap_content"
-                  android:layout_height="wrap_content"
-                  android:text="@string/sr_srmd_group"
-                  android:textSize="14sp"
-                  android:textStyle="bold"
-                  android:padding="4dp"
-                  android:layout_marginTop="8dp"
-                  android:background="@drawable/ocr_group_selector"
-                  android:clickable="true"/>
-              <TextView
-                  android:id="@+id/sr_srmd_group_selected"
-                  android:layout_width="wrap_content"
-                  android:layout_height="wrap_content"
-                  android:text="@string/ocr_group_selected"
-                  android:textColor="@color/success"
-                  android:textSize="12sp"
-                  android:visibility="gone"/>
-
-              <LinearLayout
-                  android:layout_width="match_parent"
-                  android:layout_height="wrap_content"
-                  android:orientation="vertical"
-                  android:background="@drawable/setting_shape"
-                  android:padding="12dp"
-                  android:layout_marginTop="8dp">
 
                   <TextView
                       android:layout_width="wrap_content"
                       android:layout_height="wrap_content"
-                      android:text="@string/sr_srmd_group_desc"
-                      android:textSize="11sp"
-                      android:textColor="#888"
-                      android:layout_marginBottom="8dp"/>
+                      android:text="@string/sr_opt_perf"
+                      android:textSize="12sp"
+                      android:layout_marginTop="6dp"/>
                   <LinearLayout
-                      android:id="@+id/sr_srmd_x2_row"
                       android:layout_width="match_parent"
                       android:layout_height="wrap_content"
-                      android:orientation="vertical"
-                      android:clickable="true">
-
-                      <LinearLayout
-                          android:layout_width="match_parent"
+                      android:orientation="horizontal"
+                      android:gravity="center_vertical">
+                      <SeekBar
+                          android:id="@+id/sr_opt_perf_bar"
+                          android:layout_width="0dp"
                           android:layout_height="wrap_content"
-                          android:orientation="horizontal"
-                          android:gravity="center_vertical">
-
-                          <TextView
-                              android:id="@+id/sr_srmd_x2_title"
-                                  android:layout_width="0dp"
-                                  android:layout_height="wrap_content"
-                                  android:layout_weight="1"
-                                  android:text="@string/sr_model_srmd_x2"
-                                  android:textSize="14sp"
-                                  android:textStyle="bold"/>
-
-                          <RadioButton
-                              android:id="@+id/sr_srmd_x2_radio"
-                              android:layout_width="wrap_content"
-                              android:layout_height="wrap_content"
-                              android:clickable="false"
-                              android:focusable="false"/>
-                      </LinearLayout>
-
-                      <include
-                          layout="@layout/item_model_row_browser"/>
+                          android:layout_weight="1"
+                          android:max="2"/>
+                      <TextView
+                          android:id="@+id/sr_opt_perf_value"
+                          android:layout_width="wrap_content"
+                          android:layout_height="wrap_content"
+                          android:minWidth="110dp"
+                          android:gravity="end"
+                          android:textSize="12sp"
+                          android:textColor="#888"/>
                   </LinearLayout>
 
-                  <View
-                      android:layout_width="match_parent"
-                      android:layout_height="1dp"
-                      android:background="#1A000000"/>
-
+                  <TextView
+                      android:layout_width="wrap_content"
+                      android:layout_height="wrap_content"
+                      android:text="@string/sr_opt_precision"
+                      android:textSize="12sp"
+                      android:layout_marginTop="6dp"/>
                   <LinearLayout
-                      android:id="@+id/sr_srmd_nf_x2_row"
                       android:layout_width="match_parent"
                       android:layout_height="wrap_content"
-                      android:orientation="vertical"
-                      android:clickable="true">
-
-                      <LinearLayout
-                          android:layout_width="match_parent"
+                      android:orientation="horizontal"
+                      android:gravity="center_vertical">
+                      <SeekBar
+                          android:id="@+id/sr_opt_prec_bar"
+                          android:layout_width="0dp"
                           android:layout_height="wrap_content"
-                          android:orientation="horizontal"
-                          android:gravity="center_vertical">
-
-                          <TextView
-                              android:id="@+id/sr_srmd_nf_x2_title"
-                                  android:layout_width="0dp"
-                                  android:layout_height="wrap_content"
-                                  android:layout_weight="1"
-                                  android:text="@string/sr_model_srmd_nf_x2"
-                                  android:textSize="14sp"
-                                  android:textStyle="bold"/>
-
-                          <RadioButton
-                              android:id="@+id/sr_srmd_nf_x2_radio"
-                              android:layout_width="wrap_content"
-                              android:layout_height="wrap_content"
-                              android:clickable="false"
-                              android:focusable="false"/>
-                      </LinearLayout>
-
-                      <include
-                          layout="@layout/item_model_row_browser"/>
+                          android:layout_weight="1"
+                          android:max="1"/>
+                      <TextView
+                          android:id="@+id/sr_opt_prec_value"
+                          android:layout_width="wrap_content"
+                          android:layout_height="wrap_content"
+                          android:minWidth="56dp"
+                          android:gravity="end"
+                          android:textSize="12sp"
+                          android:textColor="#888"/>
                   </LinearLayout>
 
-                  <View
+                  <LinearLayout
                       android:layout_width="match_parent"
-                      android:layout_height="1dp"
-                      android:background="#1A000000"/>
+                      android:layout_height="wrap_content"
+                      android:orientation="horizontal"
+                      android:gravity="center_vertical"
+                      android:layout_marginTop="6dp">
+                      <TextView
+                          android:layout_width="0dp"
+                          android:layout_height="wrap_content"
+                          android:layout_weight="1"
+                          android:text="@string/sr_opt_fp16a"
+                          android:textSize="12sp"/>
+                      <Switch
+                          android:id="@+id/sr_opt_fp16a_switch"
+                          android:layout_width="wrap_content"
+                          android:layout_height="wrap_content"/>
+                  </LinearLayout>
 
+                  <LinearLayout
+                      android:layout_width="match_parent"
+                      android:layout_height="wrap_content"
+                      android:orientation="horizontal"
+                      android:gravity="center_vertical">
+                      <TextView
+                          android:layout_width="0dp"
+                          android:layout_height="wrap_content"
+                          android:layout_weight="1"
+                          android:text="@string/sr_opt_skip"
+                          android:textSize="12sp"/>
+                      <Switch
+                          android:id="@+id/sr_opt_skip_switch"
+                          android:layout_width="wrap_content"
+                          android:layout_height="wrap_content"/>
+                  </LinearLayout>
+
+                  <LinearLayout
+                      android:layout_width="match_parent"
+                      android:layout_height="wrap_content"
+                      android:orientation="horizontal"
+                      android:gravity="center_vertical"
+                      android:layout_marginTop="6dp">
+                      <TextView
+                          android:layout_width="wrap_content"
+                          android:layout_height="wrap_content"
+                          android:text="@string/sr_opt_preload"
+                          android:textSize="12sp"/>
+                      <SeekBar
+                          android:id="@+id/sr_opt_preload_bar"
+                          android:layout_width="0dp"
+                          android:layout_height="wrap_content"
+                          android:layout_weight="1"
+                          android:max="8"/>
+                      <TextView
+                          android:id="@+id/sr_opt_preload_value"
+                          android:layout_width="wrap_content"
+                          android:layout_height="wrap_content"
+                          android:minWidth="28dp"
+                          android:gravity="end"
+                          android:textSize="12sp"
+                          android:textColor="#888"/>
+                  </LinearLayout>
+
+                  <Button
+                      android:id="@+id/sr_opt_reset"
+                      android:layout_width="wrap_content"
+                      android:layout_height="wrap_content"
+                      android:layout_marginTop="8dp"
+                      android:text="@string/sr_opt_reset"/>
               </LinearLayout>
+
+              <!-- 参数面板与下面的模型列表之间的分隔（用户口径：要和下面的模型隔开） -->
+              <View
+                  android:layout_width="match_parent"
+                  android:layout_height="1dp"
+                  android:background="#22000000"
+                  android:layout_marginTop="20dp"
+                  android:layout_marginBottom="12dp"/>
 
               <TextView
                   android:id="@+id/sr_cugan_group_title"
@@ -1022,7 +795,6 @@
                   android:textColor="@color/success"
                   android:textSize="12sp"
                   android:visibility="gone"/>
-
               <LinearLayout
                   android:layout_width="match_parent"
                   android:layout_height="wrap_content"
@@ -1032,14 +804,15 @@
                   android:layout_marginTop="8dp">
 
                   <TextView
-                      android:layout_width="wrap_content"
+                      android:layout_width="match_parent"
                       android:layout_height="wrap_content"
                       android:text="@string/sr_cugan_group_desc"
                       android:textSize="11sp"
                       android:textColor="#888"
                       android:layout_marginBottom="8dp"/>
+
                   <LinearLayout
-                      android:id="@+id/sr_cugan_dn_row"
+                      android:id="@+id/sr_cugan_se_row"
                       android:layout_width="match_parent"
                       android:layout_height="wrap_content"
                       android:orientation="vertical"
@@ -1052,16 +825,25 @@
                           android:gravity="center_vertical">
 
                           <TextView
-                              android:id="@+id/sr_cugan_dn_title"
-                                  android:layout_width="0dp"
-                                  android:layout_height="wrap_content"
-                                  android:layout_weight="1"
-                                  android:text="@string/sr_model_cugan_dn"
-                                  android:textSize="14sp"
-                                  android:textStyle="bold"/>
+                              android:id="@+id/sr_cugan_se_title"
+                              android:layout_width="0dp"
+                              android:layout_height="wrap_content"
+                              android:layout_weight="1"
+                              android:text="@string/sr_model_realcugan_se"
+                              android:textSize="14sp"
+                              android:textStyle="bold"/>
+
+                          <TextView
+                              android:id="@+id/sr_cugan_se_tag"
+                              android:layout_width="wrap_content"
+                              android:layout_height="wrap_content"
+                              android:layout_marginEnd="6dp"
+                              android:text="@string/sr_tag_realcugan_se"
+                              android:textSize="11sp"
+                              android:textColor="#888"/>
 
                           <RadioButton
-                              android:id="@+id/sr_cugan_dn_radio"
+                              android:id="@+id/sr_cugan_se_radio"
                               android:layout_width="wrap_content"
                               android:layout_height="wrap_content"
                               android:clickable="false"
@@ -1070,6 +852,15 @@
 
                       <include
                           layout="@layout/item_model_row_browser"/>
+                  <TextView
+                      android:id="@+id/sr_cugan_se_desc"
+                      android:layout_width="match_parent"
+                      android:layout_height="wrap_content"
+                      android:text="@string/sr_model_realcugan_se_desc"
+                      android:textSize="11sp"
+                      android:textColor="#888"
+                      android:paddingTop="2dp"/>
+
                   </LinearLayout>
 
                   <View
@@ -1078,7 +869,7 @@
                       android:background="#1A000000"/>
 
                   <LinearLayout
-                      android:id="@+id/sr_cugan_cons_row"
+                      android:id="@+id/sr_cugan_pro_row"
                       android:layout_width="match_parent"
                       android:layout_height="wrap_content"
                       android:orientation="vertical"
@@ -1091,55 +882,25 @@
                           android:gravity="center_vertical">
 
                           <TextView
-                              android:id="@+id/sr_cugan_cons_title"
-                                  android:layout_width="0dp"
-                                  android:layout_height="wrap_content"
-                                  android:layout_weight="1"
-                                  android:text="@string/sr_model_cugan_cons"
-                                  android:textSize="14sp"
-                                  android:textStyle="bold"/>
-
-                          <RadioButton
-                              android:id="@+id/sr_cugan_cons_radio"
-                              android:layout_width="wrap_content"
+                              android:id="@+id/sr_cugan_pro_title"
+                              android:layout_width="0dp"
                               android:layout_height="wrap_content"
-                              android:clickable="false"
-                              android:focusable="false"/>
-                      </LinearLayout>
-
-                      <include
-                          layout="@layout/item_model_row_browser"/>
-                  </LinearLayout>
-
-                  <View
-                      android:layout_width="match_parent"
-                      android:layout_height="1dp"
-                      android:background="#1A000000"/>
-
-                  <LinearLayout
-                      android:id="@+id/sr_cugan_d3_row"
-                      android:layout_width="match_parent"
-                      android:layout_height="wrap_content"
-                      android:orientation="vertical"
-                      android:clickable="true">
-
-                      <LinearLayout
-                          android:layout_width="match_parent"
-                          android:layout_height="wrap_content"
-                          android:orientation="horizontal"
-                          android:gravity="center_vertical">
+                              android:layout_weight="1"
+                              android:text="@string/sr_model_realcugan_pro"
+                              android:textSize="14sp"
+                              android:textStyle="bold"/>
 
                           <TextView
-                              android:id="@+id/sr_cugan_d3_title"
-                                  android:layout_width="0dp"
-                                  android:layout_height="wrap_content"
-                                  android:layout_weight="1"
-                                  android:text="@string/sr_model_cugan_d3"
-                                  android:textSize="14sp"
-                                  android:textStyle="bold"/>
+                              android:id="@+id/sr_cugan_pro_tag"
+                              android:layout_width="wrap_content"
+                              android:layout_height="wrap_content"
+                              android:layout_marginEnd="6dp"
+                              android:text="@string/sr_tag_realcugan_pro"
+                              android:textSize="11sp"
+                              android:textColor="#888"/>
 
                           <RadioButton
-                              android:id="@+id/sr_cugan_d3_radio"
+                              android:id="@+id/sr_cugan_pro_radio"
                               android:layout_width="wrap_content"
                               android:layout_height="wrap_content"
                               android:clickable="false"
@@ -1148,124 +909,17 @@
 
                       <include
                           layout="@layout/item_model_row_browser"/>
-                  </LinearLayout>
-
-                  <View
-                      android:layout_width="match_parent"
-                      android:layout_height="1dp"
-                      android:background="#1A000000"/>
-
-                  <LinearLayout
-                      android:id="@+id/sr_cugan_pro_dn_row"
+                  <TextView
+                      android:id="@+id/sr_cugan_pro_desc"
                       android:layout_width="match_parent"
                       android:layout_height="wrap_content"
-                      android:orientation="vertical"
-                      android:clickable="true">
+                      android:text="@string/sr_model_realcugan_pro_desc"
+                      android:textSize="11sp"
+                      android:textColor="#888"
+                      android:paddingTop="2dp"/>
 
-                      <LinearLayout
-                          android:layout_width="match_parent"
-                          android:layout_height="wrap_content"
-                          android:orientation="horizontal"
-                          android:gravity="center_vertical">
-
-                          <TextView
-                              android:id="@+id/sr_cugan_pro_dn_title"
-                                  android:layout_width="0dp"
-                                  android:layout_height="wrap_content"
-                                  android:layout_weight="1"
-                                  android:text="@string/sr_model_cugan_pro_dn"
-                                  android:textSize="14sp"
-                                  android:textStyle="bold"/>
-
-                          <RadioButton
-                              android:id="@+id/sr_cugan_pro_dn_radio"
-                              android:layout_width="wrap_content"
-                              android:layout_height="wrap_content"
-                              android:clickable="false"
-                              android:focusable="false"/>
-                      </LinearLayout>
-
-                      <include
-                          layout="@layout/item_model_row_browser"/>
                   </LinearLayout>
 
-                  <View
-                      android:layout_width="match_parent"
-                      android:layout_height="1dp"
-                      android:background="#1A000000"/>
-
-                  <LinearLayout
-                      android:id="@+id/sr_cugan_pro_cons_row"
-                      android:layout_width="match_parent"
-                      android:layout_height="wrap_content"
-                      android:orientation="vertical"
-                      android:clickable="true">
-
-                      <LinearLayout
-                          android:layout_width="match_parent"
-                          android:layout_height="wrap_content"
-                          android:orientation="horizontal"
-                          android:gravity="center_vertical">
-
-                          <TextView
-                              android:id="@+id/sr_cugan_pro_cons_title"
-                                  android:layout_width="0dp"
-                                  android:layout_height="wrap_content"
-                                  android:layout_weight="1"
-                                  android:text="@string/sr_model_cugan_pro_cons"
-                                  android:textSize="14sp"
-                                  android:textStyle="bold"/>
-
-                          <RadioButton
-                              android:id="@+id/sr_cugan_pro_cons_radio"
-                              android:layout_width="wrap_content"
-                              android:layout_height="wrap_content"
-                              android:clickable="false"
-                              android:focusable="false"/>
-                      </LinearLayout>
-
-                      <include
-                          layout="@layout/item_model_row_browser"/>
-                  </LinearLayout>
-
-                  <View
-                      android:layout_width="match_parent"
-                      android:layout_height="1dp"
-                      android:background="#1A000000"/>
-
-                  <LinearLayout
-                      android:id="@+id/sr_cugan_pro_d3_row"
-                      android:layout_width="match_parent"
-                      android:layout_height="wrap_content"
-                      android:orientation="vertical"
-                      android:clickable="true">
-
-                      <LinearLayout
-                          android:layout_width="match_parent"
-                          android:layout_height="wrap_content"
-                          android:orientation="horizontal"
-                          android:gravity="center_vertical">
-
-                          <TextView
-                              android:id="@+id/sr_cugan_pro_d3_title"
-                                  android:layout_width="0dp"
-                                  android:layout_height="wrap_content"
-                                  android:layout_weight="1"
-                                  android:text="@string/sr_model_cugan_pro_d3"
-                                  android:textSize="14sp"
-                                  android:textStyle="bold"/>
-
-                          <RadioButton
-                              android:id="@+id/sr_cugan_pro_d3_radio"
-                              android:layout_width="wrap_content"
-                              android:layout_height="wrap_content"
-                              android:clickable="false"
-                              android:focusable="false"/>
-                      </LinearLayout>
-
-                      <include
-                          layout="@layout/item_model_row_browser"/>
-                  </LinearLayout>
                   <View
                       android:layout_width="match_parent"
                       android:layout_height="1dp"
@@ -1286,12 +940,21 @@
 
                           <TextView
                               android:id="@+id/sr_cugan_nose_title"
-                                  android:layout_width="0dp"
-                                  android:layout_height="wrap_content"
-                                  android:layout_weight="1"
-                                  android:text="@string/sr_model_cugan_nose_2x"
-                                  android:textSize="14sp"
-                                  android:textStyle="bold"/>
+                              android:layout_width="0dp"
+                              android:layout_height="wrap_content"
+                              android:layout_weight="1"
+                              android:text="@string/sr_model_realcugan_nose"
+                              android:textSize="14sp"
+                              android:textStyle="bold"/>
+
+                          <TextView
+                              android:id="@+id/sr_cugan_nose_tag"
+                              android:layout_width="wrap_content"
+                              android:layout_height="wrap_content"
+                              android:layout_marginEnd="6dp"
+                              android:text="@string/sr_tag_realcugan_nose"
+                              android:textSize="11sp"
+                              android:textColor="#888"/>
 
                           <RadioButton
                               android:id="@+id/sr_cugan_nose_radio"
@@ -1303,14 +966,61 @@
 
                       <include
                           layout="@layout/item_model_row_browser"/>
+                  <TextView
+                      android:id="@+id/sr_cugan_nose_desc"
+                      android:layout_width="match_parent"
+                      android:layout_height="wrap_content"
+                      android:text="@string/sr_model_realcugan_nose_desc"
+                      android:textSize="11sp"
+                      android:textColor="#888"
+                      android:paddingTop="2dp"/>
+
                   </LinearLayout>
+
                   <View
                       android:layout_width="match_parent"
                       android:layout_height="1dp"
                       android:background="#1A000000"/>
 
+              </LinearLayout>
+
+              <TextView
+                  android:id="@+id/sr_w2x_group_title"
+                  android:layout_width="wrap_content"
+                  android:layout_height="wrap_content"
+                  android:text="@string/sr_w2x_group"
+                  android:textSize="14sp"
+                  android:textStyle="bold"
+                  android:padding="4dp"
+                  android:layout_marginTop="8dp"
+                  android:background="@drawable/ocr_group_selector"
+                  android:clickable="true"/>
+              <TextView
+                  android:id="@+id/sr_w2x_group_selected"
+                  android:layout_width="wrap_content"
+                  android:layout_height="wrap_content"
+                  android:text="@string/ocr_group_selected"
+                  android:textColor="@color/success"
+                  android:textSize="12sp"
+                  android:visibility="gone"/>
+              <LinearLayout
+                  android:layout_width="match_parent"
+                  android:layout_height="wrap_content"
+                  android:orientation="vertical"
+                  android:background="@drawable/setting_shape"
+                  android:padding="12dp"
+                  android:layout_marginTop="8dp">
+
+                  <TextView
+                      android:layout_width="match_parent"
+                      android:layout_height="wrap_content"
+                      android:text="@string/sr_w2x_group_desc"
+                      android:textSize="11sp"
+                      android:textColor="#888"
+                      android:layout_marginBottom="8dp"/>
+
                   <LinearLayout
-                      android:id="@+id/sr_rsrgan_v3_x2_row"
+                      android:id="@+id/sr_w2x_cunet_row"
                       android:layout_width="match_parent"
                       android:layout_height="wrap_content"
                       android:orientation="vertical"
@@ -1323,16 +1033,25 @@
                           android:gravity="center_vertical">
 
                           <TextView
-                              android:id="@+id/sr_rsrgan_v3_x2_title"
-                                  android:layout_width="0dp"
-                                  android:layout_height="wrap_content"
-                                  android:layout_weight="1"
-                                  android:text="@string/sr_model_esrgan_v3_anime_x2"
-                                  android:textSize="14sp"
-                                  android:textStyle="bold"/>
+                              android:id="@+id/sr_w2x_cunet_title"
+                              android:layout_width="0dp"
+                              android:layout_height="wrap_content"
+                              android:layout_weight="1"
+                              android:text="@string/sr_model_waifu2x_cunet"
+                              android:textSize="14sp"
+                              android:textStyle="bold"/>
+
+                          <TextView
+                              android:id="@+id/sr_w2x_cunet_tag"
+                              android:layout_width="wrap_content"
+                              android:layout_height="wrap_content"
+                              android:layout_marginEnd="6dp"
+                              android:text="@string/sr_tag_waifu2x_cunet"
+                              android:textSize="11sp"
+                              android:textColor="#888"/>
 
                           <RadioButton
-                              android:id="@+id/sr_rsrgan_v3_x2_radio"
+                              android:id="@+id/sr_w2x_cunet_radio"
                               android:layout_width="wrap_content"
                               android:layout_height="wrap_content"
                               android:clickable="false"
@@ -1341,6 +1060,72 @@
 
                       <include
                           layout="@layout/item_model_row_browser"/>
+                  <TextView
+                      android:id="@+id/sr_w2x_cunet_desc"
+                      android:layout_width="match_parent"
+                      android:layout_height="wrap_content"
+                      android:text="@string/sr_model_waifu2x_cunet_desc"
+                      android:textSize="11sp"
+                      android:textColor="#888"
+                      android:paddingTop="2dp"/>
+
+                  </LinearLayout>
+
+                  <View
+                      android:layout_width="match_parent"
+                      android:layout_height="1dp"
+                      android:background="#1A000000"/>
+
+                  <LinearLayout
+                      android:id="@+id/sr_w2x_fast_row"
+                      android:layout_width="match_parent"
+                      android:layout_height="wrap_content"
+                      android:orientation="vertical"
+                      android:clickable="true">
+
+                      <LinearLayout
+                          android:layout_width="match_parent"
+                          android:layout_height="wrap_content"
+                          android:orientation="horizontal"
+                          android:gravity="center_vertical">
+
+                          <TextView
+                              android:id="@+id/sr_w2x_fast_title"
+                              android:layout_width="0dp"
+                              android:layout_height="wrap_content"
+                              android:layout_weight="1"
+                              android:text="@string/sr_model_waifu2x_fast"
+                              android:textSize="14sp"
+                              android:textStyle="bold"/>
+
+                          <TextView
+                              android:id="@+id/sr_w2x_fast_tag"
+                              android:layout_width="wrap_content"
+                              android:layout_height="wrap_content"
+                              android:layout_marginEnd="6dp"
+                              android:text="@string/sr_tag_waifu2x_fast"
+                              android:textSize="11sp"
+                              android:textColor="#888"/>
+
+                          <RadioButton
+                              android:id="@+id/sr_w2x_fast_radio"
+                              android:layout_width="wrap_content"
+                              android:layout_height="wrap_content"
+                              android:clickable="false"
+                              android:focusable="false"/>
+                      </LinearLayout>
+
+                      <include
+                          layout="@layout/item_model_row_browser"/>
+                  <TextView
+                      android:id="@+id/sr_w2x_fast_desc"
+                      android:layout_width="match_parent"
+                      android:layout_height="wrap_content"
+                      android:text="@string/sr_model_waifu2x_fast_desc"
+                      android:textSize="11sp"
+                      android:textColor="#888"
+                      android:paddingTop="2dp"/>
+
                   </LinearLayout>
 
                   <View
@@ -1369,7 +1154,6 @@
                   android:textColor="@color/success"
                   android:textSize="12sp"
                   android:visibility="gone"/>
-
               <LinearLayout
                   android:layout_width="match_parent"
                   android:layout_height="wrap_content"
@@ -1379,14 +1163,15 @@
                   android:layout_marginTop="8dp">
 
                   <TextView
-                      android:layout_width="wrap_content"
+                      android:layout_width="match_parent"
                       android:layout_height="wrap_content"
                       android:text="@string/sr_rsrgan_group_desc"
                       android:textSize="11sp"
                       android:textColor="#888"
                       android:layout_marginBottom="8dp"/>
+
                   <LinearLayout
-                      android:id="@+id/sr_rsrgan_a6b_row"
+                      android:id="@+id/sr_esrgan_av3_row"
                       android:layout_width="match_parent"
                       android:layout_height="wrap_content"
                       android:orientation="vertical"
@@ -1399,54 +1184,25 @@
                           android:gravity="center_vertical">
 
                           <TextView
-                              android:id="@+id/sr_rsrgan_a6b_title"
-                                  android:layout_width="0dp"
-                                  android:layout_height="wrap_content"
-                                  android:layout_weight="1"
-                                  android:text="@string/sr_model_rsrgan_a6b"
-                                  android:textSize="14sp"
-                                  android:textStyle="bold"/>
-
-                          <RadioButton
-                              android:id="@+id/sr_rsrgan_a6b_radio"
-                              android:layout_width="wrap_content"
+                              android:id="@+id/sr_esrgan_av3_title"
+                              android:layout_width="0dp"
                               android:layout_height="wrap_content"
-                              android:clickable="false"
-                              android:focusable="false"/>
-                      </LinearLayout>
-
-                      <include
-                          layout="@layout/item_model_row_browser"/>
-                  </LinearLayout>
-                  <View
-                      android:layout_width="match_parent"
-                      android:layout_height="1dp"
-                      android:background="#1A000000"/>
-
-                  <LinearLayout
-                      android:id="@+id/sr_span_uni_row"
-                      android:layout_width="match_parent"
-                      android:layout_height="wrap_content"
-                      android:orientation="vertical"
-                      android:clickable="true">
-
-                      <LinearLayout
-                          android:layout_width="match_parent"
-                          android:layout_height="wrap_content"
-                          android:orientation="horizontal"
-                          android:gravity="center_vertical">
+                              android:layout_weight="1"
+                              android:text="@string/sr_model_realesrgan_av3"
+                              android:textSize="14sp"
+                              android:textStyle="bold"/>
 
                           <TextView
-                              android:id="@+id/sr_span_uni_title"
-                                  android:layout_width="0dp"
-                                  android:layout_height="wrap_content"
-                                  android:layout_weight="1"
-                                  android:text="@string/sr_model_span_uni_2x"
-                                  android:textSize="14sp"
-                                  android:textStyle="bold"/>
+                              android:id="@+id/sr_esrgan_av3_tag"
+                              android:layout_width="wrap_content"
+                              android:layout_height="wrap_content"
+                              android:layout_marginEnd="6dp"
+                              android:text="@string/sr_tag_realesrgan_av3"
+                              android:textSize="11sp"
+                              android:textColor="#888"/>
 
                           <RadioButton
-                              android:id="@+id/sr_span_uni_radio"
+                              android:id="@+id/sr_esrgan_av3_radio"
                               android:layout_width="wrap_content"
                               android:layout_height="wrap_content"
                               android:clickable="false"
@@ -1455,49 +1211,58 @@
 
                       <include
                           layout="@layout/item_model_row_browser"/>
-                  </LinearLayout>
-                  <View
-                      android:layout_width="match_parent"
-                      android:layout_height="1dp"
-                      android:background="#1A000000"/>
-
-                  <LinearLayout
-                      android:id="@+id/sr_sudo_uc_row"
+                  <TextView
+                      android:id="@+id/sr_esrgan_av3_desc"
                       android:layout_width="match_parent"
                       android:layout_height="wrap_content"
-                      android:orientation="vertical"
-                      android:clickable="true">
+                      android:text="@string/sr_model_realesrgan_av3_desc"
+                      android:textSize="11sp"
+                      android:textColor="#888"
+                      android:paddingTop="2dp"/>
 
-                      <LinearLayout
-                          android:layout_width="match_parent"
-                          android:layout_height="wrap_content"
-                          android:orientation="horizontal"
-                          android:gravity="center_vertical">
-
-                          <TextView
-                              android:id="@+id/sr_sudo_uc_title"
-                                  android:layout_width="0dp"
-                                  android:layout_height="wrap_content"
-                                  android:layout_weight="1"
-                                  android:text="@string/sr_model_sudo_uc_2x"
-                                  android:textSize="14sp"
-                                  android:textStyle="bold"/>
-
-                          <RadioButton
-                              android:id="@+id/sr_sudo_uc_radio"
-                              android:layout_width="wrap_content"
-                              android:layout_height="wrap_content"
-                              android:clickable="false"
-                              android:focusable="false"/>
-                      </LinearLayout>
-
-                      <include
-                          layout="@layout/item_model_row_browser"/>
                   </LinearLayout>
+
                   <View
                       android:layout_width="match_parent"
                       android:layout_height="1dp"
                       android:background="#1A000000"/>
+
+              </LinearLayout>
+
+              <TextView
+                  android:id="@+id/sr_w2xex_group_title"
+                  android:layout_width="wrap_content"
+                  android:layout_height="wrap_content"
+                  android:text="@string/sr_w2xex_group"
+                  android:textSize="14sp"
+                  android:textStyle="bold"
+                  android:padding="4dp"
+                  android:layout_marginTop="8dp"
+                  android:background="@drawable/ocr_group_selector"
+                  android:clickable="true"/>
+              <TextView
+                  android:id="@+id/sr_w2xex_group_selected"
+                  android:layout_width="wrap_content"
+                  android:layout_height="wrap_content"
+                  android:text="@string/ocr_group_selected"
+                  android:textColor="@color/success"
+                  android:textSize="12sp"
+                  android:visibility="gone"/>
+              <LinearLayout
+                  android:layout_width="match_parent"
+                  android:layout_height="wrap_content"
+                  android:orientation="vertical"
+                  android:background="@drawable/setting_shape"
+                  android:padding="12dp"
+                  android:layout_marginTop="8dp">
+
+                  <TextView
+                      android:layout_width="match_parent"
+                      android:layout_height="wrap_content"
+                      android:text="@string/sr_w2xex_group_desc"
+                      android:textSize="11sp"
+                      android:textColor="#888"
+                      android:layout_marginBottom="8dp"/>
 
                   <LinearLayout
                       android:id="@+id/sr_w2xex_uf_row"
@@ -1514,12 +1279,21 @@
 
                           <TextView
                               android:id="@+id/sr_w2xex_uf_title"
-                                  android:layout_width="0dp"
-                                  android:layout_height="wrap_content"
-                                  android:layout_weight="1"
-                                  android:text="@string/sr_model_sr_w2xex_universal_fast_2x"
-                                  android:textSize="14sp"
-                                  android:textStyle="bold"/>
+                              android:layout_width="0dp"
+                              android:layout_height="wrap_content"
+                              android:layout_weight="1"
+                              android:text="@string/sr_model_w2xex_uf"
+                              android:textSize="14sp"
+                              android:textStyle="bold"/>
+
+                          <TextView
+                              android:id="@+id/sr_w2xex_uf_tag"
+                              android:layout_width="wrap_content"
+                              android:layout_height="wrap_content"
+                              android:layout_marginEnd="6dp"
+                              android:text="@string/sr_tag_w2xex_uf"
+                              android:textSize="11sp"
+                              android:textColor="#888"/>
 
                           <RadioButton
                               android:id="@+id/sr_w2xex_uf_radio"
@@ -1531,7 +1305,17 @@
 
                       <include
                           layout="@layout/item_model_row_browser"/>
+                  <TextView
+                      android:id="@+id/sr_w2xex_uf_desc"
+                      android:layout_width="match_parent"
+                      android:layout_height="wrap_content"
+                      android:text="@string/sr_model_w2xex_uf_desc"
+                      android:textSize="11sp"
+                      android:textColor="#888"
+                      android:paddingTop="2dp"/>
+
                   </LinearLayout>
+
                   <View
                       android:layout_width="match_parent"
                       android:layout_height="1dp"
@@ -1552,12 +1336,21 @@
 
                           <TextView
                               android:id="@+id/sr_w2xex_omni_title"
-                                  android:layout_width="0dp"
-                                  android:layout_height="wrap_content"
-                                  android:layout_weight="1"
-                                  android:text="@string/sr_model_sr_w2xex_omni_mini_v2_2x"
-                                  android:textSize="14sp"
-                                  android:textStyle="bold"/>
+                              android:layout_width="0dp"
+                              android:layout_height="wrap_content"
+                              android:layout_weight="1"
+                              android:text="@string/sr_model_w2xex_omni"
+                              android:textSize="14sp"
+                              android:textStyle="bold"/>
+
+                          <TextView
+                              android:id="@+id/sr_w2xex_omni_tag"
+                              android:layout_width="wrap_content"
+                              android:layout_height="wrap_content"
+                              android:layout_marginEnd="6dp"
+                              android:text="@string/sr_tag_w2xex_omni"
+                              android:textSize="11sp"
+                              android:textColor="#888"/>
 
                           <RadioButton
                               android:id="@+id/sr_w2xex_omni_radio"
@@ -1569,7 +1362,17 @@
 
                       <include
                           layout="@layout/item_model_row_browser"/>
+                  <TextView
+                      android:id="@+id/sr_w2xex_omni_desc"
+                      android:layout_width="match_parent"
+                      android:layout_height="wrap_content"
+                      android:text="@string/sr_model_w2xex_omni_desc"
+                      android:textSize="11sp"
+                      android:textColor="#888"
+                      android:paddingTop="2dp"/>
+
                   </LinearLayout>
+
                   <View
                       android:layout_width="match_parent"
                       android:layout_height="1dp"
@@ -1590,12 +1393,21 @@
 
                           <TextView
                               android:id="@+id/sr_w2xex_photo_title"
-                                  android:layout_width="0dp"
-                                  android:layout_height="wrap_content"
-                                  android:layout_weight="1"
-                                  android:text="@string/sr_model_sr_w2xex_photo_small_2x"
-                                  android:textSize="14sp"
-                                  android:textStyle="bold"/>
+                              android:layout_width="0dp"
+                              android:layout_height="wrap_content"
+                              android:layout_weight="1"
+                              android:text="@string/sr_model_w2xex_photo"
+                              android:textSize="14sp"
+                              android:textStyle="bold"/>
+
+                          <TextView
+                              android:id="@+id/sr_w2xex_photo_tag"
+                              android:layout_width="wrap_content"
+                              android:layout_height="wrap_content"
+                              android:layout_marginEnd="6dp"
+                              android:text="@string/sr_tag_w2xex_photo"
+                              android:textSize="11sp"
+                              android:textColor="#888"/>
 
                           <RadioButton
                               android:id="@+id/sr_w2xex_photo_radio"
@@ -1607,6 +1419,166 @@
 
                       <include
                           layout="@layout/item_model_row_browser"/>
+                  <TextView
+                      android:id="@+id/sr_w2xex_photo_desc"
+                      android:layout_width="match_parent"
+                      android:layout_height="wrap_content"
+                      android:text="@string/sr_model_w2xex_photo_desc"
+                      android:textSize="11sp"
+                      android:textColor="#888"
+                      android:paddingTop="2dp"/>
+
+                  </LinearLayout>
+
+                  <View
+                      android:layout_width="match_parent"
+                      android:layout_height="1dp"
+                      android:background="#1A000000"/>
+
+              </LinearLayout>
+
+              <TextView
+                  android:id="@+id/sr_generic_group_title"
+                  android:layout_width="wrap_content"
+                  android:layout_height="wrap_content"
+                  android:text="@string/sr_generic_group"
+                  android:textSize="14sp"
+                  android:textStyle="bold"
+                  android:padding="4dp"
+                  android:layout_marginTop="8dp"
+                  android:background="@drawable/ocr_group_selector"
+                  android:clickable="true"/>
+              <TextView
+                  android:id="@+id/sr_generic_group_selected"
+                  android:layout_width="wrap_content"
+                  android:layout_height="wrap_content"
+                  android:text="@string/ocr_group_selected"
+                  android:textColor="@color/success"
+                  android:textSize="12sp"
+                  android:visibility="gone"/>
+              <LinearLayout
+                  android:layout_width="match_parent"
+                  android:layout_height="wrap_content"
+                  android:orientation="vertical"
+                  android:background="@drawable/setting_shape"
+                  android:padding="12dp"
+                  android:layout_marginTop="8dp">
+
+                  <TextView
+                      android:layout_width="match_parent"
+                      android:layout_height="wrap_content"
+                      android:text="@string/sr_generic_group_desc"
+                      android:textSize="11sp"
+                      android:textColor="#888"
+                      android:layout_marginBottom="8dp"/>
+
+                  <LinearLayout
+                      android:id="@+id/sr_sudo_uc_row"
+                      android:layout_width="match_parent"
+                      android:layout_height="wrap_content"
+                      android:orientation="vertical"
+                      android:clickable="true">
+
+                      <LinearLayout
+                          android:layout_width="match_parent"
+                          android:layout_height="wrap_content"
+                          android:orientation="horizontal"
+                          android:gravity="center_vertical">
+
+                          <TextView
+                              android:id="@+id/sr_sudo_uc_title"
+                              android:layout_width="0dp"
+                              android:layout_height="wrap_content"
+                              android:layout_weight="1"
+                              android:text="@string/sr_model_sudo_uc"
+                              android:textSize="14sp"
+                              android:textStyle="bold"/>
+
+                          <TextView
+                              android:id="@+id/sr_sudo_uc_tag"
+                              android:layout_width="wrap_content"
+                              android:layout_height="wrap_content"
+                              android:layout_marginEnd="6dp"
+                              android:text="@string/sr_tag_sudo_uc"
+                              android:textSize="11sp"
+                              android:textColor="#888"/>
+
+                          <RadioButton
+                              android:id="@+id/sr_sudo_uc_radio"
+                              android:layout_width="wrap_content"
+                              android:layout_height="wrap_content"
+                              android:clickable="false"
+                              android:focusable="false"/>
+                      </LinearLayout>
+
+                      <include
+                          layout="@layout/item_model_row_browser"/>
+                  <TextView
+                      android:id="@+id/sr_sudo_uc_desc"
+                      android:layout_width="match_parent"
+                      android:layout_height="wrap_content"
+                      android:text="@string/sr_model_sudo_uc_desc"
+                      android:textSize="11sp"
+                      android:textColor="#888"
+                      android:paddingTop="2dp"/>
+
+                  </LinearLayout>
+
+                  <View
+                      android:layout_width="match_parent"
+                      android:layout_height="1dp"
+                      android:background="#1A000000"/>
+
+                  <LinearLayout
+                      android:id="@+id/sr_span_uni_row"
+                      android:layout_width="match_parent"
+                      android:layout_height="wrap_content"
+                      android:orientation="vertical"
+                      android:clickable="true">
+
+                      <LinearLayout
+                          android:layout_width="match_parent"
+                          android:layout_height="wrap_content"
+                          android:orientation="horizontal"
+                          android:gravity="center_vertical">
+
+                          <TextView
+                              android:id="@+id/sr_span_uni_title"
+                              android:layout_width="0dp"
+                              android:layout_height="wrap_content"
+                              android:layout_weight="1"
+                              android:text="@string/sr_model_span_nomosuni"
+                              android:textSize="14sp"
+                              android:textStyle="bold"/>
+
+                          <TextView
+                              android:id="@+id/sr_span_uni_tag"
+                              android:layout_width="wrap_content"
+                              android:layout_height="wrap_content"
+                              android:layout_marginEnd="6dp"
+                              android:text="@string/sr_tag_span_nomosuni"
+                              android:textSize="11sp"
+                              android:textColor="#888"/>
+
+                          <RadioButton
+                              android:id="@+id/sr_span_uni_radio"
+                              android:layout_width="wrap_content"
+                              android:layout_height="wrap_content"
+                              android:clickable="false"
+                              android:focusable="false"/>
+                      </LinearLayout>
+
+                      <include
+                          layout="@layout/item_model_row_browser"/>
+                  <TextView
+                      android:id="@+id/sr_span_uni_desc"
+                      android:layout_width="match_parent"
+                      android:layout_height="wrap_content"
+                      android:text="@string/sr_model_span_nomosuni_desc"
+                      android:textSize="11sp"
+                      android:textColor="#888"
+                      android:paddingTop="2dp"/>
+
                   </LinearLayout>
 
                   <View

@@ -44,6 +44,21 @@ class SrOptionsTest {
         }
     }
 
+    /** 输入像素压缩阈值：默认 1.5MP、可存可取、必须进引擎指纹。 */
+    @Test
+    fun inputThresholdDefaultsAndAffectsEngineKey() {
+        assertEquals("默认输入阈值 1.5MP", 1.5f, SrOptions().maxInputMegapixels, 0.001f)
+        val prefs = org.robolectric.RuntimeEnvironment.getApplication()
+            .getSharedPreferences("sr_opt_mp", android.content.Context.MODE_PRIVATE)
+        SrOptions.write(prefs, SrOptions(maxInputMegapixels = 0.6f))
+        assertEquals(0.6f, SrOptions.from(prefs).maxInputMegapixels, 0.001f)
+        assertNotEquals(
+            "输入阈值变化必须更新引擎指纹（它改变喂进去的图）",
+            SrOptions().engineKey(),
+            SrOptions(maxInputMegapixels = 0.6f).engineKey(),
+        )
+    }
+
     @Test
     fun defaultsMatchTheReferenceProject() {
         val o = SrOptions()

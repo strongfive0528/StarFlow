@@ -752,6 +752,7 @@ class MangaViewerActivity : AppCompatActivity() {
         binding.btnRetranslate.isEnabled = false
         com.moe.starflow.utils.UiUtils.showToast(this, getString(R.string.toast_translating_now))
         lifecycleScope.launch {
+            val heartbeatJob = com.moe.starflow.manga.OcrLock.startHeartbeat(ocrToken)
             var originalBmp: Bitmap?
             try {
                 val cropLeftPx = pageCache.cropLeft
@@ -878,6 +879,7 @@ class MangaViewerActivity : AppCompatActivity() {
                 com.moe.starflow.utils.UiUtils.showToast(this@MangaViewerActivity, e.message ?: getString(R.string.toast_retranslate_failed))
             } finally {
                 binding.btnRetranslate.isEnabled = true
+                heartbeatJob.cancel()
                 com.moe.starflow.manga.OcrLock.release(ocrToken)
             }
         }

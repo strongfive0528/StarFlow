@@ -76,37 +76,7 @@ object SrDisplayBase {
             if (!anime4kModeId.isNullOrEmpty()) "a:$anime4kModeId" else "o"
     }
 
-    /**
-     * 「超分产物能不能当**比原图更大**的显示底图」的**唯一判据**。
-     *
-     * 为什么必须有它：超分底图只有在**像素比原图多**时才有意义。`OverlayRenderer` 拿底图当
-     * 输入、按 `baseScale = 底图宽 / 坐标空间宽` 反算坐标；底图不比原图宽时它只是"更少像素被放大"，
-     * 画上去等于**降画质**，所以显示侧会丢弃它。
-     *
-     * ⚠️ **产出侧（`SrProcessor`）与显示侧（`reader/ReaderTranslationController.srBaseFor`）
-     * 必须调同一个函数**。各写一份就会出现「产出侧存了、显示侧不用」的**幽灵状态**：
-     * 超分记录写着「完成」、面板还能显示产物尺寸，而画面一直是原图 ——
-     * 2026-10 真机反馈的「超分显示完成但好像没有作用」就是它，算式如下：
-     *
-     * ```
-     * A4 @300dpi 的 PDF 页（`PdfRasterPolicy` 的产物）= 2480×3508
-     *   → 输入被压到短边 1080（`SrDownscale.SHORT_SIDE_TARGET`）= 1080×1528
-     *   → 2× 产物只有 2160px 宽 ≤ 原图 2480px  → 被丢弃 → 画面不变
-     * A5 @300dpi 的 PDF 页 = 1746×2479 → 2× 产物 2160px > 1746px → 能用（但只有 1.24×）
-     * ```
-     *
-     * @param productWidth 超分产物的宽度（像素）
-     * @param sourceWidth 该页**原图**的宽度（＝气泡坐标空间的宽）
-     */
+    /** 底图比例的有效性检查：只要求产物和原图坐标空间尺寸为正数，不比较两者大小。 */
     fun isUsableBase(productWidth: Int, sourceWidth: Int): Boolean =
-        sourceWidth > 0 && productWidth > 0 &&
-            productWidth.toFloat() / sourceWidth.toFloat() > MIN_BASE_SCALE
-
-    /**
-     * 「比原图大」的判定阈值。
-     *
-     * 不是 `> 1f`：位图尺寸是整数，1px 的差（如 1746→1747）在视觉上等于没变，
-     * 却会让「已超分」的结论为真、渲染缓存跟着换 key 白重渲一次。
-     */
-    const val MIN_BASE_SCALE = 1.001f
+        sourceWidth > 0 && productWidth > 0
 }

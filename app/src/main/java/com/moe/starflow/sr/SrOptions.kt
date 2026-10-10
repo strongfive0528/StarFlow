@@ -36,9 +36,20 @@ data class SrOptions(
     val fp16Arithmetic: Boolean = DEFAULT_FP16_ARITHMETIC,
     /**
      * 预加载页数（当前页 ±N）—— 对齐他们的 `pref_realcugan_preload_size`（默认 **3**）。
-     * 走 [SrEnhanceQueue.enqueueAround]，**只在没有 OCR 需求时**才启动（见阅读器接线）。
+     *
+     * ⚠️ **当前没有任何读取方**（2026-10-05 用户口径）：曾经用它驱动"翻页 → 当前页 ±N 排进超分队列"，
+     * 那条线在真机上是"点一次超分就自己一页页往后超、完全关不掉"，已整条删除。
+     * 保留这个字段是为了与参照项目的设置项一一对应（`SrOptionsTest` 也在钉它的默认值）；
+     * **再接预加载之前必须先说清触发条件与停止条件**（`SrEnhanceQueue` 类也一起留着了）。
      */
     val preloadPages: Int = DEFAULT_PRELOAD_PAGES,
+    /**
+     * **输入压缩阈值（MP）**；不超过阈值直接送模型，超过后等比例缩小；≤0 = 不限用户阈值。
+     *
+     * 它只控制送入模型的**输入尺寸**，不限制产物尺寸；产物按模型输出原样落盘。
+     * 预处理取它和引擎硬输入上限中的较小值（见 [SrDownscale.plan]）。
+     */
+    val maxInputMegapixels: Float = DEFAULT_MAX_INPUT_MP,
 ) {
 
     /** 他们的 `tileSleepMs`：0 → 0ms、1 → 5ms、2 → 15ms（块间休眠，用速度换前台流畅） */
@@ -53,7 +64,8 @@ data class SrOptions(
      * 只用于 ncnn 引擎的**重建判据**（tile/precision/fp16 都是 net 级别、`load()` 时固化，
      * 改了必须重建实例；与他们的 `currentConfigHash` 同一职责）。
      */
-    fun engineKey(): String = "t${tileSize.coerceAtLeast(MIN_TILE_SIZE)}|p$precision|f${if (fp16Arithmetic) 1 else 0}"
+    fun engineKey(): String =
+        "t${tileSize.coerceAtLeast(MIN_TILE_SIZE)}|p$precision|f${if (fp16Arithmetic) 1 else 0}|mp$maxInputMegapixels"
 
     /**
      * 完整指纹（含模型/倍率/降噪）：进缓存键。
@@ -79,6 +91,9 @@ data class SrOptions(
         /** 他们的 `pref_realcugan_preload_size` 默认值 */
         const val DEFAULT_PRELOAD_PAGES = 3
 
+        /** 输入像素压缩阈值默认 1.5MP（见 [maxInputMegapixels]）；0 = 不限用户阈值 */
+        const val DEFAULT_MAX_INPUT_MP = 1.5f
+
         const val PRECISION_FP16 = 0
         const val PRECISION_FP32 = 1
 
@@ -89,6 +104,7 @@ data class SrOptions(
         const val KEY_PRECISION = "sr_opt_precision"
         const val KEY_FP16_ARITHMETIC = "sr_opt_fp16_arithmetic"
         const val KEY_PRELOAD_PAGES = "sr_opt_preload_pages"
+        const val KEY_MAX_INPUT_MP = "sr_opt_max_input_mp"
 
         /**
          * 从 prefs 读（**唯一读入口**）—— 三处调用点（单页 / 章节批量 / 预加载）必须同源，
@@ -103,6 +119,7 @@ data class SrOptions(
             precision = prefs.getInt(KEY_PRECISION, DEFAULT_PRECISION).coerceIn(0, 1),
             fp16Arithmetic = prefs.getBoolean(KEY_FP16_ARITHMETIC, DEFAULT_FP16_ARITHMETIC),
             preloadPages = prefs.getInt(KEY_PRELOAD_PAGES, DEFAULT_PRELOAD_PAGES).coerceIn(0, 8),
+            maxInputMegapixels = prefs.getFloat(KEY_MAX_INPUT_MP, DEFAULT_MAX_INPUT_MP).coerceIn(0f, 8f),
         )
 
         fun write(prefs: SharedPreferences, options: SrOptions) {
@@ -114,6 +131,7 @@ data class SrOptions(
                 .putInt(KEY_PRECISION, options.precision)
                 .putBoolean(KEY_FP16_ARITHMETIC, options.fp16Arithmetic)
                 .putInt(KEY_PRELOAD_PAGES, options.preloadPages)
+                .putFloat(KEY_MAX_INPUT_MP, options.maxInputMegapixels)
                 .apply()
         }
     }

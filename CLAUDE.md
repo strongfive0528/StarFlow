@@ -594,6 +594,27 @@ tag:OCRBridge | tag:DetectionBridge | tag:BubbleDetector | tag:MangaFloatingServ
 `adb push` 到 app 数据目录、`am force-stop`、`adb shell input/svc power`、`pm trim-caches`。
 `adb install` 与 `adb uninstall` **一律先问**，不得自行决定。
 
+### ⛔ 2026-10-04 用户再次明确：**任何设备操作都要先获得授权**
+
+> 「**不允许你私自安装启动app截图等等操作！！必须获得用户授权**」
+
+当时的违规动作（**每个都是错的**）：`adb install -r` 装机 → `am force-stop` → `am start`/`monkey`
+启动 app → `screencap` 截图。它们在旧文档里被拆在不同清单里（`install`/`force-stop` 在 CAUTION、
+`am start`/`screencap` **压根没写**），于是"逐条对照清单"就把自己说服了。所以改成两条硬规矩：
+
+1. **SAFE 清单是白名单**：清单里**没有**的，默认当 CAUTION —— **先问一句**。
+   不许自己判断"这个应该没事"（`am start` / `monkey` / `screencap` / `screenrecord` 就是这么溜过去的）。
+2. **"启动 app" 与 "截图" 明确算设备操作**：它们不改数据，但会**打断用户正在用手机做的事**
+   （app 被拉到前台、正在跑的翻译任务被切走、屏幕上突然多出东西），对用户是可见的打扰。
+
+新增进 CAUTION（都要先问）：`am start` / `am startservice` / `monkey`（启动 app）、
+`adb shell screencap` / `screenrecord`（截图/录屏，含 `adb exec-out screencap`）。
+
+⚠️ **"只是装个刚构建好的包帮你看看效果"也不行**：`adb install -r` 即便同签名、即便上次装过、
+即便自认为"只是顺手"，也**必须先问**。**本地构建（`gradlew assembleDebug` / 单测）随便跑**
+（产物在 `build/` 里，不碰设备），**装不装、什么时候装由用户说了算**。
+用户没要求时，交付物是「构建通过 + 单测 + 清晰的验证步骤」，**不是**"已经装到你手机上了"。
+
 ### 允许的只读手段（SAFE，可直接用）
 
 `adb devices`、`adb logcat -d`、`adb shell dumpsys/getprop/pidof/ls/stat/df/cat`、
@@ -862,6 +883,29 @@ if (knownBefore == null || knownBefore != nowLandscape) clearCropForScreenChange
 - 许可证：LGPL（原项目）
 
 ## 高频踩坑（gotchas）
+
+- ⚠️⚠️ **改完文件先看 `git show --stat` 有没有"整文件重写"**（2026-10-04 踩到）：
+  本仓库的工作区里**大量文件是 CRLF、而索引里存的是 LF**（`git ls-files --eol` 会显示
+  `i/lf w/crlf`，998 个文件如此），因为 git 靠 stat 缓存判断"没改过"，`git status` 一声不吭。
+  **一旦某个文件被重新写盘（编辑器/AI 工具整文件写回），它的字节就会被原样存进索引 —— CRLF 也存**，
+  于是那个文件的 diff 变成"整文件重写"（实测 `NovelImporter.kt` 540 行 CRLF → 919 行改动、
+  `NovelShelfFragment.kt` 473 行 → 945 行改动），真正的改动被埋在里面**完全 review 不动**。
+  两条处置：
+  1. 提交前扫一眼 `git show --stat HEAD`：某文件改动行数 ≈ 全文件行数 = 中招了；
+  2. 归一化再 `commit --amend`：
+     ```powershell
+     $p = (Resolve-Path <file>).Path
+     $t = [System.IO.File]::ReadAllText($p).Replace("`r`n", "`n")
+     [System.IO.File]::WriteAllText($p, $t, (New-Object System.Text.UTF8Encoding($false)))
+     ```
+  ⚠️ 别用 `Get-Content`/`Set-Content` 做这件事（会把中文读成 mojibake，见下一条）。
+  ⚠️ 也别想着"反正 git 会归一化"：本仓库 `core.autocrlf=false` + `core.eol=lf`，
+  **git 不会替你把 CRLF 转成 LF**（`.gitattributes` 只对 `novel-fixtures/**` 标了 `-text`）。
+
+- **读文件一律用 `read` 工具，不要用 `Get-Content`**（2026-10-04 踩到）：无 BOM 的 UTF-8 文件会被
+  PowerShell 5.1 按系统 ANSI（GBK）解码 —— 中文全变 mojibake（`灏忚鏂囦欢鏍煎紡`），
+  看着像文件坏了、其实只是读错了。要按字节核对（换行/BOM）就用
+  `[System.IO.File]::ReadAllBytes()`。
 
 - **Kotlin 块注释会嵌套**：KDoc 里出现 `/*` 就开一层新注释 —— 例如中文强调写法
   `失败/**不属于这本书**` → 报 `Unclosed comment` + 后面一整片 `Missing '}'`，

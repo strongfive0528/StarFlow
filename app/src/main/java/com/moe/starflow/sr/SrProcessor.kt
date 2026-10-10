@@ -133,23 +133,26 @@ object SrProcessor {
                     delay(LOCK_HEARTBEAT_MS)
                 }
             }
-            // ── 大图预处理（用户口径 2026-10：短边压到 1080p 再超分）──
+            // ── 大图预处理：按用户输入像素阈值和引擎硬上限等比缩小 ──
             // ⚠️ 必须在**持锁期间**做完：缩放本身也是重活（4000x3000 分步下采样），
             //    放到锁外会与别的 OCR/超分抢核，正是这把锁要避免的事。
-            // ⚠️ 压缩目标要**同时**满足「短边 1080」与「引擎的输入像素上限」——
-            //    前者是用户口径，后者是硬约束（2x 档 2.5MP / Real-ESRGAN 4x 0.625MP）：
+            // ⚠️ 输入低于有效阈值（用户设置与模型硬上限中较小者）时直接送模型；高于时等比例压到阈值内。
+            //    模型硬上限随模型倍率变化（2x 档 2.5MP / Real-ESRGAN 4x 0.625MP）：
             //    2000x3000 的页在改这一版之前就是**直接超限失败**的，用户只看到一句"图太大"。
             // ⚠️ 上限取不到（0 = 引擎压根建不起来：没选模型 / 文件缺失 / 初始化失败）→
             //    **跳过压缩**：`upscaleForReader` 马上就会带着**具体原因**失败（"没选模型"和
             //    "图太大"用户要做的事完全不同），先花几百毫秒压一遍纯属白干。
             val feedLimit = SuperResolutionEngines.inputPixelLimitForReader(app, prefs)
+            val userThresholdLabel = if (options.maxInputMegapixels > 0f) {
+                "${options.maxInputMegapixels}MP"
+            } else "unlimited"
             val feed: Bitmap = if (feedLimit > 0) {
-                SrDownscale.plan(src.width, src.height, feedLimit)?.let { plan ->
+                SrDownscale.plan(src.width, src.height, feedLimit, options.maxInputMegapixels)?.let { plan ->
                     SrDownscale.apply(src, plan).also {
                         LogCollector.d(
                             TAG,
                             "超分前压缩: ${src.width}x${src.height} → ${it.width}x${it.height}" +
-                                "（引擎输入上限 ${feedLimit}px，$k）"
+                                "（用户阈值 $userThresholdLabel，模型输入上限 ${feedLimit}px，$k）"
                         )
                     }
                 } ?: src
@@ -179,32 +182,13 @@ object SrProcessor {
             //    而且这个 1x 文件正是 `srPreviewFor` 早退分支（返回被回收的位图）的触发条件。
             //    返回明确原因，让用户看到"去选/去下载模型"，Anime4K 只作即时显示底图。
             //
-            // ⚠️ 判据比的是**喂给引擎的那张图**（[feed]），不是原图 `src`：大图走压缩路径时
-            //    产物可以 ≤ 原图（下面还要收敛到"像素数 ≤ 原图"），拿 src 比会把正常的超分结果
-            //    判成"没放大"而白跑一遍。Anime4K 的 1x 仍然被这条拦住（产物宽度 == feed 宽度）。
+            // ⚠️ 这条只检查模型有没有放大它实际收到的输入，不比较原图 `src`。
+            //    Anime4K 的 1x 输出宽度等于 feed，仍由 NOT_UPSCALED 拦住。
             if (raw.width <= feed.width) {
                 LogCollector.d(TAG, "超分产物未放大（${raw.width}px <= 输入 ${feed.width}px），不落盘: $k")
                 return@withContext SrOutcome.fail(SrFailReason.NOT_UPSCALED)
             }
-            // ⚠️ 第二道：产物必须**比原图大**才可能当更好的显示底图（判据与显示侧
-            //    `ReaderTranslationController.srBaseFor` **同源**，见 [SrDisplayBase.isUsableBase]）。
-            //    大图走压缩路径时产物可以 ≤ 原图 —— 最典型的就是 300 DPI 的 PDF 页：
-            //    A4 = 2480px 宽 → 输入压到短边 1080 → 2× 只有 2160px ≤ 2480px。
-            //    这种产物以前照落盘，而显示侧一律丢弃 → **记录写「完成」、画面一直是原图**
-            //    （2026-10 真机反馈的「超分显示完成但没作用」）。存下来没有意义：
-            //    它比原图糊（像素来自被压过的输入），所以这里直接返回**具体原因**。
-            if (!SrDisplayBase.isUsableBase(raw.width, src.width)) {
-                LogCollector.d(
-                    TAG,
-                    "超分产物不比原图大（产物 ${raw.width}px <= 原图 ${src.width}px），不落盘: $k",
-                )
-                return@withContext SrOutcome.fail(
-                    SrFailReason.NOT_LARGER_THAN_SOURCE,
-                    "source ${src.width}x${src.height}, feed ${feed.width}x${feed.height}, " +
-                        "product ${raw.width}x${raw.height}",
-                )
-            }
-            // ⚠️ **产物原样落盘，不做任何额外缩放**（用户口径：「超分后肯定比原图大啊」）。
+            // ⚠️ 产物原样落盘，不按原图尺寸再次缩放或拒绝。
             //    空间由两道**既有**的闸管住，不需要在这里再造一条单页预算：
             //      ① 引擎自己的输出上限（`NcnnSrEngine.maxOutputPixels` = 10MP，超了直接不跑）；
             //      ② `SrStore.manageCache` 的总容量上限 + LRU（默认 512MB）。

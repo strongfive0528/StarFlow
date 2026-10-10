@@ -35,19 +35,6 @@ enum class SrFailReason(@StringRes val messageRes: Int) {
      */
     NOT_UPSCALED(R.string.sr_fail_not_upscaled),
 
-    /**
-     * 产物**不比原图大** → 不成其为"更好的底图"，不落盘。
-     *
-     * 与 [NOT_UPSCALED] 的区别：那条是"引擎压根没放大"（只跑了 Anime4K 的 1x）；
-     * 这条是"放大了，但因为喂进去的图被压过，产物仍然不比原图宽"。
-     *
-     * 典型场景：**300 DPI 的 PDF 页**（A4 = 2480×3508）—— 输入被压到短边 1080 后 2× 只有 2160px，
-     * 比原图 2480px **窄**。以前这种产物照落盘，而显示侧 `srBaseFor` 会丢弃它 →
-     * 面板写着「完成」、画面却一直是原图（用户 2026-10 反馈的「超分显示完成但没作用」）。
-     * 现在产出侧就拦住，让用户看到**具体原因**，而不是一个假的完成态。
-     */
-    NOT_LARGER_THAN_SOURCE(R.string.sr_fail_not_larger_than_source),
-
     /** 一次都没选过模型（`sr_active_model_key` 为空） */
     NO_MODEL_SELECTED(R.string.sr_fail_no_model),
 

@@ -9,35 +9,12 @@ import kotlin.math.max
 import kotlin.math.sqrt
 
 /**
- * 大图超分前的**预处理**：把图压到"引擎吃得下 + 跑得快"的尺寸，再交给超分模型。
+ * 大图超分前的**输入预处理**：按用户输入像素阈值和模型硬上限等比缩小，再交给模型。
+ * 用户阈值默认 1.5MP；模型硬上限随模型倍率变化（例如 2x 模型常见上限 2.5MP，4x 模型可能是 0.625MP）。
  *
- * ## 为什么（用户口径 2026-10）
- * 「对较大尺寸的图片进行超分，短边压缩对齐到 1080p 再超分……减轻超分模型的压力，
- * 同时可以快速通过超分模型放大尺寸」。一张 2000x3000 的页直接 2x 就是 12MP ——
- * 重档位要几十秒，超过像素上限的还会直接判失败。
- *
- * ## 只**压缩输入**，绝不缩产物
- * 本对象只管「喂进引擎之前」这一步。**超分产物原样落盘，不做任何额外缩放** ——
- * 用户口径：「压缩尺寸后给超分的图片，体积不能超过原来的像素和大小」说的是**输入**；
- * 而「超分后肯定比原图大啊」。产物的空间由**两道既有的闸**管住，不需要在这里再造一条：
- * 1. 引擎自己的输出上限（`NcnnSrEngine.maxOutputPixels` = 10MP，超了它直接不跑）；
- * 2. 超分缓存的**总容量**上限 + LRU 淘汰（[SrStore.manageCache]，默认 512MB）。
- *
- * ⚠️ **别再给产物加"不超过原图 N 倍"这类单页预算**（2026-10 试过一版，已删）：
- * 空间是**总容量**管的，不是单页尺寸管的；按单页倍数卡会得到自相矛盾的结果 ——
- * 小图（0.58MP → 2x 后 2.3MP = 4 倍）被砍掉一半，而大图（6MP → 压缩 → 7MP = 1.17 倍）
- * 反而一刀不砍。砍的全是最需要放大的低分辨率页。守卫：
- * `SrReaderWiringTest.theUpscaledProductIsStoredAsIs`。
- *
- * ## ⚠️ 只对齐短边是**不够的**（实现时实测出来的）
- * `NcnnSrEngine.maxInputPixels = 10MP / scale²`（2x → **2.5MP**，Real-ESRGAN 4x → 0.625MP），
- * 超了这个数引擎直接判「图太大」跳过。也就是说：
- * - 2000x3000 = **6MP 的页今天就已经翻不动了**（引擎上限 2.5MP），用户看到的是「图太大无法超分」；
- * - 而"短边 1080"并不保证够小：1080x2592（1:2.4 的长条）就是 2.8MP，仍然超限；
- *   Real-ESRGAN 的 0.625MP 更是连 1080x1080 都吃不下。
- *
- * 所以 [plan] 是**两个约束一起解**：先按用户口径把短边对齐 1080，再按引擎的
- * `maxInputPixels` 继续等比缩到能吃下为止。两个都不需要缩时返回 null（调用方走原路）。
+ * 输入像素数不超过有效阈值时原图直接送入模型；超过时按像素总量等比例缩小。
+ * 有效阈值是用户阈值与模型硬上限中的较小值。产物不因尺寸小于原图而被拒绝，也不在这里额外缩放。
+ * 缓存容量由 [SrStore.manageCache] 的总容量与 LRU 管理。
  *
  * ## 压缩怎么做到"不损失画质"
  * 只在**内存里**用 `Canvas` + `FILTER_BITMAP_FLAG` 缩放，**不重新编码**（没有 JPEG 二次损失）；
@@ -47,8 +24,11 @@ object SrDownscale {
 
     private const val TAG = "SrDownscale"
 
-    /** 短边目标：1080p（用户口径）。 */
-    const val SHORT_SIDE_TARGET = 1080
+    /**
+     * 输入像素压缩阈值的默认值（MP）。
+     * 大于此值的输入会等比例缩小到阈值内；小于此值直接送模型。0 = 不限用户阈值。
+     */
+    const val DEFAULT_MAX_INPUT_MP = 1.5f
 
     /**
      * 拿不到引擎上限时的兜底（= ncnn 2x 的真实上限）。
@@ -61,28 +41,38 @@ object SrDownscale {
     data class Plan(val width: Int, val height: Int)
 
     /**
-     * 算出压缩目标。**两个约束都要满足**；本来就不用缩 → null（调用方走原路）。
+     * 算出压缩目标。**用户像素预算和模型硬上限都要满足**；本来就不用缩 → null（调用方走原路）。
      *
      * ⚠️ 返回的尺寸**恒小于入参**（`k < 1`）—— 这是"压缩图不超过原图像素"的构造性保证。
      *
      * @param maxFeedPixels 引擎能吃的最大输入像素数（`SuperResolutionEngine.maxInputPixels`）；
      *   ≤ 0 表示未知 → 用 [DEFAULT_MAX_FEED_PIXELS]。
      */
-    fun plan(srcW: Int, srcH: Int, maxFeedPixels: Long = DEFAULT_MAX_FEED_PIXELS): Plan? {
+    fun plan(
+        srcW: Int,
+        srcH: Int,
+        maxFeedPixels: Long = DEFAULT_MAX_FEED_PIXELS,
+        /**
+         * **用户可调的输入压缩阈值**（MP）。源图低于阈值时直接送模型；高于阈值时按像素总量等比例缩小。
+         * ≤0 = 不限用户阈值（仍受引擎硬上限约束）。
+         *
+         * ⚠️ 它只**压输入**（省推理）；结果能否保存由 [SrProcessor] 按产物与原图的尺寸另行判断。
+         */
+        maxInputMegapixels: Float = 0f,
+    ): Plan? {
         if (srcW <= 0 || srcH <= 0) return null
-        val cap = if (maxFeedPixels > 0) maxFeedPixels else DEFAULT_MAX_FEED_PIXELS
+        val engineCap = if (maxFeedPixels > 0) maxFeedPixels else DEFAULT_MAX_FEED_PIXELS
+        val userCap = if (maxInputMegapixels > 0f) (maxInputMegapixels * 1_000_000f).toLong() else Long.MAX_VALUE
+        val cap = minOf(engineCap, userCap)
 
-        // ① 短边对齐到 1080（用户口径）——短边本来就 ≤ 1080 时不动
-        val short = minOf(srcW, srcH)
-        var k = if (short > SHORT_SIDE_TARGET) SHORT_SIDE_TARGET.toDouble() / short else 1.0
-
-        // ② 再保证喂进引擎的像素数不超上限（否则引擎直接判「图太大」，超分永远出不来）
-        val pixels = srcW.toDouble() * srcH * k * k
-        if (pixels > cap) k *= sqrt(cap / pixels)
+        // 唯一的压缩条件：输入像素数超过有效阈值（= min(引擎硬上限, 用户阈值)）。
+        // 未超过时 k 保持 1，返回 null，调用方将原图直接送入模型。
+        var k = 1.0
+        val pixels0 = srcW.toDouble() * srcH
+        if (pixels0 > cap) k = sqrt(cap / pixels0)
 
         if (k >= 1.0) return null
-        // ⚠️ 取整必须**向下**再兜一层：`roundToInt` 会把 1020.6 抬成 1021，对 1080x2592 这种
-        //    正好卡在上限边缘的尺寸就是"压完还差 429 像素"→ 引擎照样判「图太大」，白压一场。
+        // ⚠️ 取整必须向下再兜一层：模型硬上限是精确像素契约，压缩后仍超限就会白跑一场。
         //    上限是引擎的硬契约（`>` 即拒绝），所以这里必须**保证 ≤**，不能"大约"。
         var w = max(1, kotlin.math.floor(srcW * k).toInt())
         var h = max(1, kotlin.math.floor(srcH * k).toInt())

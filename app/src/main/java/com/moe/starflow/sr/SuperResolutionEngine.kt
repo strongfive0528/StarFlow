@@ -441,8 +441,7 @@ object SuperResolutionEngines {
      * 阅读器链路下**引擎能吃的最大输入像素数** —— 给大图预处理（`SrDownscale.plan`）定压缩目标用。
      *
      * ⚠️ 这个上限是**按输出**算的（`NcnnSrEngine.maxInputPixels = 10MP / scale²`）：
-     * 2x 档是 2.5MP、Real-ESRGAN 4x 只有 0.625MP。**只按"短边 1080"压是不够的** ——
-     * 1080x2592 的长条是 2.8MP，照样超限、照样只得到一句"图太大"。
+     * 2x 档是 2.5MP、Real-ESRGAN 4x 只有 0.625MP。预处理会同时遵守这个模型硬上限和用户压缩阈值。
      *
      * ⚠️ **产物的尺寸约束不在这里**：产物原样落盘（见 `SrDownscale` 的类注释），
      * 空间由引擎自己的输出上限 + `SrStore` 的总容量 LRU 管。
