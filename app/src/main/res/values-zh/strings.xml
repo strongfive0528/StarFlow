@@ -1130,6 +1130,7 @@
     <string name="reader_translate_detail_empty">暂无译文内容</string>
     <string name="reader_translate_detecting">检测中…</string>
     <string name="reader_translate_in_progress">翻译中…</string>
+    <string name="reader_translate_skip_ocr">已有识别结果，跳过 OCR · 翻译中…</string>
     <string name="reader_translate_done">翻译完成</string>
     <string name="reader_translate_failed">翻译失败</string>
     <string name="reader_translate_collapse">收起</string>

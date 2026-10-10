@@ -1195,6 +1195,7 @@
     <string name="reader_translate_detail_empty">No translation content yet</string>
     <string name="reader_translate_detecting">Detecting…</string>
     <string name="reader_translate_in_progress">Translating…</string>
+    <string name="reader_translate_skip_ocr">OCR text reused — skipping OCR · translating…</string>
     <string name="reader_translate_done">Translation done</string>
     <string name="reader_translate_failed">Translation failed</string>
     <string name="reader_translate_collapse">Collapse</string>

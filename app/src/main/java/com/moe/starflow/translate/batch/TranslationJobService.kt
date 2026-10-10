@@ -14,6 +14,7 @@ import com.moe.starflow.R
 import com.moe.starflow.mangaimport.reader.MangaReaderActivity
 import com.moe.starflow.novel.reader.NovelReaderActivity
 import com.moe.starflow.utils.LogCollector
+import com.moe.starflow.utils.TranslationExecutionMode
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
 
