@@ -88,6 +88,12 @@ call_vision.py
 test_image.b64
 test_image.jpg
 .github/
+
+# Local-only toolchain and generated output
+/.tools/
+/out/
+*.apk
+/StarFlow-master.zip
 MANGA_CACHE_FLOW.md
 bilibili-intro.md
 bilibili-tutorial.md

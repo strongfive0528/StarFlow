@@ -1,6 +1,7 @@
 # 备份与快照产物不入库
 _backups/
 _snapshots/
+current-screen*.png
 # Python 字节码缓存
 __pycache__/
 *.pyc
