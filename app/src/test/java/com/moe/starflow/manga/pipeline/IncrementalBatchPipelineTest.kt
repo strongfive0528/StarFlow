@@ -1,9 +1,12 @@
 package com.moe.starflow.manga.pipeline
 
+import com.moe.starflow.R
+
 import android.content.Context
 import android.graphics.Bitmap
 import android.graphics.Rect
 import com.moe.starflow.manga.TranslationCancelledException
+import com.moe.starflow.manga.engine.OcrMemoryException
 import com.moe.starflow.manga.engine.PPOcrV5Engine
 import com.moe.starflow.manga.state.RegionCacheManager
 import com.moe.starflow.manga.types.BubbleRegion
@@ -20,6 +23,7 @@ import com.moe.starflow.translate.TranslationTextAPI
 import com.moe.starflow.translate.widget.BallStateManager
 import com.moe.starflow.utils.CustomPreference
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.supervisorScope
 import kotlinx.coroutines.test.UnconfinedTestDispatcher
 import kotlinx.coroutines.test.resetMain
 import kotlinx.coroutines.test.runTest
@@ -66,6 +70,9 @@ class IncrementalBatchPipelineTest {
         /** true 时**只有第一次识别**返回空白（= 首批无文字、次批有文字）。 */
         var blankFirstCallOnly = false
         private var recCallCount = 0
+        var recFailure: OcrMemoryException? = null
+        var failureOnCall = 0
+        val ownedCrops = mutableListOf<Bitmap>()
 
         override fun resolveRecLangV5(context: Context, lang: String): Pair<PPOcrV5Engine.RecLang?, String?> {
             calls += Call("resolveRecLangV5")
@@ -100,12 +107,16 @@ class IncrementalBatchPipelineTest {
             context: Context, crops: List<Bitmap>, lang: PPOcrV5Engine.RecLang,
         ): List<RecResult> {
             calls += Call("recognizeV5", crops.size)
-            val blank = blankRec || (blankFirstCallOnly && recCallCount++ == 0)
+            val callIndex = recCallCount++
+            recFailure?.takeIf { callIndex == failureOnCall }?.let { throw it }
+            val blank = blankRec || (blankFirstCallOnly && callIndex == 0)
             return crops.mapIndexed { i, _ -> RecResult(if (blank) "" else "v5-$i", 1f) }
         }
 
         override suspend fun recognizeV6(context: Context, crops: List<Bitmap>): List<RecResult> {
             calls += Call("recognizeV6", crops.size)
+            val callIndex = recCallCount++
+            recFailure?.takeIf { callIndex == failureOnCall }?.let { throw it }
             return crops.mapIndexed { i, _ -> RecResult(if (blankRec) "" else "v6-$i", 1f) }
         }
 
@@ -140,7 +151,7 @@ class IncrementalBatchPipelineTest {
                 val idx = if (second) i - half else i
                 val top = if (second) 600 else 0
                 CroppedTextLine(
-                    croppedBitmap = Bitmap.createBitmap(2, 2, Bitmap.Config.ARGB_8888),
+                    croppedBitmap = Bitmap.createBitmap(2, 2, Bitmap.Config.ARGB_8888).also { ownedCrops += it },
                     rect = Rect(idx * 60, top + idx * 60, idx * 60 + 50, top + idx * 60 + 50),
                     angle = 0f,
                     centerX = idx * 60f + 25f,
@@ -556,9 +567,56 @@ class IncrementalBatchPipelineTest {
             thrown = true
         }
         assertTrue("取消必须重抛专用异常，否则会回退重跑 OCR", thrown)
+        assertTrue("取消必须等待并行 OCR 退出后回收所有裁剪图", ops.ownedCrops.all { it.isRecycled })
     }
 
     // ---------- 文本级缓存统计口径 ----------
+
+    @Test
+    fun memoryFailureDoesNotFallbackAndRecyclesBothBatches() = runTest {
+        for ((det, ocr) in listOf(DetEngine.PP_OCR_V5 to OcrEngine.PPOcrV5, DetEngine.PP_OCR_V6 to OcrEngine.PPOcrV6)) {
+            ops = FakeOps().apply {
+                lineCount = 10
+                recFailure = OcrMemoryException("simulated oversized output")
+            }
+            val host = FakeHost(ctx, FakeTranslator())
+            try {
+                pipeline(host, config(det = det, ocr = ocr), this).run(bitmap())
+                org.junit.Assert.fail("memory failure must propagate instead of returning NotApplicable")
+            } catch (e: OcrMemoryException) {
+                assertTrue(e.diagnostic.contains("oversized"))
+            }
+            assertEquals(1, ops.calls.count { it.name.startsWith("recognizeV") })
+            assertTrue(ops.ownedCrops.isNotEmpty())
+            assertTrue("including crops waiting for second OCR", ops.ownedCrops.all { it.isRecycled })
+            assertTrue(host.partialRenders.isEmpty())
+            assertTrue(host.errors.any { it.toString() == ctx.getString(R.string.error_ocr_memory) })
+        }
+    }
+
+    @Test
+    fun secondBatchMemoryFailureIsTerminalAndRecyclesCompletedAndFailedCrops() = runTest {
+        for ((det, ocr) in listOf(DetEngine.PP_OCR_V5 to OcrEngine.PPOcrV5, DetEngine.PP_OCR_V6 to OcrEngine.PPOcrV6)) {
+            ops = FakeOps().apply {
+                lineCount = 10
+                recFailure = OcrMemoryException("second batch allocation")
+                failureOnCall = 1
+            }
+            val host = FakeHost(ctx, FakeTranslator())
+            // Production hosts use a supervisor scope: the failed worker is observed via await.
+            supervisorScope {
+                try {
+                    pipeline(host, config(det = det, ocr = ocr), this).run(bitmap())
+                    org.junit.Assert.fail("second-batch failure must not trigger ordinary OCR")
+                } catch (e: OcrMemoryException) {
+                    assertEquals("second batch allocation", e.diagnostic)
+                }
+            }
+            assertEquals(2, ops.calls.count { it.name.startsWith("recognizeV") })
+            assertTrue(ops.ownedCrops.all { it.isRecycled })
+            assertTrue(host.errors.any { it.toString() == ctx.getString(R.string.error_ocr_memory) })
+        }
+    }
 
     private fun bubble(text: String, top: Int = 0) = BubbleRegion(
         rect = Rect(0, top, 100, top + 50),

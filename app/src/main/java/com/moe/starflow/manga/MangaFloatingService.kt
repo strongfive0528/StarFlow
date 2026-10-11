@@ -1846,6 +1846,13 @@ class MangaFloatingService : LifecycleService() {
                     if (autoTranslateEngine.isAutoTranslating) {
                         stopAutoTranslate()
                     }
+                } catch (e: OcrMemoryException) {
+                    isProcessing = false
+                    dismissProgressOverlay()
+                    LogCollector.e(TAG, e.diagnostic, e)
+                    if (autoTranslateEngine.isAutoTranslating) stopAutoTranslate()
+                    statusOverlay.showError(getString(R.string.error_ocr_memory))
+                    ballStateManager?.setState(BallStateManager.State.Error)
                 } catch (e: Exception) {
                     isProcessing = false
                     // 先 dismiss 进度条，再显示错误（错误会保持显示直到用户点击复制）

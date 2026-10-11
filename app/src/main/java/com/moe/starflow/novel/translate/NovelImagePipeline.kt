@@ -10,6 +10,7 @@ import com.moe.starflow.manga.TranslateUtils
 import com.moe.starflow.manga.TranslationCancelledException
 import com.moe.starflow.manga.config.MangaModeConfig
 import com.moe.starflow.manga.config.RtTextDirection
+import com.moe.starflow.manga.engine.OcrMemoryException
 import com.moe.starflow.manga.engine.DetectionBridge
 import com.moe.starflow.manga.types.BubbleRegion
 import com.moe.starflow.manga.types.TextDirection
@@ -156,7 +157,7 @@ class NovelImagePipeline(
                 .getOrElse { e ->
                     return NovelImageOutcome(
                         null,
-                        "${e.javaClass.simpleName}: ${e.message.orEmpty()}".ifBlank { "OCR 失败" },
+                        if (e is OcrMemoryException) e.message else "${e.javaClass.simpleName}: ${e.message.orEmpty()}".ifBlank { "OCR 失败" },
                     )
                 }
             if (bubbles.isEmpty()) return NovelImageOutcome(null, "这张图里没识别到文字")

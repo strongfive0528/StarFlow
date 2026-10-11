@@ -28,7 +28,8 @@ import android.graphics.Bitmap
 import android.graphics.Point
 import android.graphics.RectF
 import android.os.Build
-import android.util.Log
+import com.moe.starflow.R
+import com.moe.starflow.utils.LogCollector
 import android.view.Display.DEFAULT_DISPLAY
 import android.view.accessibility.AccessibilityEvent
 import androidx.annotation.RequiresApi
@@ -39,6 +40,9 @@ import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.cancel
 
 class ScreenShotAccessibilityService: AccessibilityService() {
+    companion object {
+        private const val TAG = "AccessibilityScreenshot"
+    }
     private val serviceScope = CoroutineScope(SupervisorJob() + Dispatchers.Main)
     private lateinit var statusOverlay: TranslationStatusOverlay
     private val eventHandler = AccessibilityEventHandler {
@@ -49,57 +53,77 @@ class ScreenShotAccessibilityService: AccessibilityService() {
     fun takeScreenshot(mRectF: RectF?, offset: Point) {
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.R) {  // Android 11及以上
             takeScreenshotImpl(mRectF, offset)
+        } else {
+            LogCollector.w(TAG, "Screenshot requires API 30; sdk=${Build.VERSION.SDK_INT}")
         }
     }
 
     @RequiresApi(Build.VERSION_CODES.R)
     private fun takeScreenshotImpl(mRectF: RectF?, offset: Point) {
         try {
+            LogCollector.d(TAG, "request: display=$DEFAULT_DISPLAY crop=$mRectF offset=$offset")
             takeScreenshot(
                 DEFAULT_DISPLAY,
                 mainExecutor,
                 object : TakeScreenshotCallback {
                     override fun onSuccess(screenshot: ScreenshotResult) {
+                        var fullBitmap: Bitmap? = null
+                        var croppedBitmap: Bitmap? = null
+                        var delivered = false
                         try {
-                            val fullBitmap = Bitmap.wrapHardwareBuffer(
+                            val hardwareBitmap = Bitmap.wrapHardwareBuffer(
                                 screenshot.hardwareBuffer,
                                 screenshot.colorSpace
-                            )?.copy(Bitmap.Config.ARGB_8888, true)
-
-                            Log.d("ASSOFFSET", "x:"+offset.x+"  y:"+offset.y)
+                            ) ?: error("Cannot wrap screenshot hardware buffer")
+                            val full = try {
+                                hardwareBitmap.copy(Bitmap.Config.ARGB_8888, true)
+                                    ?: error("Cannot copy screenshot bitmap")
+                            } finally {
+                                hardwareBitmap.recycle()
+                            }
+                            fullBitmap = full
                             // cropBitmap 裁不出有效区域时返回 null（不再退化成返回 fullBitmap 本身）
-                            val croppedBitmap = if (mRectF != null && fullBitmap != null) {
-                                ScreenshotManager.cropBitmap(fullBitmap, mRectF, offset)
+                            val cropped = if (mRectF != null) {
+                                ScreenshotManager.cropBitmap(full, mRectF, offset)
                             } else {
                                 null
                             }
+                            croppedBitmap = cropped
 
                             //使用sharedflow，发送截图完成信号以及全屏+裁剪bitmap
-                            fullBitmap?.let { fb ->
-                                ScreenshotManager.emitScreenshot(ScreenshotData(fb, croppedBitmap))
-                            }
-
+                            LogCollector.d(TAG, "success: full=${full.width}x${full.height} cropped=${cropped?.let { "${it.width}x${it.height}" }}")
+                            ScreenshotManager.emitScreenshot(ScreenshotData(full, cropped))
+                            delivered = true
+                        } catch (e: OutOfMemoryError) {
+                            LogCollector.e(TAG, "Screenshot bitmap allocation failed", e)
+                            showToast(getString(R.string.error_screenshot_memory))
                         } catch (e: Exception) {
-                            Log.e("Screenshot", "Error processing screenshot", e)
+                            LogCollector.e(TAG, "Error processing screenshot", e)
+                            showToast(getString(R.string.toast_screenshot_failed_format, e.message.orEmpty()))
                         } finally {
+                            if (!delivered) {
+                                croppedBitmap?.takeIf { it !== fullBitmap && !it.isRecycled }?.recycle()
+                                fullBitmap?.takeIf { !it.isRecycled }?.recycle()
+                            }
                             screenshot.hardwareBuffer.close()
                         }
                     }
 
                     override fun onFailure(errorCode: Int) {
                         val errorText = when (errorCode){
-                            ERROR_TAKE_SCREENSHOT_INTERNAL_ERROR -> "截图失败：内部错误"
-                            ERROR_TAKE_SCREENSHOT_NO_ACCESSIBILITY_ACCESS -> "截图失败：无无障碍权限"
-                            ERROR_TAKE_SCREENSHOT_INTERVAL_TIME_SHORT -> "截图频率过高，已自动降速"
-                            ERROR_TAKE_SCREENSHOT_INVALID_DISPLAY -> "截图失败：无效显示器"
-                            else -> "截图失败：未知错误 $errorCode"
+                            ERROR_TAKE_SCREENSHOT_INTERNAL_ERROR -> getString(R.string.error_screenshot_internal)
+                            ERROR_TAKE_SCREENSHOT_NO_ACCESSIBILITY_ACCESS -> getString(R.string.error_screenshot_access)
+                            ERROR_TAKE_SCREENSHOT_INTERVAL_TIME_SHORT -> getString(R.string.error_screenshot_interval)
+                            ERROR_TAKE_SCREENSHOT_INVALID_DISPLAY -> getString(R.string.error_screenshot_display)
+                            else -> getString(R.string.error_screenshot_code, errorCode)
                         }
-                        Log.e("Screenshot", "onFailure: errorCode=$errorCode, $errorText")
+                        LogCollector.e(TAG, "onFailure: errorCode=$errorCode, $errorText", null)
                         showToast(errorText)
                     }
                 }
             )
         } catch (e: Exception) {
+            LogCollector.e(TAG, "Screenshot request failed", e)
             showToast(getString(com.moe.starflow.R.string.toast_screenshot_failed_format, e.toString()))
         }
     }
@@ -113,7 +137,7 @@ class ScreenShotAccessibilityService: AccessibilityService() {
         super.onServiceConnected()
         statusOverlay = TranslationStatusOverlay.getInstance(this)
         AccessibilityServiceManager.setService(this)
-        Log.d("CONNECT", "Service Connected")
+        LogCollector.d(TAG, "Service connected: sdk=${Build.VERSION.SDK_INT} capabilities=${serviceInfo?.capabilities}")
     }
 
     override fun onAccessibilityEvent(event: AccessibilityEvent?) {
@@ -121,10 +145,11 @@ class ScreenShotAccessibilityService: AccessibilityService() {
     }
 
     override fun onInterrupt() {
-        // 处理中断
+        LogCollector.d(TAG, "Service interrupted")
     }
 
     override fun onDestroy() {
+        LogCollector.d(TAG, "Service disconnected")
         super.onDestroy()
         // 取消服务
         AccessibilityServiceManager.setService(null)

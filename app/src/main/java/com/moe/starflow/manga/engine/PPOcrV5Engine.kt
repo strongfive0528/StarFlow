@@ -33,7 +33,6 @@ import java.nio.FloatBuffer
 import java.util.EnumMap
 import kotlin.math.abs
 import kotlin.math.atan2
-import kotlin.math.ceil
 import kotlin.math.max
 import kotlin.math.min
 import kotlin.math.roundToInt
@@ -78,8 +77,6 @@ object PPOcrV5Engine {
     // -----------------------------------------------------------------------
     // Rec 常量 (ch_ppocr_rec/main.py)
     // -----------------------------------------------------------------------
-    private const val REC_IMG_HEIGHT = 48
-    private const val REC_IMG_CHANNELS = 3
     private const val REC_BATCH_NUM = 16
 
     // -----------------------------------------------------------------------
@@ -575,182 +572,17 @@ object PPOcrV5Engine {
     // Rec (ch_ppocr_rec/main.py + CTCLabelDecode)
     // ========================================================================
 
-    /**
-     * 批量识别（按 wh_ratio 分组，batch 推理）。
-     */
+    /** 识别批量按实际输出内存动态缩小，结果仍与输入图片一一对应。 */
     fun recognizeBatch(context: Context, imgList: List<Bitmap>, lang: RecLang): List<RecResult> = synchronized(lock) {
-        if (imgList.isEmpty()) return emptyList()
-
-        val dict = dictionary[lang] ?: return imgList.map { RecResult("", 0f) }
-        val session = getRecSession(context, lang) ?: return imgList.map { RecResult("", 0f) }
-
-        val t0 = System.currentTimeMillis()
-        val allResults = mutableListOf<RecResult>()
-
-        var i = 0
-        while (i < imgList.size) {
-            val batchEnd = min(i + REC_BATCH_NUM, imgList.size)
-            val batch = imgList.subList(i, batchEnd)
-
-            // 找 batch 内最大 wh_ratio
-            var maxWhRatio = 0f
-            for (img in batch) {
-                val r = img.width.toFloat() / img.height
-                if (r > maxWhRatio) maxWhRatio = r
-            }
-
-            // 预处理
-            val preprocessed = batch.map { recResizeNormImg(it, maxWhRatio) }
-            val batchSize = preprocessed.size
-            val recImgW = (REC_IMG_HEIGHT * maxWhRatio).roundToInt().coerceAtLeast(1)
-            val channelSize = REC_IMG_HEIGHT * recImgW
-            val totalSize = batchSize * REC_IMG_CHANNELS * channelSize
-
-            val buffer = FloatBuffer.allocate(totalSize)
-            for (arr in preprocessed) {
-                buffer.put(arr)
-            }
-            buffer.rewind()
-
-            val inputTensor = OnnxTensor.createTensor(
-                ortEnv!!, buffer,
-                longArrayOf(batchSize.toLong(), REC_IMG_CHANNELS.toLong(), REC_IMG_HEIGHT.toLong(), recImgW.toLong())
-            )
-
-            // 推理
-            val results = session.run(mapOf("x" to inputTensor))
-            inputTensor.close()
-
-            var outputData: FloatArray
-            var seqLen: Int
-            var numClasses: Int
-            try {
-                var batchOutputTensor: OnnxTensor? = null
-                for (name in session.outputNames) {
-                    val value = results.get(name)
-                    if (value.isPresent && value.get() is OnnxTensor) {
-                        batchOutputTensor = value.get() as OnnxTensor
-                        break
-                    }
-                }
-                outputData = batchOutputTensor!!.floatBuffer.array()
-                val outputShape = batchOutputTensor.info.shape // [batch, seq_len, num_classes]
-                batchOutputTensor.close()
-                seqLen = outputShape[1].toInt()
-                numClasses = outputShape[2].toInt()
-            } finally {
-                results.close()
-            }
-
-            // CTCLabelDecode per sample
-            for (j in 0 until batchSize) {
-                val start = j * seqLen * numClasses
-                val preds = outputData.sliceArray(start until start + seqLen * numClasses)
-                val (text, score) = ctcLabelDecode(preds, seqLen, numClasses, dict)
-                allResults.add(RecResult(text, score))
-            }
-
-            i = batchEnd
+        PpRecRecognizer.withMemoryGuard(context, TAG) {
+            if (imgList.isEmpty()) return@withMemoryGuard emptyList()
+            val dict = dictionary[lang] ?: return@withMemoryGuard imgList.map { RecResult("", 0f) }
+            val session = getRecSession(context, lang) ?: return@withMemoryGuard imgList.map { RecResult("", 0f) }
+            val started = System.currentTimeMillis()
+            val result = PpRecRecognizer.recognize(ortEnv!!, session, imgList, dict, REC_BATCH_NUM, TAG)
+            LogCollector.d(TAG, "recognizeBatch: ${imgList.size} 张, lang=${lang.code}, 耗时 ${System.currentTimeMillis() - started}ms")
+            result
         }
-
-        LogCollector.d(TAG, "recognizeBatch: ${imgList.size} 张, lang=${lang.code}, 耗时 ${System.currentTimeMillis() - t0}ms")
-        allResults
-    }
-
-    /**
-     * Rec 预处理：resize + pad + normalize [-1, 1]
-     */
-    private fun recResizeNormImg(bitmap: Bitmap, maxWhRatio: Float): FloatArray {
-        val imgC = REC_IMG_CHANNELS // 3
-        val imgH = REC_IMG_HEIGHT   // 48
-        val imgW = (imgH * maxWhRatio).roundToInt().coerceAtLeast(1)
-
-        val ratio = bitmap.width.toFloat() / bitmap.height
-        var resizeW = ceil(imgH * ratio).toInt()
-        if (resizeW > imgW) resizeW = imgW
-
-        val resized = Bitmap.createScaledBitmap(bitmap, resizeW, imgH, true)
-
-        // CHW, pad to (3, 48, imgW), normalize [-1, 1]
-        val floatArr = FloatArray(imgC * imgH * imgW)
-        val pixels = IntArray(resizeW * imgH)
-        resized.getPixels(pixels, 0, resizeW, 0, 0, resizeW, imgH)
-        if (resized !== bitmap) resized.recycle()
-
-        for (c in 0 until 3) {
-            val cOffset = c * imgH * imgW
-            for (y in 0 until imgH) {
-                for (x in 0 until resizeW) {
-                    val pixel = pixels[y * resizeW + x]
-                    val v = when (c) {
-                        0 -> (pixel shr 16 and 0xFF) / 255.0f
-                        1 -> (pixel shr 8 and 0xFF) / 255.0f
-                        2 -> (pixel and 0xFF) / 255.0f
-                        else -> 0f
-                    }
-                    floatArr[cOffset + y * imgW + x] = (v - 0.5f) / 0.5f
-                }
-            }
-        }
-
-        return floatArr
-    }
-
-    /**
-     * CTCLabelDecode：argmax → remove_duplicate → filter blank(0) → join
-     *
-     * @param preds 扁平化预测 [seq_len * num_classes]
-     * @param seqLen 序列长度
-     * @param numClasses 类别数（= 字典大小）
-     * @param dict 字典 [blank, char1, char2, ..., space]
-     */
-    private fun ctcLabelDecode(
-        preds: FloatArray,
-        seqLen: Int,
-        numClasses: Int,
-        dict: List<String>
-    ): Pair<String, Float> {
-        // 1. argmax
-        val charIndices = IntArray(seqLen)
-        val confidences = FloatArray(seqLen)
-        for (t in 0 until seqLen) {
-            val offset = t * numClasses
-            var bestIdx = 0
-            var bestProb = preds[offset]
-            for (c in 1 until numClasses) {
-                if (preds[offset + c] > bestProb) {
-                    bestProb = preds[offset + c]
-                    bestIdx = c
-                }
-            }
-            charIndices[t] = bestIdx
-            confidences[t] = bestProb
-        }
-
-        // 2. remove_duplicate + filter blank(0)
-        val text = StringBuilder()
-        var totalScore = 0f
-        var count = 0
-        var prevIdx = -1
-
-        for (t in 0 until seqLen) {
-            val idx = charIndices[t]
-            if (idx > 0 && idx != prevIdx) {
-                if (idx < dict.size) {
-                    text.append(dict[idx])
-                    totalScore += confidences[t]
-                    count++
-                }
-            }
-            prevIdx = idx
-        }
-
-        // 3. 过滤纯空格
-        val resultText = text.toString()
-        if (resultText.isBlank()) return Pair("", 0f)
-
-        val avgScore = if (count > 0) totalScore / count else 0f
-        return Pair(resultText, avgScore)
     }
 
     // ========================================================================
@@ -819,7 +651,11 @@ object PPOcrV5Engine {
         // 2c. Rec
         val recT0 = System.currentTimeMillis()
         if (cropResults.isNotEmpty()) {
-            val recResults = recognizeBatch(context, cropResults.map { it.first }, recLang)
+            val recResults = try {
+                recognizeBatch(context, cropResults.map { it.first }, recLang)
+            } finally {
+                cropResults.forEach { (crop, _, _) -> if (!crop.isRecycled) crop.recycle() }
+            }
             for (i in cropResults.indices) {
                 if (i < recResults.size) {
                     allTexts.add(recResults[i].text)
@@ -845,10 +681,6 @@ object PPOcrV5Engine {
             discardedScores = filtered.discardedScores
         )
 
-        // 4. 释放裁剪图片
-        for ((crop, _, _) in cropResults) {
-            if (!crop.isRecycled) crop.recycle()
-        }
 
         val totalTime = System.currentTimeMillis() - t0
         val elapseList = listOf(

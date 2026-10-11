@@ -19,6 +19,7 @@ import com.moe.starflow.manga.TranslateUtils
 import com.moe.starflow.manga.config.MangaModeConfig
 import com.moe.starflow.manga.config.RtTextDirection
 import com.moe.starflow.manga.config.TranslationTextRules
+import com.moe.starflow.manga.engine.OcrMemoryException
 import com.moe.starflow.manga.engine.DetectionBridge
 import com.moe.starflow.manga.pipeline.BatchOutcome
 import com.moe.starflow.manga.pipeline.BatchPipelineConfig
@@ -2903,6 +2904,12 @@ class ReaderTranslationController(
             // 协程取消（切模式 / 退出阅读器）：必须重抛，不能当"处理异常"写成 FAILED ——
             // 那会先污染一次内存态（UI 闪一下失败），再由外层 catch 改回 IDLE，日志也会误导。
             throw e
+        } catch (e: OcrMemoryException) {
+            LogCollector.e(TAG, "pipeline memory limit page=$page: ${e.diagnostic}", e)
+            val msg = context.getString(R.string.error_ocr_memory)
+            fail(page, "PROCESS_EXCEPTION", msg)
+            phase(ReaderTranslatePhase.FAILED, msg)
+            return null
         } catch (e: Exception) {
             LogCollector.e(TAG, "pipeline failed page=$page", e)
             null

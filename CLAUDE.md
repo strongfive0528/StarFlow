@@ -43,7 +43,7 @@ Claude 只在动那个目录时才读：
 > `models/`（模型源文件）、`tools/`、`docs/` 也都不入库，但**不影响构建**，需要时单独拷。
 
 **首次克隆后：**
-1. 创建 `local.properties`（已 gitignore），将 `sdk.dir` 设为本机 Android SDK 的绝对路径，路径用正斜杠 `/`；例如 `sdk.dir=[LOCAL_PATH]`（将 `your-user` 替换成实际目录名）
+1. 创建 `local.properties`（已 gitignore），将 `sdk.dir` 设为本机 Android SDK 安装目录；该文件不要提交。
 2. 如果网络环境需要代理，在本机 Git 配置中填写可用的代理地址；不要把个人代理端点写进项目文档。
 3. 如果 GitHub 域名无法解析或连接，检查本机 hosts 和代理配置，确保没有错误的本地重定向。
 4. **准备原生依赖源码**：运行 `pwsh sr/setup-ncnn.ps1` 和 `pwsh llamacpp/setup-submodule.ps1`。
@@ -57,23 +57,23 @@ Claude 只在动那个目录时才读：
 > 脚本会按仓库 gitlink 固定的提交创建稀疏检出；不要先运行 `git submodule update`。固定提交可用 `git submodule status` 查看。
 
 ```bash
-# 构建 debug APK（需要共享 keystore，见 guard/README.md）
+# 构建 debug APK（需要配置既有共享签名密钥，见 guard/README.md）
 ./gradlew assembleDebug
 
-# 构建 release APK（需要预先配置跨设备共享 keystore，见 guard/README.md）
+# 构建 release APK（需要配置同一份既有共享签名密钥，见 guard/README.md）
 ./gradlew assembleRelease
 
 # 安装/更新 debug APK（用户授权后；自动做签名预检）
 python guard/install_safe.py app/build/outputs/apk/debug/app-debug.apk --confirm
 
-# 清理并构建 debug APK（同样需要共享 keystore）
+# 清理并构建 debug APK（同样需要既有共享签名密钥）
 ./gradlew clean assembleDebug
 
 # 运行单元测试（⚠️ 直接 ./gradlew test 会因 Git Bash 弄乱 PATH 使 test worker 崩溃
 # ClassNotFoundException: Files\Git\mingw64\bin;...，需用 PowerShell + 干净 PATH + --no-daemon + 指定测试类）：
 # powershell:
-#   $env:JAVA_HOME='C:\Path\To\JDK\17'  # 替换为本机 JDK 17 路径
-#   $env:PATH='C:\Windows\System32;C:\Windows;'+$env:JAVA_HOME+'\bin'
+#   $env:JAVA_HOME='<本机 JDK 17 安装目录>'
+#   $env:PATH=$env:JAVA_HOME+'\bin;'+$env:PATH
 #   .\gradlew.bat --no-daemon :app:testDebugUnitTest --tests com.moe.starflow.data.XxxTest
 
 # Robolectric 测试：app/src/test/resources/robolectric.properties 全局 sdk=34（Robolectric 4.11
@@ -116,13 +116,13 @@ adb devices
 ./gradlew :app:lintDebug
 ```
 
-**Windows 注意：** `adb` 命令需要通过 PowerShell 调用完整路径：
+**Windows 注意：** 确保 Android SDK 的 `platform-tools` 已加入本机 `PATH`，然后通过 PowerShell 调用 `adb`：
 ```powershell
 # 安装 APK
-& "C:\Users\<username>\AppData\Local\Android\Sdk\platform-tools\adb.exe" install -r app\build\outputs\apk\debug\app-debug.apk
+adb install -r app\build\outputs\apk\debug\app-debug.apk
 
 # 监控日志（按 tag 过滤）
-& "C:\Users\<username>\AppData\Local\Android\Sdk\platform-tools\adb.exe" logcat --pid=$(& "C:\Users\<username>\AppData\Local\Android\Sdk\platform-tools\adb.exe" shell pidof com.moe.starflow) | Select-String -Pattern "MangaFloatingService|OpenAITranslation|FloatingBallService"
+adb logcat --pid=$(adb shell pidof com.moe.starflow) | Select-String -Pattern "MangaFloatingService|OpenAITranslation|FloatingBallService"
 ```
 
 ## 架构
@@ -808,7 +808,7 @@ val json = JSONObject(body.substring(jsonStart))
 ```powershell
 # 检查 local.properties 是否存在
 Test-Path local.properties
-# 内容应为：sdk.dir=C:/Users/<username>/AppData/Local/Android/Sdk
+# 确认 sdk.dir 指向本机 Android SDK 安装目录
 ```
 
 ### 安装失败

@@ -249,6 +249,12 @@ FloatingBallService 和 MangaFloatingService 在 MediaProjection 模式下自动
   **阶段查询** / **通道重建后预取深度不失控**）、小说侧
   `NovelTranslationConcurrencyTest`、`NovelBatchWarningTest`。
 
+### 截图与识别故障诊断
+
+无障碍服务通过 `LogCollector` 记录连接、断开、截图请求、尺寸、失败码和异常，导出日志可区分截图故障与 OCR 故障。Android 11+ 的截图能力声明位于 `res/xml-v30/accessibility_service_config.xml`，排查时同时核对基础与版本限定资源。
+
+游戏与漫画截图服务遇到 `OcrMemoryException` 时停止自动翻译、恢复处理状态并显示内存提示；该错误不触发更大的 OCR 回退。PPv5/v6 的动态识别批量约束见[漫画模块指南](../manga/CLAUDE.md)。
+
 ### 权限请求
 
 ScreenCapturePermissionActivity — 透明 Activity，弹出系统授权弹窗。

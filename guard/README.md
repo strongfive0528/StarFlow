@@ -22,13 +22,13 @@ python guard/install_safe.py app/build/outputs/apk/debug/app-debug.apk --confirm
 
 ## 签名怎么保持一致
 
-可互相覆盖安装的 APK 必须使用同一份私有 keystore。环境变量只告诉 Gradle 到哪里读取它，不会把密钥同步到其他构建机。
+本项目所有可安装构建（debug 与 release）都使用同一份已分发版本签名密钥。这样不同构建类型和不同构建机生成的 APK 才能相互覆盖安装；环境变量只告诉 Gradle 到哪里读取密钥，不会把密钥同步到其他构建机。
 
-签名身份由 keystore 中的密钥决定，与 `debug`/`release` 构建类型名称无关。本项目已经分发版本所用的签名身份必须原样保留；即使它最初来自 Android Studio 自动生成的 debug keystore，也不能在新电脑上用自动生成的另一份密钥替代。需要新构建机时，安全复制并校验同一份原始 keystore。
+签名身份由 keystore 中的密钥决定，与 `debug`/`release` 构建类型名称无关。本项目已经分发版本所用的签名身份必须原样保留；即使它最初来自 Android Studio 自动生成的 debug keystore，也不能在新电脑上用另一份密钥替代。debug 和 release 都配置为该签名身份，禁止默认 debug 密钥成为第二套身份。
 
-每台构建机都要从密码管理器或加密密钥库安全取得同一份 keystore，并通过环境变量、本机 Gradle 用户级属性或 CI 凭据流程提供 `STARFLOW_SIGNING_STORE_FILE`、`STARFLOW_SIGNING_STORE_PASSWORD`、`STARFLOW_SIGNING_KEY_ALIAS` 和 `STARFLOW_SIGNING_KEY_PASSWORD`。不要把这些值放进仓库的 Gradle 配置文件，也不要提交或发送 keystore 和密码。
+每台构建机都要通过安全渠道取得同一份 keystore，并通过 `STARFLOW_SIGNING_STORE_FILE`、`STARFLOW_SIGNING_STORE_PASSWORD`、`STARFLOW_SIGNING_KEY_ALIAS` 和 `STARFLOW_SIGNING_KEY_PASSWORD` 环境变量或本机 Gradle 用户级属性配置。不要把这些值放进仓库的 Gradle 配置文件，也不要提交 keystore。
 
-配置完整后，所有可安装 APK/AAB（debug 和 release）都使用这份共享 keystore；未配置时打包会失败，避免每台机器悄悄使用不同的本地 debug key。
+缺少共享签名配置时，debug 和 release APK/AAB 打包都会失败，避免悄悄回退到每台机器各自生成的默认 debug 密钥。不要为测试包另设签名密钥，否则测试包与分发包之间不能直接覆盖安装。
 
 共享 keystore 必须是已经用于分发版本的原始密钥。换成新密钥会阻止已有安装直接更新；如果原始私钥找不到，先从安全备份恢复。公开证书不能恢复私钥，也不要为了安装而卸载用户版本。
 
@@ -41,6 +41,6 @@ python guard/restore_app.py guard/_backups/<备份目录> --confirm-overwrite
 
 备份目录不会复用或覆盖。备份脚本若不能导出私有数据或外部文件，会标为部分备份并返回失败；release 包通常不允许 `run-as`。恢复会覆盖现有数据，必须明确添加 `--confirm-overwrite`，且不接受缺失/校验失败的私有备份。
 
-私有备份含设置和 API Key，只保存在可信本机目录；不要提交或转发备份文件。
+私有备份包含设置和 API Key 的加密内容，但不包含 Android 系统 `AndroidKeyStore` 中的加密密钥。卸载后即使还原备份，相关 API Key 也可能无法解密；备份完整不代表可以安全迁移签名。备份只保存在可信本机目录，不要提交或转发。
 
 `device_guard.py` 仅把明确的只读命令列为 SAFE；未知或拼接命令返回 CAUTION。日常安装不需要手动跑分类、快照、备份三套命令。`snapshot_state.py` 仅用于单独查看设备状态；多个设备时必须用 `--serial`。

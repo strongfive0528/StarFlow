@@ -21,9 +21,10 @@ plugins {
     id 'kotlin-kapt'
 }
 
-// Build machines share a signing identity only when they are provisioned with
-// the same private keystore. Environment variables and Gradle user properties
-// configure access to that externally provisioned file; they do not distribute it.
+// Every installable artifact uses the established distribution signing
+// identity, including debug builds, so APKs remain update-compatible across
+// build types and machines. Credentials and keystore files stay outside the
+// repository.
 def starflowSigningValue = { name ->
     def environmentValue = System.getenv(name)
     if (environmentValue != null && !environmentValue.trim().isEmpty()) {
@@ -31,28 +32,36 @@ def starflowSigningValue = { name ->
     }
     providers.gradleProperty(name).orNull
 }
-def starflowSigning = [
-        storeFile: starflowSigningValue('STARFLOW_SIGNING_STORE_FILE'),
-        storePassword: starflowSigningValue('STARFLOW_SIGNING_STORE_PASSWORD'),
-        keyAlias: starflowSigningValue('STARFLOW_SIGNING_KEY_ALIAS'),
-        keyPassword: starflowSigningValue('STARFLOW_SIGNING_KEY_PASSWORD')
-]
-def starflowSigningConfigured = starflowSigning.values().any { it != null && !it.trim().isEmpty() }
-if (starflowSigningConfigured && starflowSigning.values().any { it == null || it.trim().isEmpty() }) {
-    throw new GradleException('STARFLOW_SIGNING_* must be set together; signing values are not printed.')
+def loadStarflowSigning = { prefix ->
+    def values = [
+            storeFile: starflowSigningValue("${prefix}_STORE_FILE"),
+            storePassword: starflowSigningValue("${prefix}_STORE_PASSWORD"),
+            keyAlias: starflowSigningValue("${prefix}_KEY_ALIAS"),
+            keyPassword: starflowSigningValue("${prefix}_KEY_PASSWORD")
+    ]
+    def configured = values.values().any { it != null && !it.trim().isEmpty() }
+    if (configured && values.values().any { it == null || !it.trim() }) {
+        throw new GradleException("${prefix}_* must be set together; signing values are not printed.")
+    }
+    def file = configured ? rootProject.file(values.storeFile) : null
+    if (configured && !file.isFile()) {
+        throw new GradleException("${prefix}_STORE_FILE does not exist; signing values are not printed.")
+    }
+    [values: values, configured: configured, file: file]
 }
-def starflowSigningFile = starflowSigning.storeFile ? rootProject.file(starflowSigning.storeFile) : null
-if (starflowSigningConfigured && !starflowSigningFile.isFile()) {
-    throw new GradleException('STARFLOW_SIGNING_STORE_FILE does not exist; signing values are not printed.')
-}
+def starflowSigning = loadStarflowSigning('STARFLOW_SIGNING')
 
 def requestedTaskNames = gradle.startParameter.taskNames.collect { it.tokenize(':').last().toLowerCase() }
-def requestsInstallableArtifact = requestedTaskNames.any { taskName ->
-    ['build', 'assemble', 'bundle', 'install'].contains(taskName) ||
-            taskName ==~ /^(assemble|bundle|package|install|sign).*(debug|release)(androidtest|bundle|universalapk)?$/
+def requestsAllVariants = requestedTaskNames.any { it in ['build', 'assemble', 'bundle', 'install'] }
+def requestsVariantArtifact = { variant ->
+    requestsAllVariants || requestedTaskNames.any { taskName ->
+        taskName ==~ /^(assemble|bundle|package|install|sign).*${variant}(androidtest|bundle|universalapk)?$/
+    }
 }
-if (requestsInstallableArtifact && !starflowSigningConfigured) {
-    throw new GradleException('APK/AAB builds require STARFLOW_SIGNING_* configured with the shared keystore.')
+def requestsDebugArtifact = requestsVariantArtifact('debug')
+def requestsReleaseArtifact = requestsVariantArtifact('release')
+if ((requestsDebugArtifact || requestsReleaseArtifact) && !starflowSigning.configured) {
+    throw new GradleException('APK/AAB builds require STARFLOW_SIGNING_* with the established shared keystore.')
 }
 
 android {
@@ -97,19 +106,19 @@ android {
     ndkVersion "25.2.9519653"  // 使用项目中的 NDK 版本
 
     signingConfigs {
-        if (starflowSigningConfigured) {
+        if (starflowSigning.configured) {
             starflowShared {
-                storeFile starflowSigningFile
-                storePassword starflowSigning.storePassword
-                keyAlias starflowSigning.keyAlias
-                keyPassword starflowSigning.keyPassword
+                storeFile starflowSigning.file
+                storePassword starflowSigning.values.storePassword
+                keyAlias starflowSigning.values.keyAlias
+                keyPassword starflowSigning.values.keyPassword
             }
         }
     }
 
     buildTypes {
         debug {
-            if (starflowSigningConfigured) {
+            if (starflowSigning.configured) {
                 signingConfig signingConfigs.starflowShared
             }
         }
@@ -117,7 +126,7 @@ android {
             minifyEnabled true
             shrinkResources true
             proguardFiles getDefaultProguardFile('proguard-android-optimize.txt'), 'proguard-rules.pro'
-            if (starflowSigningConfigured) {
+            if (starflowSigning.configured) {
                 signingConfig signingConfigs.starflowShared
             }
 
@@ -171,10 +180,16 @@ android {
 // shared key, a build must not fall back to a machine-specific signing key.
 tasks.configureEach { task ->
     def taskName = task.name.toLowerCase()
-    if (taskName ==~ /^(package|sign).*(debug|release)(androidtest|bundle|universalapk)?$/) {
+    if (taskName ==~ /^(package|sign).*debug(androidtest|bundle|universalapk)?$/) {
         task.doFirst {
-            if (!starflowSigningConfigured) {
-                throw new GradleException('APK/AAB builds require STARFLOW_SIGNING_* configured with the shared keystore.')
+            if (!starflowSigning.configured) {
+                throw new GradleException('Debug APK/AAB builds require STARFLOW_SIGNING_* with the established shared keystore.')
+            }
+        }
+    } else if (taskName ==~ /^(package|sign).*release(androidtest|bundle|universalapk)?$/) {
+        task.doFirst {
+            if (!starflowSigning.configured) {
+                throw new GradleException('Release APK/AAB builds require STARFLOW_SIGNING_* with the established shared keystore.')
             }
         }
     }

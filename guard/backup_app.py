@@ -1,14 +1,18 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
 """
-app 数据全量备份 —— 可选恢复点，不是签名匹配的覆盖安装前置步骤。
+备份 app 私有目录和外部文件；不包含 Android 系统密钥库。
 
 覆盖两部分（卸载 app 会把两部分都删掉，缺一不可）：
   1. **私有数据** `/data/data/<pkg>/`：Room 数据库（翻译历史/页面缓存/导入清单）、
-     SharedPreferences（全部设置）、files/、加密存储的 API Key。
+     SharedPreferences（全部设置与加密 API Key 密文）、files/。
      用 `run-as` + tar 导出（**仅对 debuggable 包有效** —— debug 构建可用）。
   2. **外部数据** `/sdcard/Android/data/<pkg>/`：书架封面、导入的漫画/小说、
      下载的模型、日志。
+
+  AndroidKeyStore 的密钥材料由系统保存，不在 app 私有目录内，不会被此脚本导出。
+  卸载 app 后，这些密钥可能被系统删除；即使还原 SharedPreferences，加密 API Key 也可能无法解密。
+  因此 complete 只代表上述 app 文件目录已备份，不代表可无损迁移签名。
 
 ⚠️ 为什么必须用 Python 而不是 PowerShell 重定向：`adb exec-out` 吐的是**二进制**，
    PowerShell 的 `>` 会按文本处理（加 BOM、翻译换行）→ tar 包损坏。
@@ -181,7 +185,8 @@ def main():
         "externalFiles": en,
         "externalBytes": esz,
         "externalComplete": r.returncode == 0,
-        "note": "恢复用 guard/restore_app.py；私有数据依赖 run-as，仅 debuggable 包有效",
+        "androidKeystoreKeysIncluded": False,
+        "note": "恢复用 guard/restore_app.py；私有数据依赖 run-as，仅 debuggable 包有效。AndroidKeyStore 密钥不包含在备份中；卸载后加密 API Key 可能无法解密。",
         "complete": bool(priv and os.path.isfile(priv) and r.returncode == 0),
     }
     with open(os.path.join(out, "manifest.json"), "w", encoding="utf-8") as f:
@@ -192,6 +197,7 @@ def main():
     if manifest["complete"]:
         print(f"备份完成：私有 {manifest['privateTarBytes']/1048576:.2f} MB + 外部 {esz/1048576:.2f} MB "
               f"= {total/1048576:.2f} MB")
+        print("注意：AndroidKeyStore 密钥未备份；卸载后加密 API Key 可能无法解密。")
     else:
         print(f"部分备份：外部 {esz/1048576:.2f} MB；私有数据或外部文件未完整备份。")
         print("此目录不能当作完整恢复点；请使用 debuggable 包并重新备份。")

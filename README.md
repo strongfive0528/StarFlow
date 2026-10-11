@@ -261,6 +261,8 @@ Android 10 及以上、64 位 ARM 设备。PP-OCRv6 small 已内置在 APK 中�
 
 - **竖排 / 横排自适应** — 竖排文字按列排版，列距拉伸填满气泡宽度；横排文字自动填充行距与字距，在不超过选区的前提下尽量铺满
 - **竖排方向可配置** — 列从右到左（传统日漫）或从左到右，对所有结果实时生效，包括历史与缓存中的旧数据
+- **竖排符号适配** — 括号、引号、书名号、破折号、省略号和长音符按竖排字形或方向显示；阅读器、截图结果、历史和图片导出统一生效，保存文本保持原字符
+- **OCR 内存保护** — PP-OCRv5 / v6 根据当前内存和文字行宽度动态拆小识别批次；区域过大时提示缩小框选，避免识别阶段直接闪退
 - **重叠白块合并** — 译文白块互相重叠时合并为一个块（默认关闭）
 - **省略号不拆行** — 模型偶尔会把译文写成多行（`.\n.\n.`），渲染前会将这些换行接回同一行，且排版时点串整体不拆分，避免「每行一个点」占满气泡、导致字号被压缩
 
@@ -299,14 +301,9 @@ Android 10 及以上、64 位 ARM 设备。PP-OCRv6 small 已内置在 APK 中�
 
 ### 首次配置
 
-1. **`local.properties`**（已 gitignore，指向本机的 Android SDK，路径使用正斜杠）：
+1. **`local.properties`**（已 gitignore）：在本机设置 `sdk.dir`，指向 Android SDK 安装目录。该文件只保留在本机，不要提交：
    ```properties
-   # Windows
-   sdk.dir=C:/Users/<username>/AppData/Local/Android/Sdk
-   # macOS
-   sdk.dir=/Users/<username>/Library/Android/sdk
-   # Linux
-   sdk.dir=/home/<username>/Android/Sdk
+   sdk.dir=<本机 Android SDK 安装目录>
    ```
 2. 在 **SDK Manager** 中安装 `NDK 25.2.9519653` 与 `CMake 3.22.1`（版本不一致会直接构建失败）
 3. **拉取 llama.cpp 源码**（submodule，源码不进本仓库，缺了 `:llamacpp` 编不出来）：在仓库根目录执行
@@ -360,7 +357,7 @@ Robolectric 的 SDK 统一配置在 `app/src/test/resources/robolectric.properti
 
 ### 发布
 
-构建 APK/AAB 前需按 [`guard/README.md`](guard/README.md) 配置共享 keystore；debug 和 release 使用同一签名，未配置时构建会失败。正式发布走 GitHub Releases，应用内「检查更新」依赖 Release 的 APK 资产与说明中的网盘链接。
+构建 APK/AAB 前需按 [`guard/README.md`](guard/README.md) 配置已经用于分发版本的同一份签名密钥；debug 与 release 使用同一签名，缺少配置时构建会失败。正式发布走 GitHub Releases，应用内「检查更新」依赖 Release 的 APK 资产与说明中的网盘链接。
 
 ### 项目结构
 

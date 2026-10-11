@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
 """
-app 数据还原 —— 配合 guard/backup_app.py 使用。
+还原 app 私有目录和外部文件 —— 配合 guard/backup_app.py 使用。
 
 ⚠️ 前提：app **已经装着**（还原不负责安装；绝不卸载/安装 app）。
 
@@ -103,6 +103,8 @@ def main():
 
     print(f"备份   : {a.backup_dir}  ({m['createdAt']}, {m['versionName']})")
     print(f"目标   : {pkg} @ {serial}")
+    if m.get("androidKeystoreKeysIncluded") is not True:
+        print("警告：备份不包含 AndroidKeyStore 密钥；卸载后恢复的加密 API Key 可能无法解密。")
 
     if "package:" not in run(adb, ["shell", "pm", "path", pkg], serial, check=False):
         raise SystemExit(f"❌ 设备上没装 {pkg} —— 先装回 app 再还原")

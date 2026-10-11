@@ -6,6 +6,7 @@ import android.graphics.PointF
 import com.moe.starflow.R
 import com.moe.starflow.manga.TranslateUtils
 import com.moe.starflow.manga.TranslationCancelledException
+import com.moe.starflow.manga.engine.OcrMemoryException
 import com.moe.starflow.manga.engine.PPOcrV5Engine
 import com.moe.starflow.manga.engine.PPOcrV6Engine
 import com.moe.starflow.manga.merge.MangaSpatialGrouping
@@ -346,6 +347,10 @@ class IncrementalBatchPipeline(
             // 取消同样要回收第二批裁剪图：它不属于任何缓存，不回收就等 GC，下一批还要再分配一批
             secondBatch.forEach { if (!it.croppedBitmap.isRecycled) it.croppedBitmap.recycle() }
             throw e
+        } catch (e: OcrMemoryException) {
+            cancelAndJoinQuietly(ocrJob)
+            secondBatch.forEach { if (!it.croppedBitmap.isRecycled) it.croppedBitmap.recycle() }
+            throw e
         } catch (e: Exception) {
             LogCollector.e(TAG, "ppOcrV5: 失败", e)
             // 必须先 join 等第二批 OCR 真正退出，再回收它的裁剪图（见 cancelAndJoinQuietly）
@@ -419,6 +424,10 @@ class IncrementalBatchPipeline(
             // 取消同样要回收第二批裁剪图：它不属于任何缓存，不回收就等 GC，下一批还要再分配一批
             secondBatch.forEach { if (!it.croppedBitmap.isRecycled) it.croppedBitmap.recycle() }
             throw e
+        } catch (e: OcrMemoryException) {
+            cancelAndJoinQuietly(ocrJob)
+            secondBatch.forEach { if (!it.croppedBitmap.isRecycled) it.croppedBitmap.recycle() }
+            throw e
         } catch (e: Exception) {
             LogCollector.e(TAG, "ppOcrV6: 失败", e)
             // 必须先 join 等第二批 OCR 真正退出，再回收它的裁剪图（见 cancelAndJoinQuietly）
@@ -444,22 +453,23 @@ class IncrementalBatchPipeline(
                 ops.recognizeV5(host.context, crops, lang)
             }
         } catch (e: java.io.FileNotFoundException) {
-            crops.forEach { it.recycle() }
             host.onError(host.context.getString(R.string.error_rec_model_load_failed, e.message))
             host.onBallState(BallStateManager.State.Error)
             throw e
         } catch (e: kotlinx.coroutines.CancellationException) {
             // 协程取消（用户停止翻译 / 新任务取代第二批 OCR）：不是模型错误，直接重抛不显示错误
-            crops.forEach { it.recycle() }
+            throw e
+        } catch (e: OcrMemoryException) {
+            host.onError(host.context.getString(R.string.error_ocr_memory))
+            host.onBallState(BallStateManager.State.Error)
             throw e
         } catch (e: Exception) {
-            crops.forEach { it.recycle() }
             host.onError(host.context.getString(R.string.error_rec_model_exception, e.message))
             host.onBallState(BallStateManager.State.Error)
             throw e
+        } finally {
+            crops.forEach { if (!it.isRecycled) it.recycle() }
         }
-        // 释放裁剪图片
-        crops.forEach { it.recycle() }
         // TextRegionMerger 识别后合并
         val mergedInput = PPOcrV5Engine.recResultsToTextLines(recResults, rects, angles, centers)
         TextRegionMerger.refreshParams(host.context)
@@ -486,20 +496,22 @@ class IncrementalBatchPipeline(
                 ops.recognizeV6(host.context, crops)
             }
         } catch (e: java.io.FileNotFoundException) {
-            crops.forEach { it.recycle() }
             host.onError(host.context.getString(R.string.error_rec_model_load_failed, e.message))
             host.onBallState(BallStateManager.State.Error)
             throw e
         } catch (e: kotlinx.coroutines.CancellationException) {
-            crops.forEach { it.recycle() }
+            throw e
+        } catch (e: OcrMemoryException) {
+            host.onError(host.context.getString(R.string.error_ocr_memory))
+            host.onBallState(BallStateManager.State.Error)
             throw e
         } catch (e: Exception) {
-            crops.forEach { it.recycle() }
             host.onError(host.context.getString(R.string.error_rec_model_exception, e.message))
             host.onBallState(BallStateManager.State.Error)
             throw e
+        } finally {
+            crops.forEach { if (!it.isRecycled) it.recycle() }
         }
-        crops.forEach { it.recycle() }
         val mergedInput = PPOcrV6Engine.recResultsToTextLines(recResults, rects, angles, centers)
         TextRegionMerger.refreshParams(host.context)
         val allMerged = TextRegionMerger.merge(

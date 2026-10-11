@@ -1481,6 +1481,13 @@
     <string name="translating_do_not_tap">翻译进行中，请勿点击屏幕…</string>
     <string name="error_rec_model_missing">识别模型文件缺失：%1$s</string>
     <string name="error_rec_model_load_failed">识别模型加载失败：%1$s</string>
+    <string name="error_screenshot_memory">截图内存不足，请关闭其他应用后重试。</string>
+    <string name="error_screenshot_internal">截图失败：内部错误</string>
+    <string name="error_screenshot_access">截图失败：无障碍服务未就绪</string>
+    <string name="error_screenshot_interval">截图频率过高，已自动降速</string>
+    <string name="error_screenshot_display">截图失败：无效显示器</string>
+    <string name="error_screenshot_code">截图失败：错误码 %1$d</string>
+    <string name="error_ocr_memory">OCR 内存不足或文字区域过大，请缩小框选区域后重试。</string>
     <string name="error_rec_model_exception">识别模型异常：%1$s</string>
     <string name="error_translate_failed">翻译失败：%1$s</string>
     <string name="error_text_too_long">待翻译文本过长（超过模型上下文限制）</string>

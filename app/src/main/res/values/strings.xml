@@ -1480,6 +1480,13 @@
     <string name="translating_do_not_tap">Translating, please do not tap the screen…</string>
     <string name="error_rec_model_missing">Recognition model files missing: %1$s</string>
     <string name="error_rec_model_load_failed">Recognition model load failed: %1$s</string>
+    <string name="error_screenshot_memory">Screenshot memory is insufficient. Close other apps and try again.</string>
+    <string name="error_screenshot_internal">Screenshot failed: internal error</string>
+    <string name="error_screenshot_access">Screenshot failed: accessibility access unavailable</string>
+    <string name="error_screenshot_interval">Screenshots are too frequent; the capture rate has been reduced</string>
+    <string name="error_screenshot_display">Screenshot failed: invalid display</string>
+    <string name="error_screenshot_code">Screenshot failed: error code %1$d</string>
+    <string name="error_ocr_memory">OCR memory is insufficient or the text region is too large. Select a smaller area and try again.</string>
     <string name="error_rec_model_exception">Recognition model error: %1$s</string>
     <string name="error_translate_failed">Translation failed: %1$s</string>
     <string name="error_text_too_long">Input text too long (exceeds model context)</string>

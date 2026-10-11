@@ -2,6 +2,9 @@ package com.moe.starflow.manga.render
 
 import com.moe.starflow.manga.types.TextAlign
 import com.moe.starflow.manga.types.TextDirection
+import android.graphics.Bitmap
+import android.graphics.Canvas
+import android.graphics.Paint
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertTrue
 import org.junit.Test
@@ -64,5 +67,24 @@ class VerticalTextRendererTest {
     fun degenerateRegion_returnsEmptyLayout() {
         val layout = plan("AA", Box(0f, 0f, 0f, 0f), TextDirection.HORIZONTAL)
         assertTrue("退化区域返回空排版", layout.isEmpty)
+    }
+
+    @Test
+    fun punctuationRenderingPreservesLayoutTextForBothColumnDirections() {
+        val original = "（你好）「世界」…—〜ー，。！？︵︶"
+        for (direction in listOf(TextDirection.VERTICAL_RL, TextDirection.VERTICAL_LR, TextDirection.HORIZONTAL)) {
+            val layout = plan(original, Box(0f, 0f, 600f, 600f), direction)
+            val before = layout.copy(lines = layout.lines.toList())
+            val canvas = object : Canvas(Bitmap.createBitmap(600, 600, Bitmap.Config.ARGB_8888)) {
+                var characters = 0
+                override fun drawText(text: String, x: Float, y: Float, paint: Paint) {
+                    characters += text.length
+                }
+            }
+            VerticalTextRenderer.draw(canvas, layout, 0xFF000000.toInt())
+            assertEquals(before, layout)
+            assertEquals(original, layout.lines.joinToString("") { it.text })
+            assertEquals("no glyph dropped during transformation", original.length, canvas.characters)
+        }
     }
 }

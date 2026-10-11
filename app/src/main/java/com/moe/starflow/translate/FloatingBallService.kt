@@ -68,6 +68,7 @@ import com.moe.starflow.manga.config.OcrEngineGroup
 import com.moe.starflow.manga.engine.PPOcrModelFiles
 import com.moe.starflow.manga.types.TextDirection
 import com.moe.starflow.manga.engine.PPOcrV5Engine
+import com.moe.starflow.manga.engine.OcrMemoryException
 import com.moe.starflow.manga.engine.PPOcrV6Engine
 import com.moe.starflow.utils.Constants
 import com.moe.starflow.utils.ContextBudget
@@ -1805,6 +1806,12 @@ class FloatingBallService : LifecycleService() {
                     translationCancelled = false  // 每次新截图翻译重置取消标志
                     partialResultShown = false    // 每次新截图翻译重置部分结果标志
                     processScreenshot(bitmap)
+                } catch (e: OcrMemoryException) {
+                    isTranslating.set(false)
+                    LogCollector.e(TAG, e.diagnostic, e)
+                    if (isAutoTranslating) stopAutoTranslate()
+                    statusOverlay.showError(getString(R.string.error_ocr_memory))
+                    ballStateManager?.setState(BallStateManager.State.Error)
                 } catch (e: Exception) {
                     isTranslating.set(false)
                     updateDebugStatus("【错误】截图处理失败: ${e.message?.take(30)}")
@@ -2022,6 +2029,9 @@ class FloatingBallService : LifecycleService() {
                 val bitmapCopy = bitmap.copy(bitmap.config!!, true)
                 translateByPic(bitmapCopy)
             }
+        } catch (e: OcrMemoryException) {
+            // The screenshot collector stops automatic capture and shows the memory-specific error.
+            throw e
         } catch (e: Exception) {
             isTranslating.set(false)
             updateDebugStatus("【错误】${e.message?.take(30) ?: "未知"}")
