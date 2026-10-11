@@ -52,8 +52,7 @@ llama.cpp 的 `tools/ui` 有超过 260 字符的路径，Windows 默认长路径
 | `LLAMA_BUILD_{TESTS,EXAMPLES,TOOLS,SERVER}` | OFF | 只留库 |
 | 链接选项 | `--gc-sections --strip-debug --exclude-libs,ALL` | `--strip-debug` 保留符号表（崩溃 backtrace 可读），不 strip 的话 `.so` 有 43.9MB |
 
-实测（本机，NDK 25.2.9519653 / cmake 3.22.1 / ninja，-j8）：`llama` + `llama-common` 冷编约
-**51 秒**；Gradle `:llamacpp:assembleDebug` 约 **1 分 13 秒**；产出 `.so` 约 **7MB**（含 Jinja）。
+启用 Jinja 时产出的 `.so` 约 **7MB**；构建耗时取决于执行主机、磁盘和并行度，不使用单机耗时作为固定指标。
 
 ## JNI 接口
 
