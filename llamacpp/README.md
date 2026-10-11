@@ -1,4 +1,8 @@
-# :llamacpp —— 本地 GGUF 推理模块
+# llama.cpp Android 集成模块
+
+> 范围：说明 `:llamacpp` 的源码准备、构建配置、模型格式约定和 JNI 接口。上游 llama.cpp 文档由上游维护。
+
+STQ1_0 备用补丁的背景和使用条件见 [补丁说明](../patches/README.md)。
 
 本模块把 **llama.cpp 源码**编进 App（不再是预编译 `.so`），并提供一层 JNI 桥给 `:app` 使用。
 原来只跑内置 Hy-MT2 的 `hymt2` 桥接与 4 个预编译 `.so` 已被它整体取代。

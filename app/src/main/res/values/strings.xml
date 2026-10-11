@@ -96,6 +96,7 @@
     <string name="sort_order">Sort</string>
     <string name="sort_title">Title</string>
     <string name="sort_added">Added</string>
+    <string name="sort_recent_read">Recently read</string>
     <string name="apply">Apply</string>
     <string name="api_name">API：%s</string>
     <string name="tencent_cloud">Tencent Cloud</string>
@@ -1634,6 +1635,9 @@
     <string name="novel_fail_translate_empty">Model returned nothing</string>
     <string name="novel_chapter_failed_hint">%1$d paragraphs failed: %2$s</string>
     <string name="novel_chapter_failed_meta">Chapter %1$d · %2$d failed</string>
+    <string name="novel_translate_failure_languages">Languages: %1$s → %2$s</string>
+    <string name="novel_translate_failure_reason">Reason: %1$s</string>
+    <string name="novel_translate_failure_source">Source: %1$s</string>
     <string name="novel_style_keep_paragraphs">Keep paragraphs whole</string>
     <string name="novel_style_keep_paragraphs_hint">Move a paragraph to the next page when it does not fit; off = fill pages by spacing (paragraphs may split)</string>
     <string name="novel_style_reset">Reset to defaults</string>
@@ -1644,6 +1648,7 @@
     <string name="novel_display_translated">Translation</string>
     <string name="novel_display_original">Original</string>
     <string name="novel_display_bilingual">Bilingual</string>
+    <string name="novel_display_toggle_desc">Cycle text display: translation, original, bilingual</string>
     <string name="novel_translate_mode">Translation mode</string>
     <string name="novel_translate_debounce">Wait for a stable page</string>
     <string name="novel_translate_debounce_hint">The page must stay put (no page turns / scrolling) for this long before it counts as stable — only then does translation start. Nothing is sent and no highlight appears until then. Shared by auto and incremental modes.</string>

@@ -49,16 +49,13 @@ docs/
 # 临时调研脚本 / 分析草稿（本地）
 .research-tmp/
 
-# Claude Code
-# ⚠️ 这里**不再忽略** CLAUDE.md（2026-10-01 起）：根文件与各模块分册随仓库提交，
-#    clone 下来就带着，谁都能拿到同样的项目上下文。
-#    原来那行是裸的 `CLAUDE.md`（匹配任意层级）→ 8 份文档全被静默忽略，
-#    `git add .` 时无声漏掉、远端永远没有它们。
-#    想改回"只留本地"就把 `CLAUDE.md` 这行加回来，并同步改根 CLAUDE.md 的「目录规范」一节。
+# Project instructions are shared: track the root AGENTS.md and project CLAUDE.md files.
+# Keep local Claude and Superpowers plugin data ignored.
 
-# Superpowers plugin
+# Superpowers plugin data stays local; only the shared root AGENTS.md is tracked.
 .agents/
 AGENTS.md
+!/AGENTS.md
 
 # 模型文件 (太大不适合 git)
 # PP-OCRv6 small 内置模型例外

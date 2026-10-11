@@ -1,0 +1,38 @@
+# 仓库协作规则
+
+## 项目与文档
+
+- StarFlow 是 Android 翻译应用。仓库源码和测试是当前实现的事实来源；引用规则前先核对代码。
+- 根目录 [CLAUDE.md](CLAUDE.md) 记录跨模块架构与构建约定。修改功能前，先阅读对应模块指南；指南中的技术约束适用于所有开发工具。
+- 项目自有 Markdown 使用 UTF-8：一个描述清楚的一级标题、一段简短的用途或范围说明，以及清晰的标题层级（`##` 主章节，`###` 细节）。代码块标注语言；文档间导航使用相对链接；代码路径写成明确的仓库相对路径；列表和表格保持简洁。
+- 文档内容应精简、现行且能对应到实现。删除过时规则和对话记录；解释不明显的不变式时，只保留必要的因果说明。避免本机路径、代理地址、设备标识、凭据和私有 keystore 信息。
+- `README.md` 面向应用用户和贡献者；根目录 `AGENTS.md`、`CLAUDE.md` 提供共享开发规则；模块 `CLAUDE.md` 说明模块实现。`docs/` 中的本地记录不代表当前实现。
+- 用户可见的产品说明写入 `README.md`。`docs/` 保存仅本地维护的设计笔记和计划，不提交到 Git。
+
+## 本地文件与远端源码
+
+- APK、设备截图、日志、临时测试样本和原始模型集合只保存在本地；不要提交 APK 或 QA 截图。
+- 已适配模型的本地备份放在 `tools/models/app-adapted/`；待用户确认删除的文件集中在 `tools/待删除/`。这两个目录仅本地维护。
+- 根目录 `models/` 保存下载的源权重，仅本地维护。只有应用运行时确实需要的文件才放入 `app/src/main/assets/`；这些资产不是个人模型备份。
+- `tools/`、`.reference/` 和 `docs/` 仅本地维护。不要编辑第三方参考检出。
+- `sr/`、`guard/` 和 `patches/` 是项目源码或维护中的构建支持文件，应纳入远端仓库。应用实际使用的教程插图保存在 `app/src/main/res/`，属于产品资源，不是 QA 截图。
+- `llamacpp/src/main/cpp/llama.cpp/` 由上游维护。遵循其中的 `AGENTS.md` 和 `CONTRIBUTING.md`，不要把 StarFlow 规则写入上游文档。
+
+## 构建、测试与设备
+
+- 使用 Gradle Wrapper。根据改动运行相关测试；仅在用户要求时运行完整测试套件。
+- 未获用户明确授权，不运行连接设备的 Android 测试，不卸载应用、不清除应用数据，也不执行其他会改变设备状态的操作。安装、启动和截屏等可见设备操作同样需要授权。
+- 获准安装 APK 时，使用 `python guard/install_safe.py <apk> --confirm`。若包名、版本、设备或签名校验失败，立即停止，不绕过保护。
+- 只有用户明确要求时才提交或推送。
+
+## 模块指南
+
+| 模块 | 指南 |
+|---|---|
+| 漫画引擎、渲染与处理流程 | `app/src/main/java/com/moe/starflow/manga/CLAUDE.md` |
+| 漫画书架与阅读器 | `app/src/main/java/com/moe/starflow/mangaimport/CLAUDE.md` |
+| 小说导入、阅读与翻译 | `app/src/main/java/com/moe/starflow/novel/CLAUDE.md` |
+| 翻译服务与截图流程 | `app/src/main/java/com/moe/starflow/translate/CLAUDE.md` |
+| 数据、缓存、历史与数据库 | `app/src/main/java/com/moe/starflow/data/CLAUDE.md` |
+| 模型下载与管理 | `app/src/main/java/com/moe/starflow/download/CLAUDE.md` |
+| 图片超分 | `app/src/main/java/com/moe/starflow/sr/CLAUDE.md` |

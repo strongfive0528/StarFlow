@@ -1,4 +1,8 @@
-# patches/ —— llama.cpp 下游补丁（1.25-bit / STQ1_0）
+# llama.cpp STQ1_0 兼容补丁
+
+> 范围：记录 Hy-MT2 1.25-bit 模型的兼容背景和备用补丁用法。补丁不参与常规构建；仅在更新 llama.cpp 后确认上游缺少 STQ1_0 支持时评估使用。
+
+当前引擎 pin、GGUF 重打标和构建配置见 [llama.cpp Android 集成模块](../llamacpp/README.md)。
 
 ## 为什么有这些补丁
 

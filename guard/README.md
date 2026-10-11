@@ -1,132 +1,46 @@
-# 设备操作防护体系（`guard/`）
+# 手机安装与数据保护
 
-> 起因：**2026-09-30 真实事故** —— 在装着真实数据的手机上跑 `:app:connectedDebugAndroidTest`，
-> AGP 的 connected 流程**先卸载被测 app**，安装被 MIUI 拦下后**没有回滚** →
-> app 连同 `/data/data/` 与外部数据目录一起没了，且无备份可恢复。
+> 范围：说明本项目安全安装、签名校验与设备数据备份流程。
 
-这套东西存在的唯一目的：**让同一件事不可能再发生一次。**
+目标只有两条：**不执行卸载/清数据；签名或版本不匹配时停止安装。**
 
----
+## 安装或更新
 
-## 四层防护（缺一层都不够）
+唯一安装入口：
 
-| 层 | 机制 | 挡什么 | 在哪 |
-|---|---|---|---|
-| **L1 硬拦** | Gradle init script | 任务名含 `uninstall` / 以 `connected` 开头 / `managedDevice` —— **机器级，任何项目任何调用方都拦** | `~/.gradle/init.d/device-guard.gradle` |
-| **L2 审查** | 命令分类器（可证伪） | 任何**命令串**里的删 app / 清数据 / 抹机行为，含名字里没有 uninstall 的隐藏开关 | `guard/device_guard.py` + 61 条用例 |
-| **L3 可恢复** | 全量备份 / 还原 | 私有数据（数据库/设置/密钥）+ 外部数据（书架/模型/缓存） | `guard/backup_app.py` / `restore_app.py` |
-| **L4 强制流程** | 项目指令（每次会话自动加载） | 让**人和 AI** 都按同一套判据做事 | 根 `CLAUDE.md` 的「设备操作防护」章 |
-
----
-
-## 为什么需要 L1（而不是只写在文档里）
-
-因为**光写规则挡不住人，也挡不住 AI**。事故当时项目文档里已经有「禁止未经确认操作设备」，
-但那是一条**需要被读到、被想起来**的规则 —— 而 `connectedDebugAndroidTest` 这个名字里
-**完全没有 uninstall 的痕迹**，靠人脑联想是必然漏的。
-
-L1 把它变成**执行层面的硬失败**：只要任务图里有它，构建直接抛异常，连跑都跑不起来。
-而且它装在 `~/.gradle/init.d/`（**项目外**）—— 换分支、清工作区、重新 clone 都甩不掉。
-
-**脚本本体在仓库里**（`guard/gradle-init/device-guard.gradle`），新机器上装一次：
 ```powershell
-pwsh guard/install-gradle-guard.ps1     # 装到 ~/.gradle/init.d/，已有的会先备份
+python guard/install_safe.py app/build/outputs/apk/debug/app-debug.apk --confirm
 ```
 
-```powershell
-# 验证它真的在拦（--dry-run 不会真执行）
-.\gradlew.bat :app:connectedDebugAndroidTest --dry-run
-# → BLOCKED: this task uninstalls the app and deletes its data
-```
+多个手机连接时加 `-s <序列号>`。省略 `--confirm` 只做预检，不安装。
 
-确实需要在**没有真实数据**的设备上跑时，显式放行：
-```powershell
-$env:ALLOW_DEVICE_UNINSTALL='1'
-.\gradlew.bat :app:connectedDebugAndroidTest      # 会打醒目警告，然后继续
-Remove-Item Env:\ALLOW_DEVICE_UNINSTALL
-```
+安装器会检查 APK 包名、版本、签名和目标设备。已有应用时，仅执行 `adb install -r`；签名不符、降级或预检工具缺失都会直接停止。**没有卸载、清数据或自动重试安装的代码路径。** 安装后会再次核对签名和外部数据目录统计。
 
----
+不要用 `adb uninstall`、`pm clear`、Gradle `connected*` 测试或 `gradlew installDebug` 替代此入口。机器级 Gradle guard 会无条件拦截卸载任务和 connected 测试，没有绕过环境变量。
 
-## L2：任何命令先过审查器
+首次安装且手机上还没有此包时，不需要签名匹配；安装器执行普通 `adb install`。已有安装则必须与其签名完全一致。
 
-```powershell
-python guard/device_guard.py "adb uninstall com.moe.starflow"
-# ⛔ BLOCKED  adb uninstall com.moe.starflow
-#            adb uninstall —— 卸载 app,它的 /data/data 与外部数据目录会一起被删,且不可恢复
+## 签名怎么保持一致
 
-python guard/device_guard.py "adb shell dumpsys package com.moe.starflow"
-# ✅ SAFE     只读查询（列设备/日志/dumpsys/pull/构建产物）
-```
+可互相覆盖安装的 APK 必须使用同一份私有 keystore。环境变量只告诉 Gradle 到哪里读取它，不会把密钥同步到其他构建机。
 
-退出码即结论，可直接串在流程里：
-```powershell
-python guard/device_guard.py "$CMD" || throw "该命令已被拦截"
-```
+签名身份由 keystore 中的密钥决定，与 `debug`/`release` 构建类型名称无关。本项目已经分发版本所用的签名身份必须原样保留；即使它最初来自 Android Studio 自动生成的 debug keystore，也不能在新电脑上用自动生成的另一份密钥替代。需要新构建机时，安全复制并校验同一份原始 keystore。
 
-**它的判据是可证伪的** —— 改规则后必须跑：
-```powershell
-python guard/test_device_guard.py     # 61 条用例：29 BLOCKED / 11 CAUTION / 21 SAFE
-```
+每台构建机都要从密码管理器或加密密钥库安全取得同一份 keystore，并通过环境变量、本机 Gradle 用户级属性或 CI 凭据流程提供 `STARFLOW_SIGNING_STORE_FILE`、`STARFLOW_SIGNING_STORE_PASSWORD`、`STARFLOW_SIGNING_KEY_ALIAS` 和 `STARFLOW_SIGNING_KEY_PASSWORD`。不要把这些值放进仓库的 Gradle 配置文件，也不要提交或发送 keystore 和密码。
 
-### 判定规则的三条原则（血泪）
+配置完整后，所有可安装 APK/AAB（debug 和 release）都使用这份共享 keystore；未配置时打包会失败，避免每台机器悄悄使用不同的本地 debug key。
 
-1. **按「副作用」判，不按「命令长什么样」判。**
-   真正危险的是「先卸载后安装且不回滚」这种**组合行为** —— 所以 `connectedDebugAndroidTest`
-   必须按「会卸载」判，尽管它名字里一个 uninstall 都没有。
-2. **检测「名字没说但行为是清数据」的隐藏开关。**
-   典型：AndroidJUnitRunner 的 `-e clearPackageData true` —— 一行参数就能清空 app 数据。
-3. **通配符要升级风险等级。**
-   `rm -rf /sdcard/Android/data/*` 比只删一个包严重得多（毁掉设备上**所有** app 的外部数据）。
+共享 keystore 必须是已经用于分发版本的原始密钥。换成新密钥会阻止已有安装直接更新；如果原始私钥找不到，先从安全备份恢复。公开证书不能恢复私钥，也不要为了安装而卸载用户版本。
 
----
-
-## L3：备份 / 还原
+## 备份与恢复
 
 ```powershell
-# 备份（任何可能触碰设备状态的操作之前）
 python guard/backup_app.py
-#   → guard/_backups/com.moe.starflow-<时间戳>/
-#       private.tar      私有数据（Room 库 / SharedPreferences / files / 密钥）
-#       external/        外部数据（书架 / 已下载模型 / 缓存）
-#       manifest.json    版本、大小、sha256
-
-# 还原（app 需先装着）
-python guard/restore_app.py guard/_backups/com.moe.starflow-20260930-013000
+python guard/restore_app.py guard/_backups/<备份目录> --confirm-overwrite
 ```
 
-**两个必须知道的限制：**
+备份目录不会复用或覆盖。备份脚本若不能导出私有数据或外部文件，会标为部分备份并返回失败；release 包通常不允许 `run-as`。恢复会覆盖现有数据，必须明确添加 `--confirm-overwrite`，且不接受缺失/校验失败的私有备份。
 
-- 私有数据靠 `run-as`，**只对 debuggable 包有效**（`debug` 构建可以，`release` 不行）。
-  要备份 release 包的数据，得先临时装一个 debug 包或改用其他手段。
-- 还原**不负责安装**。app 被卸载后数据目录没了，必须先装回 app、启动一次建目录，再还原。
+私有备份含设置和 API Key，只保存在可信本机目录；不要提交或转发备份文件。
 
----
-
-## L4：项目指令（`CLAUDE.md`）
-
-`guard/` 再全，也需要**每次会话都读到的规则**。根 `CLAUDE.md` 里有「设备操作防护」章，
-写明了分类判据、必做流程、以及"哪些命令默认不做"。
-
----
-
-## 自检快照
-
-```powershell
-python guard/snapshot_state.py      # 记录 app 是否在线 / 数据目录条目数 / 备份列表
-```
-（用于"操作前后对比"，一秒看出有没有东西没了。设备离线时也能跑，会标 OFFLINE。）
-
----
-
-## 文件清单
-
-| 文件 | 作用 |
-|---|---|
-| `device_guard.py` | 命令审查器（L2） |
-| `test_device_guard.py` | 审查器判定测试（61 条） |
-| `backup_app.py` | 全量备份（L3） |
-| `restore_app.py` | 还原（L3） |
-| `snapshot_state.py` | 设备/app 状态快照（操作前后对比） |
-| `DANGEROUS-COMMANDS.md` | **危险命令全清单 + 分类判据**（给人看的审查逻辑） |
-| `_backups/` | 备份产物（gitignore，不入库） |
+`device_guard.py` 仅把明确的只读命令列为 SAFE；未知或拼接命令返回 CAUTION。日常安装不需要手动跑分类、快照、备份三套命令。`snapshot_state.py` 仅用于单独查看设备状态；多个设备时必须用 `--serial`。

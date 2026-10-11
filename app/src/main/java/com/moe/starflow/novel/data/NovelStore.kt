@@ -89,6 +89,7 @@ object NovelStore {
         put("lastReadChapter", lastReadChapter)
         put("lastReadParaIndex", lastReadParaIndex)
         put("lastReadPage", lastReadPage)
+        put("lastReadAt", lastReadAt)
         // ⚠️ lost / importing / importPhase / importPercent 刻意不写 —— 瞬态字段，
         // 持久化会让「文件丢失」这种实时推导的结论变成过期缓存
     }
@@ -121,5 +122,7 @@ object NovelStore {
         lastReadChapter = optInt("lastReadChapter", 0),
         lastReadParaIndex = optInt("lastReadParaIndex", 0),
         lastReadPage = optInt("lastReadPage", 0),
+        // Legacy shelf entries have no recent-read timestamp; keep them at the end of that sort.
+        lastReadAt = optLong("lastReadAt", 0),
     )
 }

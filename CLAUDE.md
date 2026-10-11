@@ -1,6 +1,8 @@
-# CLAUDE.md
+# StarFlow 项目开发指南
 
-本文件为 Claude Code (claude.ai/code) 提供项目上下文。
+> 范围：本文记录 StarFlow 的跨模块架构、构建流程与共享实现约束。通用协作和仓库规则见 [AGENTS.md](AGENTS.md)；Claude Code 通过以下导入读取这些规则。
+
+@AGENTS.md
 
 ## 项目概述
 
@@ -21,23 +23,11 @@ Claude 只在动那个目录时才读：
 | 模型下载与模型管理 | `app/src/main/java/com/moe/starflow/download/CLAUDE.md` |
 | 图片超分（引擎 / 大图压缩 / 逐页按钮 / 记录系统 + 超分本章） | `app/src/main/java/com/moe/starflow/sr/CLAUDE.md` |
 
-这些分册**随仓库提交**（2026-10-01 起）→ clone 下来就有，`.gitignore` 里那行裸的 `CLAUDE.md` 已删除。
-⚠️ 但 `.claude/worktrees/*` 是**独立检出**：里面那份是**建工作树那一刻的快照**、不会跟着主检出更新，
-早于这次改动建的工作树里根本没有它们。**改约定一律回主检出改**，别在工作树里改完以为生效了。
+这些分册随仓库维护，clone 下来即可使用。
 
-## 目录规范
+## 目录与远端边界
 
-- **`.reference/`** — 参考项目，只读，已 gitignore。用于克隆第三方开源项目作为代码参考。⚠️ `.reference/*/CLAUDE.md` 是**第三方参考项目自带**的文档（Kototoro/fby/fby2），Claude 探索该目录时会自动加载——不要把它们当本项目规范；`.claude/worktrees/*/CLAUDE.md` 同理（旧工作区快照，自动清理，可忽略）。
-- **`tools/`** — 测试模型和脚本，已 gitignore。用于本地测试转换后的模型。
-- **各模块目录下的 `CLAUDE.md`** — 本项目自己的模块分册（`manga/`、`mangaimport/`、`novel/`、`translate/`、`data/`、`download/`、`sr/` 各一份，索引见上）。**随仓库提交**（不再 gitignore）；改完约定记得**同时看根文件与对应分册**。
-- **`models/`** — 模型源文件集中目录，已 gitignore（体积大不适合提交）。存放从各服务器下载的真实模型文件（manga-ocr / PP-OCRv5 / PP-OCRv6 medium / RT-DETR），用于计算 MD5 和核对大小。参见 memory `[[model-download-md5-not-size]]`。
-- **`docs/`** — 文档**一律只留本地，不提交远端、不提交 git**（2026-09 用户明确要求）。含 `docs/docs/`（架构文档 `ARCHITECTURE.md`、带日期的设计/计划稿）与 `docs/superpowers/`（spec/plan 草稿）。`.gitignore` 已整目录忽略 `docs/`；原先 tracked 的 11 个文件已 `git rm --cached`，本地文件保留。
-- **`docs/superpowers/`** — superpowers 技能的草稿：设计规格存 `docs/superpowers/specs/`，实现计划存 `docs/superpowers/plans/`。⚠️ 不要用 superpowers skill 默认的「save to docs/superpowers/specs/ and commit」——本项目 spec/plan 一律不 commit。
-- 禁止在项目根目录散落模型文件；模型源文件统一放 `models/`。
-- **本项目 `CLAUDE.md` 随仓库提交、会上远端**（2026-10-01 起，`.gitignore` 里那行已删）：它是给
-  **Claude** 的项目上下文，clone 下来即生效，不需要任何额外同步步骤。给**用户**看的说明仍写
-  `README.md`（也在远端）。⚠️ 仓库是**公开**的，新增内容前扫一眼有没有本机敏感信息
-  （adb 序列号 / API key / 绝对路径）—— 现在这 8 份里只有本地代理端口和机型名，没有敏感项。
+远端与本地文件边界、模型备份位置和禁止提交的内容统一见 [AGENTS.md](AGENTS.md)。用户指南写在 [README.md](README.md)，本机设计记录放在 Git 忽略的 `docs/`。
 
 ## 环境搭建
 
@@ -53,40 +43,36 @@ Claude 只在动那个目录时才读：
 > `models/`（模型源文件）、`tools/`、`docs/` 也都不入库，但**不影响构建**，需要时单独拷。
 
 **首次克隆后：**
-1. 创建 `local.properties`（已 gitignore）：`sdk.dir=[LOCAL_PATH]`，路径用正斜杠 `/`
-2. 配置 git 代理（国内环境，二选一）：Clash 时 `git config --global http.proxy http://127.0.0.1:7897`；
-   用 Cloudflare WARP 时**不设代理**（清掉 env 后 git 走系统路由直连，见「网络配置」）
-3. 确认 Windows hosts 无 `#S302` 条目将 github.com 指向 127.0.0.1
-4. **`pwsh sr/setup-ncnn.ps1`** —— 必做：`sr/src/main/cpp/ncnn-src/` 不入库（`sr/.gitignore`），
-   而 `sr/src/main/cpp/CMakeLists.txt` 里有 `add_subdirectory(ncnn-src)` → 不拉 **`:sr` 直接编不过**。
-   `:llamacpp` 同理要 `pwsh llamacpp/setup-submodule.ps1`。
-   ⚠️ **别跑 `git submodule update --init`**：Windows 上会因长路径失败（脚本头部已写明），
-   而 `llama.cpp` 本来就不是一个「已注册的 submodule」，跑它反而会另开一份 `.git/modules` 存储、与现成的打架。
+1. 创建 `local.properties`（已 gitignore），将 `sdk.dir` 设为本机 Android SDK 的绝对路径，路径用正斜杠 `/`；例如 `sdk.dir=[LOCAL_PATH]`（将 `your-user` 替换成实际目录名）
+2. 如果网络环境需要代理，在本机 Git 配置中填写可用的代理地址；不要把个人代理端点写进项目文档。
+3. 如果 GitHub 域名无法解析或连接，检查本机 hosts 和代理配置，确保没有错误的本地重定向。
+4. **准备原生依赖源码**：运行 `pwsh sr/setup-ncnn.ps1` 和 `pwsh llamacpp/setup-submodule.ps1`。
+   `llama.cpp` 在仓库中以固定提交的 gitlink 记录；项目脚本在该路径准备独立的稀疏检出，并启用长路径。
+   使用脚本初始化；不要先运行 `git submodule update`，否则会生成与脚本预期不同的 `.git` 布局。
 5. `./gradlew assembleDebug` 验证构建
 
 ## 构建命令
 
-> ⚠️ **新 clone 先拉 submodule**：`:llamacpp` 是独立 Gradle 模块，它的 `CMakeLists.txt` 直接
-> `add_subdirectory(llama.cpp …)`，而 `llama.cpp` 是 gitlink（空目录）。不拉会构建失败：
-> `git submodule update --init --recursive`（或跑 `setup-submodule.ps1`；pin 见 `git submodule status`）。
+> 新 clone 后需运行 `pwsh llamacpp/setup-submodule.ps1` 准备 `llama.cpp`，否则 `:llamacpp` 无法构建。
+> 脚本会按仓库 gitlink 固定的提交创建稀疏检出；不要先运行 `git submodule update`。固定提交可用 `git submodule status` 查看。
 
 ```bash
-# 构建 debug APK
+# 构建 debug APK（需要共享 keystore，见 guard/README.md）
 ./gradlew assembleDebug
 
-# 构建 release APK
+# 构建 release APK（需要预先配置跨设备共享 keystore，见 guard/README.md）
 ./gradlew assembleRelease
 
-# 安装 debug APK 到设备
-adb install app/build/outputs/apk/debug/app-debug.apk
+# 安装/更新 debug APK（用户授权后；自动做签名预检）
+python guard/install_safe.py app/build/outputs/apk/debug/app-debug.apk --confirm
 
-# 清理构建
+# 清理并构建 debug APK（同样需要共享 keystore）
 ./gradlew clean assembleDebug
 
 # 运行单元测试（⚠️ 直接 ./gradlew test 会因 Git Bash 弄乱 PATH 使 test worker 崩溃
 # ClassNotFoundException: Files\Git\mingw64\bin;...，需用 PowerShell + 干净 PATH + --no-daemon + 指定测试类）：
 # powershell:
-#   $env:JAVA_HOME='C:\Program Files\Microsoft\jdk-17.0.19.10-hotspot'
+#   $env:JAVA_HOME='C:\Path\To\JDK\17'  # 替换为本机 JDK 17 路径
 #   $env:PATH='C:\Windows\System32;C:\Windows;'+$env:JAVA_HOME+'\bin'
 #   .\gradlew.bat --no-daemon :app:testDebugUnitTest --tests com.moe.starflow.data.XxxTest
 
@@ -115,20 +101,20 @@ adb install app/build/outputs/apk/debug/app-debug.apk
 # 实时查看应用日志
 adb logcat --pid=$(adb shell pidof com.moe.starflow)
 
-# 指定设备安装（多设备时）
-adb -s <serial> install -r app/build/outputs/apk/debug/app-debug.apk
+# 指定设备安装（多设备时；用户授权后）
+python guard/install_safe.py app/build/outputs/apk/debug/app-debug.apk -s <serial> --confirm
 
 # 查看连接设备
 adb devices
 ```
 
-# lint（本地化防线）：app/build.gradle 已设 lint { fatal += ['MissingTranslation'] }
-# 缺翻译（values/ 有、values-zh/ 没有）→ assembleRelease 直接失败；调试先跑下面这行看详情：
-./gradlew :app:lintDebug   # 新增字符串 key 前先查重（曾两次撞重复 key 导致资源合并失败）
-# ⚠️ 两个 lint 任务的 gate **不同**：lintDebug 任何 error 都中止构建；assembleRelease 只跑
-#    lintVitalRelease（fatal 规则）→ **一方红不代表另一方红**。别照抄本行的数字，改完 UI/资源
-#    实际跑一次。（2026-10-01 实测 lintDebug 有 4 个 error：UseAppTint×3 + ByteOrderMark×1，
-#    文档里的 "errors=0" 当时已经过期 —— 规则是 UseAppTint / ByteOrderMark，不是 MissingTranslation。）
+### 本地化检查
+
+`app/build.gradle` 将 `MissingTranslation` 设为 fatal。新增字符串时同步维护 `values/` 和 `values-zh/`；`lintDebug` 与 `lintVitalRelease` 的检查范围不同，按改动运行对应任务并以本次输出为准。
+
+```powershell
+./gradlew :app:lintDebug
+```
 
 **Windows 注意：** `adb` 命令需要通过 PowerShell 调用完整路径：
 ```powershell
@@ -141,349 +127,33 @@ adb devices
 
 ## 架构
 
-**包结构** (`app/src/main/java/com/moe/starflow/`):
-
-- `manga/` — 漫画翻译引擎（按功能分 8 组）：
-  - 根包：`MangaFloatingService`（主服务）、`TranslateUtils`（翻译管线公共层，**跨模块共享**：`StarFlowApplication`/`manga/pipeline`/`manga/types`/`mangaimport/translate`/`ui/viewer` 均引用）、`OcrLock`（引擎互斥锁，`mangaimport/translate`、`ui/viewer` 也用）
-  - `types/` — 纯数据类（`TextLine`/`OcrResult`/`TranslatedBubble`/`BubbleRegion`/`TextBlockInfo`/`TextRegionGroup`/`QuadBox`/枚举等 14 文件）
-  - `config/` — `MangaModeConfig`（data class + verticalTextDirection 扩展）、`OcrEngineGroup`（4 组引擎组合：MLKIT/PP_OCR_V6/PP_OCR_V5/RT_MANGA）、`PPOcrParams`（v5/v6 参数 key/默认值单一来源）
-  - `engine/` — `PPOcrV5Engine`/`PPOcrV6Engine`（OCR 流水线）、`DetectionBridge`（检测桥接）、`OCRBridge`/`OCRTextRecognizer`（ML Kit，游戏漫画共用）、`MangaOcrBridge`/`MangaOcrRecognizer`/`MangaOcrTokenizer`（manga-ocr）、`ComicBubbleDetector`/`BubbleDetector`（检测器）、`PPOcrDetGeometry`（det 后处理共享）、`PPOcrModelFiles`/`MangaOcrModelFiles`/`RTDetrModelFiles`（模型文件检查）、`OnnxUtils`（ONNX 张量提取/资源拷贝）、`GeometryUtils`（凸包/叉积/点在多边形内等几何算法）
-  - `render/` — `OverlayRenderer`（覆盖层渲染 + TranslatedBubble 类型）、`VerticalTextRenderer`（竖排/横排渲染）
-  - `merge/` — `TextRegionMerger`（区域合并）、`PPOcrPostProcessing`（识别后合并）、`MangaSpatialGrouping`（空间聚类/分批切分）
-  - `state/` — `MangaAutoTranslateEngine`（自动翻译状态机）、`MangaEngineManager`（引擎初始化/释放）、`RegionCacheManager`（区域缓存）
-  - `pipeline/` — 分批翻译管线（与截屏翻译、阅读器内嵌翻译共用同一套）：`IncrementalBatchPipeline`（编排：分批 OCR → 分批翻译 → 增量渲染）、`BatchPipelineHost`（宿主钩子接口：2 属性 + 9 回调，Service/Controller 各实现一份）、`BatchPipelineConfig`（配置快照）、`BatchOcrOps`（6 个引擎单例的测试缝）、`BatchOutcome`（`Handled`/`HandledEmpty`/`NotApplicable`）
-  - `debug/` — `MangaDebugOverlays`（渲染纯函数）、`MangaDebugPanelController`（全屏 overlay 窗口骨架 + 折叠状态机）、`MangaDebugSliders`（参数滑块面板）
-- `translate/` — 游戏翻译引擎（3 个功能子包 + 根包）：
-  - 根包：`FloatingBallService`（主服务）、`TranslationTextAPI`/`TranslationPicAPI`（接口层）、`TranslationStatusOverlay`（共享翻译状态浮层单例）、`TranslatorNames`（引擎显示名映射）、`TranslateFragment`/`TextTranslateFragment`/`TranslateTools`/`CustomLocale`/`LanguageSelectionDialog`（首页/文本 UI）
-  - `screenshot/` — 截图系统：`ScreenshotProvider`（接口）/`MediaProjectionProvider`/`AccessibilityProvider`（双模式）、`ScreenshotManager`（截图总线单例）、`Shooter`（MediaProjection 帧捕获）、`ScreenCapturePermissionActivity`、`ScreenShotAccessibilityService`/`AccessibilityServiceManager`/`AccessibilityEventHandler`、`MediaProjectionIntentHolder`
-  - `autotranslate/` — `AutoTranslateEngine`（像素状态机）、`GameOcrEngine`（游戏 OCR 封装）、`GameDebugOverlay`（调试浮窗）
-  - `widget/` — `TranslationResultView`（翻译结果容器）、`BallStateManager`（悬浮球状态图标管理器）、`CropView`（框选视图）、`Dialogs`/`MenuDialogAdapter`（菜单/弹窗）
-- `chat/` — 文本聊天翻译模式：`ChatEngine`/`ChatTabView`/`ChatTemplates`/`ChatHistoryViewModel`/`LlamaCppChatEngine`/`OpenAIChatEngine`
-- `ui/` — 历史记录 & 漫画查看器：
-  - `history/` — `HistoryFragment`（双视图：默认/管理）+ 4 个 Adapter（`HistoryGameAdapter`/`HistoryMangaAdapter`/`HistoryGroupAdapter`/`HistoryMangaGroupAdapter`）
-  - `viewer/` — `MangaViewerActivity`（全屏图片浏览+译文详情+重翻操作）、`ZoomableImageView`（缩放控件）、`CropFragment`（重翻裁剪界面）
-- `me/` — 设置和 API 配置界面：`PersonalizationConfig`（个性化设置）、`APIConfig`（API 配置）、`TranslationMode`（翻译模式）、`AboutMe`（关于页面）、`Developer`（开发者选项）、`FAQPage`（常见问题，12 条 FAQ），按 about/apiconfig/model/settings 4 子包组织
-- `launch/` — 首次启动引导
-- `utils/` — 工具类：`Constants`（枚举定义）、`CustomPreference`（配置封装）、`LogCollector`（日志收集）、`PixelCompare`（像素比较）、`UiUtils`（Toast 统一）、`ServiceUtils`（服务状态检测）、`UpdateChecker`（检查更新）、`TranslationExecutionMode`（翻译/仅 OCR）、`TranslationBusyRegistry`（执行模式切换忙碌守卫）、`LocalTranslationCoordinator`（本地翻译全局互斥）
-- `data/` — Room 数据库、`TranslationCacheManager`、`TranslationCacheUtils`（缓存工具：256-bit hash 守卫 + 气泡 JSON 解析）、`HistoryEntity`/`PageCacheEntity`；历史处理状态含 `PROCESS_TRANSLATED/PROCESS_OCR/PROCESS_FAILED`
-- `download/` — 模型下载流水线：`ModelDownloadManager`/`ModelDownloadRepository`/`ModelDownloadService`/`DownloadState`/`ModelInfo`/`ModelKey`/`ChecksumHelper`
-- `mangaimport/` — 漫画导入书架 & 阅读器（feature/manga-import）：`ImportMangaFragment`（书架+多选管理+下拉刷新）、`data/`（`ImportedManga`/`ImportedMangaStore`/`MangaImporter`/`StorageDirStore`/`ArchivedMangaReader`/**`MangaChapter`+`MangaChapterSplitter`（章节切分：子文件夹=一章）+`MangaChapterMigrator`**/**`ArchiveTypes`+`LibArchiveExtractor`（cbr/7z 按魔数识别 + 导入时解压成目录）**/**`PdfPageRenderer`+`PdfRasterPolicy`（**PDF 导入：保留原文件 + 按需栅格化**，pdfium 渲染入口与像素空间唯一口径，2026-10）**）、`reader/`（`MangaReaderActivity` Koto 式阅读器：4 阅读模式/翻页动画/背景/颜色矫正对比预览/进度胶囊/三种打包下载/阅读器内嵌翻译/**章节导航（顶部胶囊带章节并可点开目录、底部左右按钮切章）**；配 `ReaderAdapters`/`ReaderPageSource`/`ReaderExport`/**`ReaderPdfExport`+`PdfJpegWriter`（PDF 书导出：JPEG 直嵌 DCTDecode，不用 PdfDocument 的无损压缩）**/`ReaderProgressBar`/`ReaderMenuSheet`/`ReaderCurl`/`ReaderTransformers`/`ReaderColorFilter`/`ReaderPagePreviewDialog`/`ReaderPageStateAdapter`/**`ReaderChapterDialog`**）、`translate/`（`ReaderTranslationController`（**OCR 持 `OcrLock` 串行 → 翻译阶段按引擎并发；支持翻译/仅 OCR执行模式与 OCR 状态复用**）/`ReaderTranslationHub`（**应用级宿主**：按书缓存控制器、实现 `ChapterJobSource`）/`PageTranslationCodec`/`ReaderTranslationInfo`/`TranslationEngineInit`）、`ui/`（`ImportDialog`/`DisplayOptionsSheet`/`MangaGridAdapter`）。详见 `mangaimport/CLAUDE.md`。
-- `translate/batch/` — **批量翻译的共享基础设施**（漫画+小说共用）：`ChapterJobRunner<T>`（OCR 串行 + 翻译并发 N + 按章暂停/取消/等待的纯协程调度器）、`TranslationJobs.kt`（`ChapterJobState`/`ActiveChapterJob`/`ChapterJobSource`/`TranslationJobRegistry`）、`TranslationJobService`（前台服务：**每章一条通知**，进度/暂停/继续/取消，点通知回到对应阅读器）。⚠️ **任务状态不在服务里**，服务只镜像 registry；漫画的宿主是 `ReaderTranslationHub`，小说的是小说侧宿主。详见 `mangaimport/CLAUDE.md`。
-### OCR-only 执行模式与翻译流水线（2026-10）
-
-- `TranslationExecutionMode` 是本地 OCR/文本翻译线路的全局执行模式：`TRANSLATE=0`（默认）/ `OCR_ONLY=1`；图片直传翻译不受此开关影响。
-- 设置入口在 `me/settings/TranslationMode`；阅读器面板的执行模式标签只负责跳转设置。切换模式前必须确认没有 OCR/翻译忙碌任务：`TranslationBusyRegistry` 负责截屏与阅读器页面队列，`TranslationJobRegistry` 负责章节任务，`OcrLock` 负责 OCR/超分引擎锁。
-- 截屏函数可能启动回调式异步翻译；busy 计数必须持续到终端回调、取消或异常，不能在截图函数返回时提前释放。
-- `LocalTranslationCoordinator.mutex` 串行化本地 NLLB/LlamaCpp 翻译；每次 `lock/tryLock` 必须在成功、失败、取消、同步异常路径释放。远端 API 不占该锁。
-- 阅读器每页状态：`STATE_IDLE`（无 OCR）、`STATE_OCR`（OCR 已保存但无译文）、`STATE_TRANSLATING`（真实进入翻译）、`STATE_SUCCESS`（OCR+译文完成）、`STATE_FAILED`（失败但保留载荷）。`STATE_OCR` 必须进入未完成/进行中筛选。
-- 翻译本章按页码顺序：`IDLE → OCR+翻译`、`OCR → 复用 OCR 翻译`、`FAILED+OCR → 复用 OCR 重试`、`SUCCESS → 跳过`。仅 OCR 模式只执行 OCR，已有 OCR 页跳过 OCR；顶部浮层不能把 OCR-only 任务显示成“翻译中”。
-- 游戏/视频新截图安全优先：先 OCR，再用 OCR 文本缓存命中；不要用不可靠的截图相似度直接套旧译文。游戏 OCR-only 历史仍保持查看/复制；漫画 OCR-only 历史进入管理视图并复用“重新翻译”入口。
-- OCR-only 游戏历史不能用破坏性的 `refreshGameCache` 删除已有译文；已有译文时只更新处理状态并保留译文载荷。
-
-- `sr/` — **图片超分**（feature/sr-pipeline-v2）：`SrProcessor`（唯一执行入口：等锁 → 大图压缩 → 推理 → 落盘 → 写记录）/`SrDownscale`（仅按用户 MP 阈值等比压缩，默认 1.5MP，0 不压缩）/`SuperResolutionEngines`（门面：选引擎 / 失败降级 / `resolveSteps`）/`NcnnSrEngine`（ncnn+Vulkan，主力）/`anime4k/`（GLES3 shader，不放大）/`SrStore`（webp + 标记的落盘）/`SrModelManager`/`SrSettings`/`SrDisplayBase`；原生在 **`:sr` 模块**（ncnn+Vulkan，源码自编）。详见 `sr/CLAUDE.md`。
-- `novel/` — 小说导入 & 阅读（feature/novel-text-import）：`parser/`（格式判定与解析：`NovelParsers` 分发、`TxtParser`/`TxtChapterSplitter` 用**字符区间**定位章节、`EpubParser`、`ZipHtmlParser`/`HtmlParser`/`HtmlTextExtractor`、**`ZipImages`（epub/zip 内嵌插图：相对地址解析 + 百分号转义 + SVG 包装往里找一层 + `data:` + 单章额度）**、`FolderNovelParser`、`TextEncoding` 解 GBK/Big5）、`model/`+`data/`（`NovelFormat` 判定、`NovelImporter`/`NovelImportManager`/`NovelStore`/`NovelStorageDir`）、`shelf/`（`NovelShelfFragment`，宿主在 `mangaimport/ImportMangaFragment`）、`reader/`（`NovelReaderActivity` + `NovelChapterRepository`（含 epub 插图解出与落盘）+ `NovelPaginator` + `NovelTextRenderer`/`NovelPageView`/`NovelScrollAdapter`/**`NovelImage`+`NovelImageMetrics`/`NovelImageStore`（插图尺寸口径唯一一份 + 懒解码缓存）**/`NovelTocDialog`/`NovelPanelSheet`/`NovelPanelStyle`）、`translate/`（`NovelParagraphSplitter`/`NovelTranslationBatch`/`NovelTranslationEngine`/`NovelChapterTranslator`/`NovelTranslationQueue`）。详见 `novel/CLAUDE.md`。
-
-**翻译 API 实现** (`app/src/main/java/translationapi/`):
-每个子目录实现 `TranslationTextAPI` 接口：`openaitranslation/`、`bingtranslation/`、`nllbtranslation/`、`niutrans/`、`volctranslation/`、`deepltranslation/`、`baidutranslation/`、`tencentcloud/`、`azuretranslation/`、`customtranslation/`、`doubaotranslation/`、`llamacpp/`
-- `llamacpp/` — **LlamaCpp 本地引擎的 JNI 门面**，只有一个 `LlamaCppNative.kt`（`external` 方法 + `LlamaCppStreamCallback` 接口）；引擎实现（模型清单/导入/翻译/提示词）在 `com.moe.starflow.llamacpp/`，原生代码在 **`:llamacpp` 模块**。`nllbtranslation/` 同属本地引擎类
-- ⚠️ **本包是历史遗留的独立顶层包，不在 `com.moe.starflow` 命名空间内，保持现状勿移动**：JNI 符号（`:llamacpp` 的 `llamacpp_bridge.cpp` → `Java_translationapi_llamacpp_LlamaCppNative_*` + `cpp/src/SentencePieceProcessorInterface.cpp` 的 SentencePieceProcessorJava 6 个）与 `proguard-rules.pro` 的 `LlamaCppStreamCallback` keep 规则都硬编码 `translationapi.*` 包名，移动即 UnsatisfiedLinkError。详见 `TranslatorFactory.kt` 顶部注释。
-- ⚠️ **一个引擎实例上可以并发 N 个请求：绝不许「发新请求就把上一个取消」**（2026-10-03 真机事故，6 个实现都踩过）。
-  小说（默认 3 并发）/漫画（默认 3 并发）都是**同一个引擎实例上并发 N 批**，而这 6 个实现原来都在
-  `getTranslation` 开头写 `currentJob?.cancel()` + 单值 `currentJob`：第 2 批一发出就把第 1 批的协程取消掉，
-  取消路径走 `catch (CancellationException) { throw e }` → **永远不回调** → 那一批永久挂起
-  （不入库、不报错、并发槽位不释放、界面一直显示「翻译中」）。
-  真机日志特征：**只有最后发出的那个批能回来**，前面几个一直没有 Response。
-  现在统一走 `translationapi/InFlightRequests`（每个请求一个自己的 Job；`cancelTranslation()` = 取消该实例上
-  **所有**在飞请求），守卫 `translationapi/InFlightRequestsTest`（行为）+
-  `TranslationEngineRequestCancelGuardTest`（源码级：禁止 `currentJob?.cancel()` 写回来）。
-  ⚠️ 推论：**`cancelTranslation()` 不是「取消某一次请求」** —— 接口层没有请求句柄，一取消就是全部。
-  所以「这一次请求的调用方不要结果了」**不能**再转成引擎取消（会连带杀掉同实例上其它并发批），
-  消费侧改用明确的整体中止语义（小说侧 `NovelBatchTranslator.abortAll` / `NovelTextTranslator.abortInFlight`，
-  只在**退出阅读器 / 停任务**时调用）。
-
-**LlamaCpp 本地引擎关键机制（`translationapi/llamacpp/` 门面 + `com.moe.starflow.llamacpp/` 实现 + `:llamacpp` 原生模块）：**
-
-> **2026-09 大改造**：原来的 **Hy-MT2 专用引擎已整体改造成通用 LlamaCpp 引擎**——任意 llama.cpp 兼容的 GGUF（Qwen/Gemma/混元…）都能导入使用，Hy-MT2 退化成「预制模型」里的两个可下载量化档。改造在分支 `feature/llamacpp-engine`（**已合并 master**，见 `57eccdf`）。
-
-- **原生模块 `:llamacpp`（独立 Gradle 模块，不是 `:app`）**：llama.cpp 当 submodule 一起编，产出 `libllamacpp.so`。**为什么必须独立成模块**：`:app` 顶层 CMake 是 sentencepiece，它的 `src/common.h` 与 llama.cpp 的 `common/common.h` 同名，合到一处必然冲突
-- **llama.cpp 基线**：submodule 钉在 PR #22836 head `1e411d8f`（含 `STQ1_0=43`、`GGML_TYPE_COUNT=44`）+ 本地补丁 `patches/0001-ggml-stq1_0-1.25bit.patch`；`LLAMA_BUILD_COMMON=ON`（要 minja 的 Jinja chat 模板）。链接 llama + llama-common + ggml + log；`GGML_CPU_REPACK=ON`、`BUILD_SHARED_LIBS=OFF`（静态链进 `libllamacpp.so`，只导出 JNI）
-- **流式契约**：`getTranslationStreaming` 回调 `onPhase`（`"prefill"` 读取原文 / `"generate"` 生成译文）+ `onPartial`（**累积到当前的完整译文**，非单片段）。其他翻译 API 的 `getTranslationStreaming` 是默认实现 = 一次性 `getTranslation`，不触发回调
-- **两条 prompt 通道**（由模型的 `hyProfile` 决定，**不要写死某个模型 id**）：
-  - **hy 通道**（预制 Hy-MT2）：`nativeTranslate*`，手搭 `[BOS]{指令}<hy_User>{原文}<hy_Assistant>` —— 指令放 system 段、原文放 user 段（官方 chat 模板结构），裸文本会退化输出垃圾
-  - **通用通道**（导入的任意 GGUF）：`nativeTranslateRaw*` + `nativeFormatChat`，用 **GGUF 自带 chat 模板**（minja Jinja）渲染 system/user，模板缺失时回退 ChatML
-- **前缀 KV 缓存**：固定翻译指令（模板 `{source_text}` 之前的部分）只 prefill 一次进 KV，跨翻译复用（`LlamaCppPrompt` + 桥接 `prefix_key`/`prefix_n`），跳过重复读指令（约省 1s/次）
-- **模型管理页**（`me/model/LlamaCppModelFragment.kt`）：**预制模型**（Hy-MT2 1.25-bit / Q4_K_M，只是**提供下载**、不打进 APK，别叫「内置」也别叫「官方」）+ **导入的模型**（SAF 选本地 .gguf）。点卡片=设为当前（互斥；用不可点 RadioButton 显示，不能出现多选），「添加模型」按钮**固定在页面最底部**（页面 = `ScrollView(weight=1)` + `bottomBar`，按钮是 `bottomBar` 最后一个子 View）
-- ⚠️ **模型行必须带父容器 inflate**（`inflateModelRow(inflater, parent)`）：`inflate(inflater, null, false)` 不解析 XML 的 `layout_*`，随后 `addView` 让 LinearLayout 补 margin=0 → 相邻卡片零间距、圆角贴在一起，看起来像卡片重叠（2026-09 用户反馈的「相邻卡片重叠」根因）
-- **超时语义**：本地引擎**不设总时长超时**，改「30s 无任何新输出」卡死看门狗（`TranslateUtils` 的 `LOCAL_STALL_TIMEOUT_MS`）；网络 API 保持请求发出起 35s 总超时（`API_TIMEOUT_MS`）。勿改回 `withTimeoutOrNull(总时长)` 一刀切
-- **漫画跳过分批**：`IncrementalBatchPipeline.run` 对 `LlamaCppTranslation` 直接返回 `BatchOutcome.NotApplicable`，走"一次翻译全部气泡 + 流式逐个显示"，不分两批
-- **单气泡也走批量**：`translateBubbles` 对 `LlamaCppTranslation` 即使 1 个气泡也走编号批量流式路径（统一享受卡死看门狗）
-- **手机实测性能**：读原文 ~17-20 tok/s、写译文 ~13-14 tok/s（8 核限频 ~1.5GHz）。生成是 CPU 硬上限；**2-bit 量化实测 3.92 tok/s 比 1.25-bit 慢 3 倍，勿再提供**
-- **per-model 参数**（`LlamaCppParams`，每个模型一套，存清单 JSON，**不是全局一套**）：
-  - **加载参数**（`fileName`/`contextSize`/`threads`/`batchThreads`）改动**下次加载模型**才生效，并进 `LlamaCppSharedHolder.keyOf` 指纹（指纹变了才重载）
-  - **实时参数**（`promptTemplate`/`systemPrompt`/`temperature`/`topP`/`topK`/`repetitionPenalty`/`maxTokens`/`enableThinking`）每次推理现读，**立即生效**（不用重载）
-  - 预制模型默认：temp 0.7 / top_p 0.8 / top_k 20 / rep 1.05 / ctx 2048 / max 4096（取自 GGUF 自带采样参数，两个量化档**完全一致**，避免「为什么两个配置不一样」）；导入模型默认 temp 0.6 / ctx 4096
-- **线程分离**：prefill（读原文）与生成（写译文）线程数独立可配（`LlamaCppParams.threads`/`batchThreads`，默认 `availableProcessors().coerceIn(1,6)` / 全核），模型设置弹窗可调对比速度。实测 prefill 8 线程比 6 线程快 ~22%
-- **进程级共享实例**：全 app（游戏/漫画/文本）共享**同一个热模型实例**（`LlamaCppSharedHolder`，`keepAlive=true`）。各页面/服务 `release()` 只取消在途任务、**不释放模型**；`MainActivity` 启动后台 `warmUp()` 预加载。引擎设置（Text_API/Text_AI）或**激活模型**变化时重建实例；**切到非 llamacpp 引擎（NLLB/API）时 `TranslatorFactory.create` 调 `releaseIfNotCurrent()` 释放旧模型、把几百 MB 换出内存**（get() 只在 llamacpp 分支被调，切走后不会自动触发）
-- ⚠️ **换出旧实例一律走 `detachAndRelease()`（后台线程），绝不在调用线程上同步 `release()`**：`release()` 会 `join` 在途推理（最长 3s）+ 轮询 `inFlight` 等 native 调用退出（最长 3s），最后 `nativeRelease` 还要抢 native 的 `g_mutex` —— 而 `nativeInit` **整个加载期**都持着那把锁（含首次解码预热，15s 量级）。`get()` / `releaseIfNotCurrent()` 的调用方包含 `TranslatorFactory.create()` 与启动预热，都在主线程，同步做就是 ANR（2026-09-25 修）。代价是换模型期间旧、新两个模型短暂同时驻留内存，这是刻意的权衡。
-- **量化兼容性（`GgufQuantCheck`，全项目唯一的 GGUF 解析器）**：分 `SUPPORTED`/`NEEDS_RETAG`/`UNSUPPORTED`/`UNKNOWN`，按**张量布局**（每 256 个值占多少字节）判定，**不能只看类型号**——腾讯私有量化号会撞上游新加的类型号：
-  - 1.25-bit（type 42 = **42B/256**，私有 `block_stq1_0`）→ 设备端**重打标 42→43** 成上游 `STQ1_0`（`GgufTypeRetag`；写 `<file>.retagged` 标记、重打标后的 MD5 记进清单 `retaggedMd5`；标记丢失会自愈）
-  - ⚠️ **标记只是「校验依据」，不是「判定依据」**（2026-09-25 修复，勿回退）：`ensureRetagged` 看的是**文件里还有没有 42 号张量**，不是标记在不在。删掉预设模型再重新下载时 gguf 被换成未重打标的官方原件，而 `<file>.retagged` 还留在磁盘上（下载侧只删 gguf 与 .part）——凭标记跳过就会把 42 号文件当成本引擎可读（加载失败，或按上游 Q2_0 解出垃圾）。三条配套规矩：
-    1. `ModelDownloadRepository.deleteDownload` **必须连标记一起删**，否则重下后 `verifyFile` 拿旧标记校验刚下好的官方原件 → 判损坏 → 删 → 重下 → **死循环**；
-    2. `verifyFile` 走 `ChecksumHelper.verifyChecksum(file, List<String>)`，**官方与重打标两个 MD5 都接受**（一次 MD5 对多候选，GB 级文件不算两遍；只认官方会把已重打标的文件当损坏删掉）；
-    3. 残留标记只在**头部解析成功且给出确定结论**（`compat != UNKNOWN`）时才清——解析失败时 offsets 为空，与「解析成功且没有 42 号」长得一样，不能混为一谈
-  - ⚠️ **一次扫描就够**：`GgufQuantCheck.analyze()` 同时给出 `compat` 与张量偏移，`LlamaCppTranslation.ensureLoaded` 与 `GgufTypeRetag.ensureRetagged(file, analysis)` 共用它。别再写成 `check()` + 自己再 `scan()`——头部要把元数据整段读出来（含 12 万个 vocab token），同一文件解析两遍纯属白花。
-  - 2-bit（type 40 = **65B/256**，另一种私有量化）→ `UNSUPPORTED`，导入与激活都直接拒绝
-  - Q4_K_M（Q4_K 12B / Q6_K 14B / F32）等标准量化 → `SUPPORTED`
-- ⚠️ **GGUF 是小端**：解析必须 `Integer.reverseBytes`/`Long.reverseBytes`（`RandomAccessFile.readInt/readLong` 是**大端**）——曾因此差点把模型元数据写坏（单测抓出来的）
-- **导入是应用级后台任务**（`LlamaCppImporter`，`CoroutineScope(SupervisorJob()+IO)`）：**离开页面不会中断**，只有显式点「取消」才终止（曾因页面销毁就取消 + 吞掉 `CancellationException` 而误报「导入失败」）；进度走 `StateFlow`，回到页面接着显示。导入前校验 `.gguf` 扩展名 + GGUF 魔数 + 量化兼容 + 剩余空间，按 **MD5 去重**（与清单里**所有**条目比，含预制模型），先写 `.part` 再改名
-- **存储位置**：预制模型由下载流水线放 `getExternalFilesDir/models/`（`ModelDownloadRepository.baseDirFor`），导入的 gguf 放 `getExternalFilesDir/llamacpp/`（`LlamaCppPaths.DIR_NAME`）——两者差别由 `LlamaCppModel.dirName` 承载，**不要再写死路径**
-- **回归守卫**（都在 `app/src/test/java/com/moe/starflow/llamacpp/`）：`GgufTypeRetagTest`（含 42/43/40 布局判定与端序，以及**标记残留但文件被换成未重打标原件时必须重新改写**、**上游 Q2_0 上的残留标记要清掉**）、`GgufTypeRetagRealFileTest`（真实文件，靠 `LLAMACPP_REAL_GGUF*` 环境变量 opt-in，默认 skip）、`LlamaCppPromptTest`、`LlamaCppLanguagesTest`、`LlamaCppModelJsonTest`（Robolectric——Android 的 `org.json` 在纯 JVM 单测里是桩；含 **`systemPrompt` 键缺失回落默认 / 显式写空要保留**）、`LlamaCppRowLayoutTest`（行按钮集合/右对齐/间距）、`LlamaCppRowButtonsTest`（**行内四个下载按钮的可见性组合**——行视图复用后每个状态都必须显式赋值，纯 JVM 无需 Robolectric）、`LlamaCppPageLayoutTest`（页面骨架 + 真实 measure/layout 的按钮贴底几何断言）、`LlamaCppBuiltinCatalogTest`（预制模型清单完整性 + 第二个预制模型不被当成通用模型）
-
-**关键接口：**
-- `TranslationTextAPI.getTranslation(text, sourceLanguage, targetLanguage, callback)` — 文本翻译
-- `TranslationTextAPI.getTranslationStreaming(text, sourceLanguage, targetLanguage, onPhase, onPartial, callback)` — 流式文本翻译（**目前只有本地 LlamaCpp 引擎真正实现**；onPartial 每次回调累积到当前的完整译文，在后台线程调用，UI 需自行切主线程）
-- `TranslationPicAPI.getTranslation(bitmap, sourceLanguage, targetLanguage, callback)` — 图片翻译
-
-**截图流程：** `ScreenshotProvider`（双模式）→ `ScreenshotManager.screenshotFlow`（SharedFlow）→ `FloatingBallService` / `MangaFloatingService` 接收处理
-
-**漫画翻译缓存机制：**
-
-三层缓存结构，截图后按以下顺序查找：
-
-```
-截图
-  ↓
-IMAGE CACHE (findCacheExt) ─── 256-bit hash
-  │ 精确匹配（4段全等）或相似度匹配（≥0.95）→ 直接显示
-  │ 未命中 → OCR
-  ↓
-TEXT CACHE (RegionCacheManager + IncrementalBatchPipeline)
-  │ 精确匹配（hashCode + 字符串==）或加权编辑距离模糊匹配 → 复用译文
-  │ 未命中 → 调翻译 API
-  ↓
-翻译 API → 渲染 → saveToCache
-```
-
-| 缓存 | 触发函数 | 匹配算法 | 节省步骤 |
-|------|---------|---------|---------|
-| IMAGE | `TranslationCacheManager.findCacheExt` | 256-bit pHash（SQL + 遍历） | OCR + 翻译 + 渲染 |
-| TEXT | `IncrementalBatchPipeline.translateWithCache` | `TextSimilarity.weightedLevenshtein` | 翻译 API 调用 |
-| DB 历史 | `MangaViewerActivity` | 256-bit hash 相似度分组 (≥0.95) | 用户翻历史时复用 |
-
-**两种 pHash 算法并存：**
-- `PerceptualHash.compute()` — 9×8 dHash，64 位（1×Long），用于自动翻译状态机翻页判断（`PHASH_STABLE_THRESHOLD=0.95`、`PHASH_NEW_PAGE_THRESHOLD=0.60`）
-- `PerceptualHash.computeExtended()` — 17×16 dHash，256 位（4×Long），用于缓存匹配（`SIMILARITY_THRESHOLD_MANGA=0.95`）
-- **已删除的函数（不要调用）：** `isUniform()`（方差检测，已被 dHash 全零替换）、`quickSameCheck()`/`computeHist()`/`histogramDiff()`（直方图预筛，全项目无调用者）
-
-**纯色/纯白页面检测：** `processMangaScreenshot` 入口处检查 `currentExtHashes.all { it == 0L }`（dHash 全零 = 中心区域无纹理结构）。检测到纯色页直接 `showImmediate("未检测到文字")` + toast → 跳过缓存+OCR+翻译 → IDLE。替换了不可靠的 `isUniform()` 方差检测（已删除）。
-
-**历史分组一致性：** `TranslationCacheManager.groupMangaEntriesByPHash()` — 统一的 256-bit 相似度分组方法，供 `getHistoryGrouped`（历史列表）和 `MangaViewerActivity.buildPageGroups`（图片浏览器）共同调用，保证两处分组数量一致。
-
-- **相似度阈值：0.95**（256-bit Hamming 距离 / 256，约容差 13 bit）——与「缓存与历史」章同一口径，改一处必须改两处
-- **稀疏 hash 守卫：`MIN_INFO_BITS = 16`**（`TranslationCacheUtils.kt`，判定入口 `isSparseHash`） — 当 4 段 hash 总 bits < 16（≈6.25%）时视为「无判别力 hash」（纯色/几乎纯色页面 dHash 4 段几乎全 0），**单独成组**，不参与正常相似度合并。**这是必要的**，否则稀疏 hash 间 Hamming distance 绝对值极小（2-3 bits 不同），会被 `1 - 2/256 = 0.992` 相似度误判为同一页面（曾导致 id=237/159/152 三张不同纯色页被错误合并成一组）。
-
-**缓存保存（`saveToCache`）** 写入 4 段 hash：
-```kotlin
-pHash  = currentExtHashes[0]   // 17×16 第 0 段（兼容旧版）
-pHash2 = currentExtHashes[1]
-pHash3 = currentExtHashes[2]
-pHash4 = currentExtHashes[3]
-```
-
-**`processMangaScreenshot` 函数签名变化：**
-```kotlin
-private suspend fun processMangaScreenshot(
-    bitmap: Bitmap,
-    precomputedPHash: Long? = null,
-    precomputedExtHashes: LongArray? = null  // ← 新增：从 collector 传入避免重复计算
-)
-```
-
-**实时渲染共享层（2026-07 重构）：** 数据库不再存储渲染后的译文 overlay 图片（`imagePath` 停止写入），只存原始截图（`originalImagePath`）+ 气泡元数据（`bubbleRects` JSON）。所有 overlay 显示通过 `TranslationCacheManager.renderOverlay()` 实时渲染。
-
-```kotlin
-suspend fun renderOverlay(
-    history: HistoryEntry,
-    pageCache: PageCacheEntity,
-    mode: OverlayMode,                 // TRANSLATED / ORIGINAL / PLAIN
-    forFullImage: Boolean              // true=全屏（MangaViewerActivity），false=裁剪（overlay/下载）
-): Bitmap?
-```
-
-| 调用方 | forFullImage | mode |
-|--------|--------------|------|
-| MangaFloatingService 缓存命中 | false | TRANSLATED |
-| MangaFloatingService 复制模式切换 | false | 恒 `TRANSLATED`（原图/译文二态走的是 `OverlayRenderer.renderOverlay(useOriginalText=…)`，**不是** `OverlayMode`） |
-| MangaViewerActivity 预览（首次加载/翻页/三态切换） | false（scope=crop，只渲染框选区域） | TRANSLATED→ORIGINAL→PLAIN |
-| HistoryFragment 下载 | false | TRANSLATED |
-
-**坐标映射规则：**
-- `forFullImage=false`：从 `originalImagePath` 全屏原图按 `pageCache.cropLeft/Top/Right/Bottom` 裁剪，气泡坐标已在裁剪空间，**无需映射**
-- `forFullImage=true`：渲染到全屏原图，气泡坐标需 +`(cropLeft, cropTop)` 映射
-
-**`OverlayMode` 枚举：** `TRANSLATED`（译文）/ `ORIGINAL`（原文）/ `PLAIN`（纯原图，无 overlay）
-
-**变体独立存储：** 每个变体各自保存 `bubbleRects` + crop 坐标，不同框选尺寸互不干扰。`groupMangaEntriesByPHash()` 把所有变体都加入 groups（之前只返回代表 entry，导致下载漏图）。
-
-**三态循环：** MangaViewerActivity 切换按钮（btnToggleImage）三态循环：译文→原文→纯原图→译文。`OverlayMode.PLAIN` 也用在阅读器内嵌翻译的三态循环里（`ReaderTranslationController.cycleVisual`：PLAIN → ORIGINAL → TRANSLATED）。翻页自动重置为译文。
-
-**自动翻译干净截图流程：**
-
-状态机 STABLE 后重截干净图用于翻译和缓存。
-
-| 模式 | 流程 | 延迟 |
-|------|------|------|
-| **MP** | `dismissProgressOverlay()` → 隐藏球 → `delay(50)` → `takeScreenshot()` → 恢复球 → `showProgressOverlay` | +~80ms |
-| **无障碍** | `launch { delay(350)` 冷却 → 隐藏球 → `delay(50)` → `takeScreenshot()` 异步 → `pendingCleanScreenshot=true }` → 下一张 flow 拦截 | +~500-900ms |
-
-**⚠️ frameSeq 行为（Shooter.kt）：** `frameSeq` 在 `ImageReader.OnImageAvailableListener` 回调中递增（`translate/screenshot/Shooter.kt:119`）。`VIRTUAL_DISPLAY_FLAG_AUTO_MIRROR` 在 Redmi/HyperOS 上仅画面内容变化时产帧 → 静态页面 frameSeq 停止递增，翻页/滑动时跳跃增长。其他 ROM 可能持续产帧 → frameSeq 不适用于跨设备屏幕变化检测。
-
-**⚠️ VD 死亡（录屏冲突）处理：** `frameSeq` 不能用于 VD 死亡检测——已尝试并移除（commit `4628010`）。原因：框选模式下悬浮球在选定区域外，VD 可能不捕捉框外像素变化 → 藏球唤醒测试不可靠，频繁误报。当前方案：自动翻译用 40s pHash 超时兜底（同页面 40s 无变化 → 自动停止翻译 + 弹窗提示）；手动翻译无法检测，遇卡死症状（始终缓存命中同一页、自动翻页无变化）见 FAQ Q11。
-
-**⚠️ 所有 overlay（球、进度条）必须在截图前隐藏。** 进度条文字被截入图会导致 pHash 污染和缓存误命中。
-
-- `lastTranslatedHash` 保存检测截图 pHash，保证状态机下次比较有效
-- 缓存保存干净截图 extHashes，保证跨模式命中
-- 无障碍 `takeScreenshot` API 需至少 350ms 冷却（Android 12+ 后台截图频率限制），详见 [[accessibility-screenshot-cooldown]]
-
-**手动模式隐藏球流程（`takeScreenshotWithProvider`）：** 手动模式截图前隐藏悬浮球，`finally` 块恢复。⚠️ 藏球后必须 `delay(50)` 等至少一个 VSYNC 周期，确保 VD 产出无球的新帧后再截图，否则球图标会被截入翻译结果。自动模式由上述重截图机制处理。
-
-**悬浮球状态图标（`BallStateManager`）：** 管理悬浮球图标的状态机，5 种状态瞬时切换（无动画，仅 Error 红圈脉冲）：
-- `Idle` — 用户自定义图标（从 `getExternalFilesDir/icon/` 加载）
-- `Processing` — OCR 识别中图标（state2 mipmap）
-- `Translating` — 翻译中图标（state3 mipmap）
-- `Completed` — 翻译完成图标（state4 mipmap）
-- `Error` — Processing 图标 + 红圈 1100ms 脉冲动画
-
-游戏/漫画模式独立配置（`Mode.Game` / `Mode.Comic`），各有 4 套 mipmap。`MangaFloatingService` 在翻译流程入口设 `Processing`，非分批路径在调翻译 API 前切 `Translating`，分批路径在第一批翻译开始时切 `Translating`（保持到全部完成）。`finalizeIncremental` 结束后切 `Completed`。
-
-**当前 DB 版本 23**（迁移链一路到 `MIGRATION_22_23`，见 `data/TranslationHistoryDatabase.kt`）。
-v19→v20 新增 `translation_history.processing_state`（0=已翻译，1=OCR-only，2=失败保留 OCR），旧记录按载荷推断。
-v22→v23 增加超分执行参数与稳定源页键；保留 v21→v22 的小说 imagePayload 迁移。
-v18→v19 新增**超分逐页记录表** `imported_page_sr`（纯新增幂等迁移，详见 `data/CLAUDE.md`）。
-⚠️ 真值就是 `@Database(...)` 里的 `version` —— **本行已经落后过两次**（17→18、18→19），
-改表之后顺手对一眼，别照着文档里的数字推算下一个迁移号。
-
-⚠️ **加实体/表必须同时提供迁移**：`fallbackToDestructiveMigration` 已启用 —— 漏写迁移的后果不是报错，而是**升级用户的整库被删**（译文与历史全没了）。新增表用「纯新增 + 幂等、绝不 ALTER 现有表」的写法。
-
-**MIGRATION_9_10：** 增加 `pHash2`/`pHash3`/`pHash4` 三列存 256 位扩展 hash。
-
-提示词仅对 OpenAI 兼容 API 生效（火山/智谱/DeepSeek/通义千问/用户自建），非 OpenAI API（Volc/DeepL/Baidu/Azure/腾讯/Bing/Niutrans/NLLB）为纯机器翻译，不接受提示词配置。
-
-```
-定义层（源头）
-├── BuiltinProviders.kt    — 内置 API 默认提示词（DEFAULT_SYSTEM_PROMPT 等 6 个常量）
-└── OpenAIText.kt          — 用户自建 API 默认提示词（defaultSystemPrompt + fallbackManga*）
-
-存储层
-└── CustomStorage.kt       — 内置 API: BuiltInProviderMod（只存差异）; 用户 API: OpenAIProviderConfig（全量）
-
-读取层
-└── ConfigurationStorage.loadAllProviders() → applyMod()
-    内置: systemPrompt = mod.systemPrompt ?? builtin.defaultSystemPrompt
-    用户: 直接读取存储值
-
-使用层
-├── 游戏模式 FloatingBallService → OpenAITranslation(systemPrompt=provider.systemPrompt)
-└── 漫画模式 MangaFloatingService → OpenAITranslation(systemPrompt=provider.mangaSystemPrompt.ifEmpty{default})
-
-发送层（OpenAITranslation.kt）
-├── buildSystemPrompt()  — 上下文开启时前缀 "根据上下文剧情进行翻译..."
-├── buildUserPrompt()    — 替换 usefromlang/usetolang/usesourcetext 占位符
-└── buildRequestBody()   — messages: [system, (历史user/assistant对), user]
-```
-
-游戏/漫画提示词分离：`provider.systemPrompt`（游戏）和 `provider.mangaSystemPrompt`（漫画）独立存储、独立配置。漫画模式额外支持续写格式控制（见下文）。
-
-**聚合 AI 翻译续写模式（漫画格式控制）：**
-漫画翻译使用各厂商续写模式（assistant prefill）硬约束输出 `[1] 译文` 格式：
-- 火山引擎：`CONTINUATION_STANDARD`，无额外参数
-- 通义千问：`CONTINUATION_PARTIAL`，`partial: true`
-- DeepSeek：`CONTINUATION_PREFIX`，`prefix: true` + **beta 端点** `/beta/chat/completions`（⚠️ beta 版本，后续可能变更）
-- 智谱AI：`CONTINUATION_JSON`，`response_format: json_object`，返回 JSON 格式 `{"translations": [...]}`
-- `OpenAITranslation` 根据 `continuationType` 参数处理不同续写方式
-
-**⚠️ 编号解析对位（2026-09-25 漏翻事故，勿回退）：** prefill `"[1] "` 的内容**不出现在返回的 content 里**（火山/DeepSeek 实测 content 直接从译文开始，接着才是 `[2]..[N]`），于是「标记数 = 条数 − 1」是**常态**，`parseNumberedTranslations` 必然走降级分支。三条硬规矩：
-1. **降级不能按行拆**：有标记但不满条数时，**第一个标记之前的正文就是第 1 条**，按编号对位重建；跳号只留空该号（调用方回退原文），绝不整批前移。
-2. **行首编号前缀正则必须是 `^(?:\[\d+]?|\d+[.、])\s*`**，不许写回 `^\[?\d+]?[.、\s]*` —— 后者各段独立可选，能匹配「一个裸数字开头的行」，把页码正文 `330` 整行吃掉 → 少一条 → 补空串 → 整批译文前移一位、末条空白（`dst=''`）。实测三家同一页：火山/DS 稳定复现，智谱走 JSON 数组按下标取因而免疫。
-3. **空译文不入结果、不入缓存**：`translateBubbles` 出口 `ifBlank { originalText }` 回退原文；`translateWithCache` 跳过空译文（否则同一阅读会话里相同/相似文本命中缓存、连 API 都不调 → 「换 API 也没用」）。
-- 纯数字气泡（页码 `330`）在 `translateBubbles` 就被短路（`isNumericOnlyText`，原文回填、不进批次）—— 它正是上面的触发源。
-- ⚠️ **触发条件比"批内有页码"更窄：必须是该批的第 1 条**。只有 prefill 那一行没有 `[N]` 标记，带标记的行（`[3] 330`）只被剥掉标记、数字留着，实测完全正常。所以「竖排页边页码」最危险：竖排小框（如 23×70）被 `h > w + 2` 判成竖排 → `sortByReadingOrder`「竖排优先于横排」把它排到**批首**（2026-09-25 实测那本《俩人的切换开关》每页页边竖排印页码，371/372 两页稳定中招；同库《间谍过家家 140 话》页面无印刷页码 → 从不触发）。
-- 回归守卫：`TranslateUtilsNumberedParseTest`（含日志里的真实 Response 原文）、`TranslateUtilsPassthroughTest`。
-
-**⚠️ 自定义 API prefill 守卫：** 用户自定义 provider 的 `continuationType` 默认为空字符串，会给不支持续写的 API 发送假的 assistant prefill → 服务端 hang → 30s 超时。三层防御：
-1. `MangaFloatingService` / `MangaViewerActivity`：对 `!provider.isBuiltin` 强制 `CONTINUATION_NONE`
-2. `buildRequestBody` 白名单：仅 `standard/partial/prefix` 启用 prefill，空字符串/未知值不放行
-3. 自定义 API 漫画 prompt 为空时回退到内置 `DEFAULT_MANGA_SYSTEM_PROMPT`（漫画翻译引擎），避免空 prompt 导致模型返回聊天废话。UI 侧 `setupUserMode()` 也为自定义 API 显示重置按钮，漫画 tab 重置到 `fallbackMangaSystemPrompt` / `fallbackMangaUserPrompt`（和 `BuiltinProviders` 的 `DEFAULT_MANGA_*` 一致）
-
-**内容安全审查：** 各 API 平台可能拦截敏感内容翻译（错误码 `data_inspection_failed`，HTTP 400）。不同平台审查阈值不同，被拦截时换平台或换模型。
-
-**AI 上下文（游戏模式）：** `FloatingBallService` 维护 `LinkedList<Pair<String, String>>` 存储历史翻译对（原文, 译文）。开启后系统提示词追加"根据上下文剧情进行翻译"，messages 中插入历史 user/assistant 对。**按 token 预算裁剪**（不再是「轮数」）：`ContextBudget`（`utils/`）是**全项目唯一的裁剪实现** —— `budgetOf(prefs)` + `trim(history, budget)` 从最新往前累加 `TokenEstimator.estimatePair`，装不下的最旧轮直接丢，另有 `MAX_TURNS=200` 兜底；`trimInPlace` 供服务侧 `LinkedList` 用（原先两处各写一份的 `while (size > max) removeFirst()` 已删）。设置项：`game_context_enabled`（开关）、`ctx_token_budget`（上下文长度，ListPreference 4K/8K/16K/32K/64K/128K，默认 32768，存为 String；旧的 `game_context_count` 已废弃）。
-**生效范围**：聚合 AI（OpenAI 兼容）按 `ctx_token_budget` 裁剪；**本地 LlamaCpp 也吃上下文**，但**不受该设置影响** —— 预算 = 模型 `contextSize − maxTokens`（取不到用 ctx/4）再扣掉本轮原文，历史作为 `[Context/前文]…[Current/当前]` 前缀拼进 **user 文本**（native 只有 system/user 两个字符串，没有多轮接口），拼接前按上面的预算裁剪；**NLLB 等纯机器翻译刻意不接**（没有提示词通道）。实现见 `translate/ContextAwareTranslation.kt`（接口）+ `ContextBudget.applyTo`（唯一写入入口）。
-**重置时机**：`FloatingBallService` / `MangaFloatingService` 的 `clearContext()` 在**新会话开始**（`onCreate` 里翻译器建好后）与**服务停止**（`onDestroy`）时清空各自历史 + 引擎侧那份（LlamaCpp 是进程级共享实例，不清会把上个会话的历史接着用）。**不在「退出漫画阅读器」时清**：阅读器退出后仍可能有章节后台批量翻译在跑，此刻清会抽掉在途批次的上下文；阅读器自己的历史是 `ReaderTranslationController` 的实例字段，随 Activity 消失。
-
-**AI 上下文（漫画模式）：** 正常漫画翻译不使用上下文。仅增量渲染的两批之间使用上下文（`forceContext=true`），翻译完后回滚，不污染后续页面的上下文历史。
-
-**OpenAI 兼容 API 思考模式（thinkingMode 三态）：**
-- `OpenAIProviderConfig.thinkingMode`（Int: 0=跟随模型默认不发参数 / 1=强制关闭 / 2=强制开启）；内置 `BuiltInProviderMod.thinkingMode` 存 diff（null=回退内置默认，`applyMod` 处理）
-- **默认不发 thinking 参数**：硅基流动等不支持思考参数的模型会报 `enable_thinking` 400（`thinking:{type:disabled}` 被网关归一化成 enable_thinking）
-- 内置 DeepSeek 默认 = 强制关闭（保持翻译速度）；火山/智谱/千问/自定义默认 = 跟随模型默认
-- `OpenAITranslation.buildRequestBody` 按三态发 `thinking:{type:enabled/disabled}` 或完全省略；测试连接同样按当前选择
-- ⚠️ 不要改回「总是发 thinking:disabled」——那会重新破坏硅基流动等严格校验参数的模型
-
-**配置存储：** `CustomPreference` 单例封装 `SharedPreferences`。API 密钥通过 `KeystoreManager` 加密存储。
-
-⚠️ **`BuiltinProviders` 里 `OpenAIProviderConfig.name`（火山引擎/智谱AI/通义千问…）是持久化身份 key**：`BuiltInProviderMod` 靠它匹配用户已存配置（API Key/提示词/模型）→ **永远不要改成英文或其他语言**，否则老用户全部配置静默失配。本地化显示走 `nameRes`（`@StringRes`）+ `displayName(context)`；新增厂商显示名先查 `volcapi_name` 这类旧 key 是否已有同名值（曾因此重复定义 key 撞资源合并）。
-
-⚠️ **`modelName` / `models` / `selectedModelIndex` 三者必须永远一致（面板显示 == 引擎实际调用）。**
-面板显示的是 `models[selectedModelIndex]`（`OpenAIText`），引擎调用的是 `modelName`（`TranslatorFactory`），但它们是**三个独立字段**。
-- 内置厂商一律走 `BuiltinProviders.builtinProvider(...)` 工厂，由 `defaultModelIndex` 一处派生 `modelName` 与 `selectedModelIndex`，**不要改回手写 `OpenAIProviderConfig(...)`** —— 手写就可能对不上（智谱AI 曾把默认模型写成 `modelName="glm-4-flash-250414"` 而 `selectedModelIndex=0` 指向 `"glm-5"`，表现为面板显示 glm-5、实际调 glm-4-flash-250414）
-- **展示列表 = `provider.models`（预设）+ `BuiltInProviderMod.customModels`（自定义）**，所以 `selectedModelIndex` 完全可能 ≥ `models.size`；断言一致性时要拼上自定义模型
-- `applyMod` 对越界下标做归一，且 **`modelName` 与 `selectedModelIndex` 必须一起归一** —— 只归一一个的话弹窗里没有任何模型高亮，用户看不到自己在跑哪个模型（内置列表改版后老用户的下标就会越界）
-- 内置模型列表的**下标是持久化语义**，改列表顺序/增删会让老用户的 `selectedModelIndex` 指向别的模型
-- 弹窗里的模型标注（「免费·文本」「免费·视觉」「免费·思考」）走 `OpenAIProviderConfig.modelLabels`（在 `BuiltinProviders` 登记），**不要在 `OpenAIText` 里硬编码模型名**
-- **四个内置厂商都支持「获取模型列表」**（`supportsModelFetch`，控制弹窗里那个按钮的显隐），其中 **DeepSeek / 通义千问不预置模型**：`models` 为空、`modelName` 为空串，用户进配置页时模型选择是空的，自己手动加或点「获取模型列表」从 `GET {baseUrl}/models` 拉（`OpenAITranslation.getSupportedModels`，用编辑框里**当前**的 key，不必先保存）。**火山引擎 / 智谱AI 保留预置列表当兵底**。不预置时三处取值必须空安全，否则崩：`CustomStorage.applyMod`（`modelName = ""`）、`OpenAIText` 的 `initialDisplay` 与 `displayModels`（`getOrNull` + 提示，不是 `[0]`）。保存时列表为空会被拦下（`model_pick_at_least_one`）
-- `getSupportedModels` 的失败信息优先透出服务端自己的说明（OpenAI 兼容格式 `{"error":{"message":"..."}}`），不要直接把原始 JSON 丢给用户；401/403 会拼上「API Key 无效」前缀。它和 `translate` 一样有 `LogCollector` 日志（打 apiKey **长度**不打内容，401 排查时"key 是不是空的/被截断"是最常见原因）
-- 回归守卫：`BuiltinProvidersTest`（name 稳定性、默认模型与下标一致、标注只指向存在的模型、四家都支持获取 / 仅两家不预置）、`CustomStorageTest`（越界归一、下标与名字同步、无模型时 modelName 为空）
-
-**UI：** 传统 Android Views + ViewBinding（非 Jetpack Compose）。导航使用 Navigation Component。
-
-**构建模块：** `:app` + **`:llamacpp`**（llama.cpp 源码随 submodule 一起编，产出 `libllamacpp.so`）+ **`:sr`**（ncnn + Vulkan 超分，源码自编，**不入库**，见「环境搭建」第 4 步）。`:app` 的原生代码仍走 CMake（`app/src/main/cpp/`，只剩 sentencepiece）；`:llamacpp` 走 `llamacpp/src/main/cpp/CMakeLists.txt`，首次编译前跑 `llamacpp/setup-submodule.ps1` 拉 submodule（脚本已配 `core.longpaths` + sparse-checkout 排除 `tools/ examples/ docs/ tests/`，否则 Windows 路径过长会 checkout 失败）。APK 里的 native 库现在是 `libllamacpp.so` + `libc++_shared.so`（旧的 `libhymt2.so` 预编译库与 `app/src/main/jniLibs/` 已删）。
-⚠️ **那个 submodule 不是一个「已注册的 submodule」**：`llama.cpp` 是**官方仓库**（`github.com/ggml-org/llama.cpp`，MIT），pin 在官方提交 `1e411d8f`，工作区无本地改动；`patches/0001-*.patch` 只是留档（STQ1_0 上游已合入）。脚本做的是**在 `llamacpp/src/main/cpp/llama.cpp` 放一份独立 clone**（`git clone --depth 1 --no-checkout` + sparse-checkout + fetch 指定 SHA），所以：
-- `git submodule status` 显示 `-1e411d8f...`（前缀 `-` = 未在 `.git/config` 注册）**是正常的**，不影响构建；
-- **别跑 `git submodule update --init`**（脚本头部就写了它在 Windows 上会因长路径失败），也**别在主仓库跑 `submodule update`**——那会另开一份 `.git/modules` 存储、与现成的那份打架；
-- 本机已有副本时（比如从 worktree 里拷）**直接拷目录即可零下载**，拷完用 `git -C llamacpp/src/main/cpp/llama.cpp status` 验证——它报「无缺失/无修改」就说明与 pin 的提交逐一对得上（**别用文件计数验证**，`cp` 拷歪成多一层嵌套时计数会看不出来）。
-
-## 模型管理
-
-> 本节已下沉到模块分册：`app/src/main/java/com/moe/starflow/download/CLAUDE.md`
-> 动那一块之前先读它；跨模块的约定仍以本文件为准。
-
-## 漫画模块
-
-> 本节已下沉到模块分册：`app/src/main/java/com/moe/starflow/manga/CLAUDE.md`
-> 动那一块之前先读它；跨模块的约定仍以本文件为准。
-
-## 漫画导入书架 + 阅读器（`mangaimport/`）
-
-> 本节已下沉到模块分册：`app/src/main/java/com/moe/starflow/mangaimport/CLAUDE.md`
-> 动那一块之前先读它；跨模块的约定仍以本文件为准。
-
-## 小说模块（`novel/`，feature/novel-text-import）
-
-> 本节已下沉到模块分册：`app/src/main/java/com/moe/starflow/novel/CLAUDE.md`
-> 动那一块之前先读它；跨模块的约定仍以本文件为准。
-
-## 自动翻译
-
-> 本节已下沉到模块分册：`app/src/main/java/com/moe/starflow/translate/CLAUDE.md`（游戏模式）+ `manga/CLAUDE.md`（漫画自动翻页）
-> 动那一块之前先读它；跨模块的约定仍以本文件为准。
-
-## 缓存与历史
-
-> 本节已下沉到模块分册：`app/src/main/java/com/moe/starflow/data/CLAUDE.md`
-> 动那一块之前先读它；跨模块的约定仍以本文件为准。
-
+StarFlow 是 Kotlin Android 应用，界面使用 Android Views 和 ViewBinding，导航使用 AndroidX Navigation Component。主要功能包：
+
+- `manga/` — 漫画 OCR、检测、翻译和覆盖层渲染。
+- `translate/` — 游戏翻译、截图链路和共享批量翻译设施。
+- `mangaimport/` — 漫画书架与阅读器，含页翻译和超分。
+- `novel/` — 小说导入、阅读和段落翻译。
+- `data/` — Room 数据库、翻译历史和缓存。
+- `download/` — 模型清单、下载流程和模型管理界面。
+- `sr/` — 图片超分处理与 ncnn 原生集成。
+- `chat/`、`ui/`、`me/`、`launch/`、`utils/` — 其他界面和共享服务。
+
+模块实现细节见本文开头的模块索引。根文档只保留跨模块的约定。
+
+### 跨模块执行与状态
+
+- `translate/batch/` 是漫画和小说阅读器共用的章节任务调度器；具体 UI 与数据持久化由各模块宿主负责。
+- `OcrLock` 串行保护原生 OCR 与超分引擎。`TranslationBusyRegistry` 和 `TranslationJobRegistry` 管理不同生命周期的任务，修改前查阅对应模块说明。
+- `TranslationExecutionMode` 控制本地 OCR/文本翻译流程的翻译或仅 OCR 模式；图片直传翻译不走这条路径。切换模式不能与正在运行的 OCR/翻译任务竞争。
+- `LocalTranslationCoordinator` 串行化 NLLB/LlamaCpp 本地翻译；远端 API 不使用这把锁。
+- Room schema 版本以 `TranslationHistoryDatabase` 为准。新增实体字段时同步更新迁移和 schema 检查；迁移约束见 data 模块说明。
+
+### 原生模块
+
+- `:app` 包含 Android 应用和剩余的 app 本地原生代码。
+- `:llamacpp` 构建固定版本的上游 llama.cpp 检出。使用 `llamacpp/setup-submodule.ps1` 准备源码；不要对此目录运行 `git submodule update --init`。
+- `:sr` 构建基于 ncnn 的超分引擎。使用 `sr/setup-ncnn.ps1` 准备被忽略的 ncnn 源码目录。
+- `patches/0001-ggml-stq1_0-1.25bit.patch` 是兼容备用补丁，不参与常规构建。当前固定的 llama.cpp 版本已支持 STQ1_0；只有更换版本且上游不再包含该支持时，才重新评估补丁是否适用。
 ## 日志规范
 
 **所有日志必须通过 `LogCollector` 写入**，不能直接用 `Log.d/i/e`。
@@ -544,108 +214,9 @@ tag:OCRBridge | tag:DetectionBridge | tag:BubbleDetector | tag:MangaFloatingServ
 阅读器内嵌翻译（导入功能）日志 tag：`ReaderTranslate`（控制器：逐气泡 rect/原文/译文/来源、缓存命中统计、翻译开始时的引擎与语言）、`IncrementalBatch`（分批管线：`translateWithCache` 命中数）。
 ```
 
-## 安装规范（最高优先级）
+## 手机安装与数据保护
 
-**绝对禁止未经用户确认就执行 `adb uninstall`！**
-安装失败时：只报告错误，询问用户是否需要卸载重装，等用户明确同意后才能执行。这条规则没有例外。
-
-## 设备操作防护（最高优先级）
-
-> 🩸 **2026-09-30 事故**：在装着真实数据的手机上跑 `:app:connectedDebugAndroidTest`。
-> AGP 的 connected 测试走 UTP，**安装前先卸载被测 app**；MIUI 拦下了随后的安装，
-> **卸载没有回滚** → app 连同 `/data/data/`、`/sdcard/Android/data/` 一起没了，
-> 且无备份可恢复（书架 / 翻译历史 / 全部设置 / API Key）。
->
-> 关键教训：**这条命令里一个 `uninstall` 字样都没有。**
-> 所以判据必须是「**这个操作会不会删 app 或它的数据**」，而不是「名字里有没有 uninstall」。
-
-### 四层防护（都在仓库里，改动前先读 `guard/README.md`）
-
-| 层 | 机制 | 位置 |
-|---|---|---|
-| L1 硬拦 | Gradle init script：含 `uninstall` / 以 `connected` 开头 / `managedDevice` 的任务**直接抛异常** | `~/.gradle/init.d/device-guard.gradle`（机器级，不在仓库，甩不掉） |
-| L2 审查 | 命令分类器 + 61 条判定用例（可证伪） | `guard/device_guard.py` / `guard/test_device_guard.py` |
-| L3 可恢复 | 全量备份 / 还原（私有数据 + 外部数据） | `guard/backup_app.py` / `guard/restore_app.py` |
-| L4 流程 | 本节 | 根 `CLAUDE.md` |
-
-### ⚠️ `guard/backup_app.py` 的**私有数据对 release 包无效**（2026-10 实测）
-
-它走 `adb exec-out run-as <pkg> tar …`，而 **release 包不是 debuggable** →
-`run-as: package not debuggable: com.moe.starflow` → `private.tar` 只有 **49 字节**，
-**而脚本照样打印「备份完成：私有 0.00 MB + 外部 xx MB」并返回 0**（只是少打一行提示）。
-私有数据 = `/data/data/<pkg>`（API Key / 全部设置 / 数据库）。
-
-- 要备份私有数据，**先装一次 debug 包**（同签名，`adb install -r` 原地升级、不丢数据），备份完再装 release；
-- 或者至少知道：**看到「私有 0.00 MB」时，这一半的备份是空的**。
-- 外部数据（`/sdcard/Android/data/<pkg>`，漫画/小说/模型/超分缓存）不受影响，照常能拉。
-
-### ⛔ 默认绝对不做（BLOCKED）
-
-| 类别 | 例 |
-|---|---|
-| 卸载 / 清数据 | `adb uninstall`、`pm uninstall`、`pm clear`、`cmd package clear` |
-| **会卸载的构建任务**（★ 无 uninstall 字样） | `connectedDebugAndroidTest`、`connectedCheck`、`managedDevice*`、`uninstallAll/Debug/Release` |
-| **隐藏的"清数据"开关** | `am instrument -e clearPackageData true`、`-Pandroid.testInstrumentationRunnerArguments.clearPackageData=true` |
-| 直删 app 数据目录 | `run-as <pkg> rm ...`、`rm -rf /data/data/<pkg>`、`rm -rf /sdcard/Android/data/<pkg>` |
-| 通配符 / 整机 | `rm -rf /sdcard/Android/data/*`、`fastboot -w`、`recovery --wipe_data` |
-
-### 做任何设备操作前的**强制四步**
-
-1. **分类**：`python guard/device_guard.py "<整条命令>"`
-   —— 退出码 2 就是 BLOCKED，**不要执行**；1 是 CAUTION，先向用户说明影响
-2. **快照**：`python guard/snapshot_state.py`（记录 app 在不在、数据目录条目数）
-3. **备份**（仅当操作可能动到安装状态时）：`python guard/backup_app.py`
-4. **执行后立刻复核**：`python guard/snapshot_state.py --diff`
-   —— 出现 `installed: true → false` 或 `extEntries` 变少，**立即停手报告**
-
-### ⚠️ 必须问用户（CAUTION）
-
-`adb install`（签名不一致可能触发卸载重装）、`settings put`（会降安装校验强度）、
-`adb push` 到 app 数据目录、`am force-stop`、`adb shell input/svc power`、`pm trim-caches`。
-`adb install` 与 `adb uninstall` **一律先问**，不得自行决定。
-
-### ⛔ 2026-10-04 用户再次明确：**任何设备操作都要先获得授权**
-
-> 「**不允许你私自安装启动app截图等等操作！！必须获得用户授权**」
-
-当时的违规动作（**每个都是错的**）：`adb install -r` 装机 → `am force-stop` → `am start`/`monkey`
-启动 app → `screencap` 截图。它们在旧文档里被拆在不同清单里（`install`/`force-stop` 在 CAUTION、
-`am start`/`screencap` **压根没写**），于是"逐条对照清单"就把自己说服了。所以改成两条硬规矩：
-
-1. **SAFE 清单是白名单**：清单里**没有**的，默认当 CAUTION —— **先问一句**。
-   不许自己判断"这个应该没事"（`am start` / `monkey` / `screencap` / `screenrecord` 就是这么溜过去的）。
-2. **"启动 app" 与 "截图" 明确算设备操作**：它们不改数据，但会**打断用户正在用手机做的事**
-   （app 被拉到前台、正在跑的翻译任务被切走、屏幕上突然多出东西），对用户是可见的打扰。
-
-新增进 CAUTION（都要先问）：`am start` / `am startservice` / `monkey`（启动 app）、
-`adb shell screencap` / `screenrecord`（截图/录屏，含 `adb exec-out screencap`）。
-
-⚠️ **"只是装个刚构建好的包帮你看看效果"也不行**：`adb install -r` 即便同签名、即便上次装过、
-即便自认为"只是顺手"，也**必须先问**。**本地构建（`gradlew assembleDebug` / 单测）随便跑**
-（产物在 `build/` 里，不碰设备），**装不装、什么时候装由用户说了算**。
-用户没要求时，交付物是「构建通过 + 单测 + 清晰的验证步骤」，**不是**"已经装到你手机上了"。
-
-### 允许的只读手段（SAFE，可直接用）
-
-`adb devices`、`adb logcat -d`、`adb shell dumpsys/getprop/pidof/ls/stat/df/cat`、
-`adb pull`、`gradlew assemble*/test*/compile*`、`guard/` 下所有脚本。
-
-### 本机测试设备（2026-10 实测）
-
-- **已无线配对**（小米 M2012K10C，Android 13）：`adb devices` 里是
-  `adb-xxxx._adb-tls-connect._tcp` 条目，可直接用，**不需要再 `adb pair`**
-- **release 与 debug 同签名**：`app/build.gradle:70` 是
-  `release { signingConfig signingConfigs.debug }` → 设备上装的 release 与本地构建的包同 key，
-  `adb install -r app-release.apk` **原地升级、保留数据**。
-  （⚠️ 依然不要卸载重装：卸载会连 `/data/data` 与外部数据一起删，见上面那起事故）
-- `python guard/backup_app.py` 约 **2 分钟 / 约 2GB**（私有 38MB + 外部 2GB），是装前必做的那一步
-- 装完用 `python guard/snapshot_state.py --diff` 复核：**只该出现 `ts` 变化**；
-  若 `installed: true → false` 或 `extEntries` 变少，立即停手报告
-
-### 验证由用户自己做
-
-修复后给清晰的验证步骤（观察什么、预期什么），用户自己构建、安装、点击测试。
-需要设备状态时明确说「请你测试 X」。这条规则历史上被违反过多次，详见 memory `[[no-device-operations]]`。
+设备操作授权和仓库内的通用安全边界见 [AGENTS.md](AGENTS.md)；安装器、签名与备份流程见 [guard/README.md](guard/README.md)。
 
 ## 双模式截图
 
@@ -830,7 +401,7 @@ if (knownBefore == null || knownBefore != nowLandscape) clearCropForScreenChange
 2. **service 监听 prefs listener + 刷新内部缓存**（适合"启动时读一次到字段"的性能敏感场景）
    - 例：`Manga_Text_Color` / `Manga_BG_Color` → 加入 `MangaFloatingService.watchedKeys`，触发 `loadConfig()`
    - 例：`Custom_Result_Font_Size` / `Custom_Result_Font_Color` 等 → 加入 `FloatingBallService.styleKeys`，触发 `applyStyle()`
-   - 例：`game_context_enabled` / `game_context_count` → 加入 `FloatingBallService.watchedKeys`，直接更新 `contextEnabled` / `contextMaxCount` 字段
+   - 例：`game_context_enabled` / `ctx_token_budget` → 由 `FloatingBallService` 的偏好监听更新 `contextEnabled` / `contextTokenBudget`
 
 3. **service-running 检查 + 拒绝运行时修改**（适合必须重启才能生效的关键配置）
    - 例：`Ball_Gesture_Single_Click` / `Double_Click` / `Long_Press`（手势冲突检测依赖所有手势值，必须停服务才能保证安全）
@@ -1086,20 +657,9 @@ AlertDialog.Builder(requireContext())
 
 ## 网络配置
 
-- GitHub/HuggingFace 下载需代理（国内环境）
-- CLI 工具（gh/curl/npm）需设置 `http_proxy`/`https_proxy` 环境变量，或开启 TUN 模式
-- Windows hosts 文件可能有 `#S302` 条目将 github.com 指向 127.0.0.1，需清理
-- git 代理配置：`git config --global http.proxy http://127.0.0.1:7897`
-
-**两种外网方案（用户随时切换，GitHub 不通时主动轮流试）：**
-- **Clash TUN/代理**：本地 `127.0.0.1:7897`（HTTP/SOCKS），Clash Verge 提供
-- **Cloudflare WARP**：虚拟网卡接管系统路由，无需配置代理——`unset` 所有 proxy env 后
-  curl/gh/git 直接连公网 IP（如 api.github.com 的 `140.82.116.6`）即走 WARP 隧道
-- ⚠️ **切换关键**：Claude Code `settings.json` 硬编码 `HTTPS_PROXY/HTTP_PROXY/ALL_PROXY=127.0.0.1:7897`
-  注入所有子进程。Clash 失效时这些 env 会让 gh/curl/git 全卡 000——`unset` 后走 WARP 即通。
-  每次换路用 `curl -s -o /dev/null -w "%{http_code}" https://api.github.com` 验证，200 再继续
-- ⚠️ **下载速度低于 200 KB/s 且累计超 10 分钟 → 立刻停下向用户报告 + 自己换路**（大文件用
-  `curl -C -` 断点续传 + 后台跑，不要前台 `sleep` 干等）。完整规则见全局记忆 `~/.claude/CLAUDE.md`
+- GitHub、Hugging Face 等站点的可达性取决于本机网络环境。按需在本机配置代理或 VPN。
+- 排查连接失败时检查 Git 配置、`HTTP_PROXY`/`HTTPS_PROXY` 环境变量和 hosts 文件；不要在共享文档里记录具体代理端点或个人网络拓扑。
+- 可用 `curl -I https://api.github.com` 检查 HTTPS 连通性；下载中断时使用支持断点续传的客户端。
 
 ## 检查更新
 
@@ -1130,14 +690,14 @@ gh release create vX.X.X app/build/outputs/apk/release/app-release.apk --title "
 **⚠️ 不要手动查询日志，使用后台监控！**
 
 ```powershell
-# 正确：后台持续监控
-$adb = "[LOCAL_PATH]"
-& $adb logcat -c  # 先清空旧日志
-$pid = & $adb shell pidof com.moe.starflow
-& $adb logcat --pid=$pid | Select-String -Pattern "关键词" | Out-File -FilePath "[LOCAL_PATH]" -Encoding UTF8
+# 后台持续监控；先确认已获准操作设备
+$adb = Join-Path $env:LOCALAPPDATA 'Android\Sdk\platform-tools\adb.exe'
+$logPath = Join-Path $env:TEMP 'starflow-app.log'
+$appPid = & $adb shell pidof com.moe.starflow
+& $adb logcat --pid=$appPid | Select-String -Pattern "关键词" | Out-File -FilePath $logPath -Encoding UTF8
 ```
 
-用 `run_in_background: true` 执行，让 app 运行后再查看日志文件。
+用后台进程持续监控，将日志保存到 `$logPath`。不要先清空设备日志。
 
 ### 获取闪退（crash）详细信息
 
@@ -1253,8 +813,8 @@ Test-Path local.properties
 
 ### 安装失败
 
-**绝对禁止未经确认执行 `adb uninstall`。** 常见原因：
-- **签名不一致**：debug/release 签名不同，需先卸载旧版本（用户确认后）
+**不要通过卸载解决安装错误。** 常见原因：
+- **签名不一致**：使用与设备上现有应用匹配的 keystore；无法确认签名时停止安装
 - **INSTALL_FAILED_UPDATE_INCOMPATIBLE**：同上
 - **设备空间不足**：清理设备存储
 

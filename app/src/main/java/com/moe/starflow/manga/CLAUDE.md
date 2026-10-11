@@ -1,11 +1,8 @@
-# 漫画模块（`manga/`） — 项目约定
+# 漫画翻译模块
 
-> 本文件是仓库根目录 `CLAUDE.md` 的**模块分册**：跨模块的东西（构建命令、架构总览、高频踩坑、
-> UI / 主题 / 日志 / 框选坐标系等硬约束）都在根文件里，**动这个模块前先保证读过根文件**。
-> 拆出来的原因很实在：根文件曾经是一个几十万字符的单文件、每次会话都要吃进去，
-> 而这些细节只有动这个目录时才需要。内容从根文件**逐字搬来**，没有改写。
+> 范围：本文记录 `manga/` 的当前实现约束。跨模块规则见仓库根目录 `AGENTS.md` 和 `CLAUDE.md`。源码与测试为准；实现变化后同步更新本文。
 
-## 漫画模块
+## 结构与核心实现
 
 **核心文件：** `MangaFloatingService.kt`（主服务）、`DetectionBridge.kt`（检测桥接，engine/）、`ComicBubbleDetector.kt`（RT-DETR-V2 检测，engine/）、`PPOcrV5Engine.kt`（PP-OCRv5 det+rec，engine/）、`MangaOcrBridge.kt`（manga-ocr，engine/）、`TextRegionMerger.kt`（识别后合并，merge/）、`OverlayRenderer.kt`（渲染，render/）
 **工具类：** `engine/GeometryUtils.kt`（凸包、点在多边形等几何算法）、`engine/OnnxUtils.kt`（ONNX 张量提取、资源拷贝）
@@ -240,7 +237,7 @@ PP-OCRv5 检测框可能倾斜（QuadBox 4 顶点非正交），全链路处理�
 - ⚠️ **窗口读数也不等于屏幕**：`MATCH_PARENT` 的 overlay 窗口会被系统缩小以避开手势条/导航栏
   （实测竖屏 1080x2356 vs 屏幕 1080x2400），原点却仍是 0。
 
-### ⚠️ 取值规则：按「谁更新」而不是「谁优先」
+### OCR 结果的取值规则
 
 `resolve()` 的完整规则（纯函数，`DisplaySizeResolveTest` 11 条锁死）：
 
@@ -292,7 +289,7 @@ IDLE（等变化）──sim<0.95──→ MOTION（等稳定）──连续2次
 - `lastTranslatedHash` / `previousScreenshotHash` / `isManualTranslating` — 都在 `MangaAutoTranslateEngine`
 - `translatedRegions` — 区域级翻译缓存，已搬到 `manga/state/RegionCacheManager.kt`；⚠️ 判重**不是** IoU（`REGION_IOU_THRESHOLD` 早已零引用），实际走文本相似度 `findFuzzyMatch`；TTL 仍是 5 分钟
 
-## ⚠️ 低分辨率漫画「译文模糊」（**已实施** 2026-10）
+## 低分辨率页面的译文清晰度
 
 用户口径：「导入分辨率较低的漫画时，翻译后渲染回漫画的**文字**也会变模糊」。
 完整分析见 `sr/CLAUDE.md` 同名一节；**这里放一份是因为改的是 `render/OverlayRenderer.kt`，

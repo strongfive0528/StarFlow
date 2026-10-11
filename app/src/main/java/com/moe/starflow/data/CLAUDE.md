@@ -1,16 +1,13 @@
-# 数据与缓存（`data/`） — 项目约定
+# 数据与缓存模块
 
-> 本文件是仓库根目录 `CLAUDE.md` 的**模块分册**：跨模块的东西（构建命令、架构总览、高频踩坑、
-> UI / 主题 / 日志 / 框选坐标系等硬约束）都在根文件里，**动这个模块前先保证读过根文件**。
-> 拆出来的原因很实在：根文件曾经是一个几十万字符的单文件、每次会话都要吃进去，
-> 而这些细节只有动这个目录时才需要。内容从根文件**逐字搬来**，没有改写。
+> 范围：本文记录 `data/` 的当前实现约束。跨模块规则见仓库根目录 `AGENTS.md` 和 `CLAUDE.md`。源码与测试为准；实现变化后同步更新本文。
 
 ## 缓存与历史
 
 `TranslationCacheManager` — 统一管理游戏/漫画翻译缓存
 - 漫画模式：pHash 精确匹配 + 相似度匹配（256-bit 阈值 0.95，约 13 bit 容差）
 - 游戏模式：仅精确匹配（相似度匹配会误判相似背景）
-- Room 数据库 `translation_history.db`，version 19，`fallbackToDestructiveMigration`
+- Room 数据库 `translation_history.db`，当前 version 24，`fallbackToDestructiveMigration`
   - v9→v10 迁移：`ALTER TABLE ... ADD COLUMN pHash2/pHash3/pHash4 INTEGER NOT NULL DEFAULT 0`（256-bit 扩展 hash）
   - v10→v11 迁移：幂等修复漏加的 `last_session_id` 列 + `createdAt`→`created_at` 列名（先 `PRAGMA table_info` 检查再操作）
   - v14→v17：阅读器每页翻译表 `imported_page_translation` 新增 + `mangaKey`（身份指纹）+ `translatorName/sourceLang/targetLang`（详见 `mangaimport/CLAUDE.md` 的「阅读器内嵌翻译」）
@@ -26,7 +23,12 @@
     必须整体一个 `@Transaction`（逐行 `UPDATE pageIndex` 会在置换中撞主键，`REPLACE` 静默吃行）。
     守卫：`ImportedPageSrDaoTest` —— 除了 DAO 行为，还有一条**迁移建表语句 vs 实体 schema 逐列对比**
     （在另一个 scratch 库里只跑 `MIGRATION_18_19`，两边的 `PRAGMA table_info` 必须完全相同）。
-- ⚠️ **版本号只是上面这行，真值以 `TranslationHistoryDatabase` 的 `@Database(...)` 为准**（本行曾落后一版）
+- v19→v20：截图历史增加显式 OCR/翻译处理状态，历史译文载荷保留。
+- v20→v21：每页翻译记录增加可空的 `ocrModel`；不能用 `translatorName` 替代，因为后者会被之后的翻译更新。
+- v21→v22：小说段落记录增加可空的 `imagePayload`，保存插图 OCR/译文块。
+- v22→v23：超分记录增加 `executionJson` 和稳定源页键 `sourcePageKey`。
+- v23→v24：兼容不同开发分支留下的 v23 schema；按列检查并补齐超分记录字段，保留已有记录。不要改成破坏性迁移。
+- ⚠️ **版本号真值以 `TranslationHistoryDatabase` 的 `@Database(...)` 为准**；修改后同步本节。
 - ⚠️ **`rekeyPages`（页序迁移用）必须整体在一个 `@Transaction` 里**（读→删→按新下标重插）：
   中途失败会留下"一半新序一半旧序"的行；也不能逐行 `UPDATE pageIndex` —— 它是主键的一部分，
   置换过程中会与尚未搬迁的行撞键（`REPLACE` 会静默吃掉一行）。调用点在阅读器打开时（见 `mangaimport/CLAUDE.md`）。

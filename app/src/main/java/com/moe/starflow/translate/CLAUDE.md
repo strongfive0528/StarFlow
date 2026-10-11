@@ -1,9 +1,6 @@
-# 翻译服务（`translate/`） — 项目约定
+# 翻译服务模块
 
-> 本文件是仓库根目录 `CLAUDE.md` 的**模块分册**：跨模块的东西（构建命令、架构总览、高频踩坑、
-> UI / 主题 / 日志 / 框选坐标系等硬约束）都在根文件里，**动这个模块前先保证读过根文件**。
-> 拆出来的原因很实在：根文件曾经是一个几十万字符的单文件、每次会话都要吃进去，
-> 而这些细节只有动这个目录时才需要。内容从根文件**逐字搬来**，没有改写。
+> 范围：本文记录 `translate/` 的当前实现约束。跨模块规则见仓库根目录 `AGENTS.md` 和 `CLAUDE.md`。源码与测试为准；实现变化后同步更新本文。
 
 ## 自动翻译
 
@@ -90,7 +87,7 @@ IDLE（跳过OCR）──像素变化──→ CHANGED ──稳定1帧──→
 
 **自动翻译框选前置：** 启动自动翻译前必须先框选翻译区域（`mRectF != null`），未框选时提示"请先框选翻译区域"。
 
-## 状态浮层 `TranslationStatusOverlay`（`translate/`，**全应用共享**）
+## 全局状态浮层 `TranslationStatusOverlay`
 
 进程级单例 + `TYPE_APPLICATION_OVERLAY` 系统窗口，游戏/漫画/无障碍/阅读器/小说共用同一个浮窗
 （多条消息在竖直容器里堆叠，最多 3 条，超出排队）。位置与时长读 prefs：`Status_Position`
@@ -157,7 +154,7 @@ ScreenshotManager（单例）
 MediaProjection 模式需要前台服务 + `FOREGROUND_SERVICE_TYPE_MEDIA_PROJECTION`，但**必须是「先按 SPECIAL_USE 起服务、切到 MP 才升级」**（Manifest 同时声明 `mediaProjection|specialUse`）——直接用 MEDIA_PROJECTION 起服务会 SecurityException 崩，见根文件「高频踩坑」。
 FloatingBallService 和 MangaFloatingService 在 MediaProjection 模式下自动启动前台服务。
 
-## 批量翻译的共享基础设施（`translate/batch/`，漫画 + 小说共用）
+## 漫画与小说共用的批量翻译基础设施
 
 > 2026-10 新增。用户口径：阅读器里的「翻译本章」要像模型下载一样**能在后台跑、通知栏看进度、
 > 可暂停/继续/取消**；漫画因为要 OCR，**OCR 串行、翻译请求并发**。
@@ -266,7 +263,7 @@ MediaProjectionIntentHolder — 存储授权 Intent。
 
 `Shooter.kt` 的 `OnImageAvailableListener` 在 `convert(image)` 返回 null 时**必须设置 `imageAvailable = true`**，否则后续所有 `shot()` 调用永久超时，返回同一张缓存图 → 状态机永远 `simToTranslated=1.0` → 自动翻译卡死。此 bug 已在 listener 中添加保护。
 
-## AI 上下文：按 token 预算裁剪（2026-09-27 改造）
+## AI 上下文 token 预算
 
 > 原来是「保留最近 N 轮」（`game_context_count`，5-20 轮）。轮数与 token 完全不成比例：
 > 一页 34 气泡的漫画批量**单轮**就几千 token，两句短对话只有几十 —— 档位对不上真实开销。现已整体替换。

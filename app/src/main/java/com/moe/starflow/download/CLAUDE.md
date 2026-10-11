@@ -1,9 +1,6 @@
-# 模型下载（`download/`） — 项目约定
+# 模型下载与管理模块
 
-> 本文件是仓库根目录 `CLAUDE.md` 的**模块分册**：跨模块的东西（构建命令、架构总览、高频踩坑、
-> UI / 主题 / 日志 / 框选坐标系等硬约束）都在根文件里，**动这个模块前先保证读过根文件**。
-> 拆出来的原因很实在：根文件曾经是一个几十万字符的单文件、每次会话都要吃进去，
-> 而这些细节只有动这个目录时才需要。内容从根文件**逐字搬来**，没有改写。
+> 范围：本文记录 `download/` 的当前实现约束。跨模块规则见仓库根目录 `AGENTS.md` 和 `CLAUDE.md`。源码与测试为准；实现变化后同步更新本文。
 
 ## 模型管理
 
@@ -31,7 +28,7 @@
 - **四个下载按钮必须「每个状态都显式赋值」**，不能只写「要显示的那个」——复用会把上一轮的可见性留下来（典型症状：下载完成后 [暂停][取消] 仍挂在卡片上；重新 inflate 的实现天然不会暴露这个问题）。判定收在纯函数 `rowButtonsFor(state, missing)` 里，由 `LlamaCppRowButtonsTest` 钉死，改回「只写 VISIBLE」即红。
 - 卡片间距取自**行模板的 `layout_marginBottom`**，最后一张置 0（区块间距交给下一段标题的 marginTop）；原值记在行根 View 的 `RowTag` 上，复用后据此还原。⚠️ `id` 列表比较**不要拼分隔符字符串**（导入模型的文件名可能带空格），直接比 `List<String>`。
 
-### 超分（SR）模型（2026-10 新增，2026-10 底定为 5 族 16 档）
+### 超分模型
 
 **全部走下载，不打进 APK**（用户硬要求）。清单在 `assets/models/downloadinfo.json`，落盘统一在
 `getExternalFilesDir("sr")`，文件名取自清单（代码里不硬编码文件名）。
@@ -71,7 +68,7 @@
 - ⚠️ **`displayName`（下载通知里的名字）必须调 `SrModelManager.nameResOf`**：这里曾硬编码英文
   （中文界面下通知是英文），而且 upconv_7 动漫的 N3（极强降噪）被写成 "Light denoise"（错档）。
 
-### 模型管理页顶部 Tab（2026-10）
+### 模型管理页标签
 
 `fragment_model_management.xml` 现在是 `LinearLayout(竖)` → `TabLayout(model_tabs)` + 两个 ScrollView：
 `ocr_scroll`（原有 OCR 内容，全部 include 不变）与 `sr_scroll`/`sr_content`（超分）。

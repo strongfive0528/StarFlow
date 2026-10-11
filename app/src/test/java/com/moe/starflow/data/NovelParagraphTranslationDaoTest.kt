@@ -188,11 +188,16 @@ class NovelParagraphTranslationDaoTest {
     fun `markTranslatingRows 能把已存在的行标成翻译中`() = runBlocking {
         dao.upsert(row(0, 0, state = NovelParagraphTranslation.STATE_IDLE))
 
-        dao.markTranslatingRows(NOVEL_ID, KEY, 0, SPLIT_VERSION, listOf(0), "引擎", 2L)
+        dao.markTranslatingRows(
+            novelId = NOVEL_ID, novelKey = KEY, chapterIndex = 0, splitVersion = SPLIT_VERSION,
+            paraIndexes = listOf(0), translatorName = "引擎", sourceLang = "ja", targetLang = "zh", now = 2L,
+        )
 
         val r = dao.forChapter(NOVEL_ID, KEY, 0, SPLIT_VERSION).single()
         assertEquals(NovelParagraphTranslation.STATE_TRANSLATING, r.state)
         assertEquals("引擎", r.translatorName)
+        assertEquals("ja", r.sourceLang)
+        assertEquals("zh", r.targetLang)
     }
 
     /** 已有译文的段不能被标回「翻译中」（重翻期间也不能让译文看起来丢了）。 */
@@ -200,7 +205,10 @@ class NovelParagraphTranslationDaoTest {
     fun `markTranslatingRows 不动已有译文`() = runBlocking {
         dao.upsert(row(0, 0, state = NovelParagraphTranslation.STATE_SUCCESS, text = "原有译文"))
 
-        dao.markTranslatingRows(NOVEL_ID, KEY, 0, SPLIT_VERSION, listOf(0), "引擎", 2L)
+        dao.markTranslatingRows(
+            novelId = NOVEL_ID, novelKey = KEY, chapterIndex = 0, splitVersion = SPLIT_VERSION,
+            paraIndexes = listOf(0), translatorName = "引擎", sourceLang = "ja", targetLang = "zh", now = 2L,
+        )
 
         val r = dao.forChapter(NOVEL_ID, KEY, 0, SPLIT_VERSION).single()
         assertEquals(NovelParagraphTranslation.STATE_SUCCESS, r.state)
@@ -213,7 +221,10 @@ class NovelParagraphTranslationDaoTest {
         dao.upsert(row(0, 0, state = NovelParagraphTranslation.STATE_FAILED))
         dao.markFailed(NOVEL_ID, KEY, 0, SPLIT_VERSION, listOf(0), "HTTP 429", 1L)
 
-        dao.markTranslatingRows(NOVEL_ID, KEY, 0, SPLIT_VERSION, listOf(0), "引擎", 2L)
+        dao.markTranslatingRows(
+            novelId = NOVEL_ID, novelKey = KEY, chapterIndex = 0, splitVersion = SPLIT_VERSION,
+            paraIndexes = listOf(0), translatorName = "引擎", sourceLang = "ja", targetLang = "zh", now = 2L,
+        )
 
         val r = dao.forChapter(NOVEL_ID, KEY, 0, SPLIT_VERSION).single()
         assertEquals(NovelParagraphTranslation.STATE_TRANSLATING, r.state)

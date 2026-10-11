@@ -96,6 +96,7 @@
     <string name="sort_order">排序</string>
     <string name="sort_title">标题</string>
     <string name="sort_added">添加时间</string>
+    <string name="sort_recent_read">最近阅读</string>
     <string name="apply">应用</string>
     <string name="api_name">API：%s</string>
     <string name="tencent_cloud">腾讯云</string>
@@ -1635,6 +1636,9 @@
     <string name="novel_fail_translate_empty">模型没返回译文</string>
     <string name="novel_chapter_failed_hint">%1$d 段失败：%2$s</string>
     <string name="novel_chapter_failed_meta">第 %1$d 章 · %2$d 段失败</string>
+    <string name="novel_translate_failure_languages">语言：%1$s → %2$s</string>
+    <string name="novel_translate_failure_reason">原因：%1$s</string>
+    <string name="novel_translate_failure_source">原文：%1$s</string>
     <string name="novel_style_keep_paragraphs">保持段落完整</string>
     <string name="novel_style_keep_paragraphs_hint">一页放不下时，整段挪到下一页；关掉则按间距填满页面（段落可能被切断）</string>
     <string name="novel_style_reset">恢复默认</string>
@@ -1645,6 +1649,7 @@
     <string name="novel_display_translated">译文</string>
     <string name="novel_display_original">原文</string>
     <string name="novel_display_bilingual">双语</string>
+    <string name="novel_display_toggle_desc">切换文字显示：译文 / 原文 / 双语</string>
     <string name="novel_translate_mode">翻译模式</string>
     <string name="novel_translate_debounce">等待页面稳定</string>
     <string name="novel_translate_debounce_hint">页面停下来（不再翻页 / 滚动）满这么久才算「稳定」，稳定之后才开始翻译；没稳定之前一个请求都不发、也不会出现翻译中的黄底。自动与增量共用同一套。</string>

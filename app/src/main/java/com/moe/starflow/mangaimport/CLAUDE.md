@@ -1,11 +1,8 @@
-# 漫画导入书架 + 阅读器（`mangaimport/`） — 项目约定
+# 漫画书架与阅读器模块
 
-> 本文件是仓库根目录 `CLAUDE.md` 的**模块分册**：跨模块的东西（构建命令、架构总览、高频踩坑、
-> UI / 主题 / 日志 / 框选坐标系等硬约束）都在根文件里，**动这个模块前先保证读过根文件**。
-> 拆出来的原因很实在：根文件曾经是一个几十万字符的单文件、每次会话都要吃进去，
-> 而这些细节只有动这个目录时才需要。内容从根文件**逐字搬来**，没有改写。
+> 范围：本文记录 `mangaimport/` 的当前实现约束。跨模块规则见仓库根目录 `AGENTS.md` 和 `CLAUDE.md`。源码与测试为准；实现变化后同步更新本文。
 
-## 漫画导入书架 + 阅读器（`mangaimport/`）
+## 书架与阅读器
 
 **书架（`ImportMangaFragment`）**：
 - 存储固定 `getExternalFilesDir()/manga_import/<id>/`（zip 放原文件 / 目录放散图；封面在 `getExternalFilesDir()/covers/`），**在 Android/data/<pkg>/files 下，用户可经文件管理器/数据线访问——绝不允许存进不可访问的 `filesDir`（/data/data）**；**无自定义目录可切**；根目录由 `StorageDirStore.root()` 提供，封面目录 `StorageDirStore.coversDir()`
@@ -109,7 +106,7 @@
 - ⚠️ **`webtoonList.itemAnimator = null` 必须关**（`applyPager` 的 webtoon 分支）：默认 `DefaultItemAnimator` 会给每次 `notifyItemChanged`（译图渲染完成）叠一层**淡出淡入** → 表现为「页面一直在变」。（`viewPager` 那边早就关了，Webtoon 这个漏了）
 - ⚠️ **Webtoon 适配器三件套缺一不可**（`WebtoonAdapter`）：①**重绑前 cancel 上一次取图**（`VH.loadJob`）—— 切显示态时同页连续重绑两次（先慢速解码原图、后缓存命中秒回译图），不取消则慢的那次最后落地把译图覆盖回原图 → 「点了没反应/状态自己弹回去」；②**同一 holder 重绑同一页时不清图**（`VH.boundPage` 判定）—— 无条件清图会闪一帧白，只有 holder 被复用去显示**别页**才清图+转圈；③落地前 `!isActive` + `adapterPosition == position` 双校验
 - ⚠️ **`refreshWebtoonRange` 必须并入当前可见页范围**：预热中心是首个可见页，一屏装得下 3 页以上时屏尾会落出 ±`WEBTOON_PREWARM_RADIUS`(=2) 之外，只按中心重绑会让那几页切「原图」后仍停在旧译图
-- **每页记录** `ImportedPageTranslation`（`imported_page_translation` 表，key=`mangaId+pageIndex`）：`state`(0未译/1翻译中/2成功/3失败) + `failCode`(OCR_EMPTY/TRANSLATE_EMPTY/PROCESS_EXCEPTION/OCR_MODEL_MISSING/TRANSLATION_API_NOT_CONFIGURED) + `failMessage` + `sourceText/translatedText`(`[N]`编号串) + `bubbleRects` + `translatorName/sourceLang/targetLang` + `mangaKey`；**只存数据不存图**，显示时 `PageTranslationCodec.fromRow → renderOverlay` 实时渲
+- **每页记录** `ImportedPageTranslation`（`imported_page_translation` 表，key=`mangaId+pageIndex`）：`state`(0未译/1翻译中/2成功/3失败) + `failCode`(OCR_EMPTY/TRANSLATE_EMPTY/PROCESS_EXCEPTION/OCR_MODEL_MISSING/TRANSLATION_API_NOT_CONFIGURED) + `failMessage` + `sourceText/translatedText`(`[N]`编号串) + `bubbleRects` + `translatorName/sourceLang/targetLang` + `ocrModel` + `mangaKey`；**只存数据不存图**，显示时 `PageTranslationCodec.fromRow → renderOverlay` 实时渲染。库版本与迁移见 `data/CLAUDE.md`。
 - **翻译面板**（工具栏「翻译」Tab = `ReaderMenuSheet.panel_translate`）：模式分段器（三选一可用）+ **启动延迟滑块**（200-2000ms）+ **向后翻译页数滑块**（1-10，仅增量模式显示）+ 汇总 + 筛选（全部/失败/OCR空/翻译空/异常）+ 每页状态徽章；**点「详情/收起」当前行内联展开**——**不弹窗**；点行跳页
 - ⚠️ **滑块 progress 是绝对值**：设了 `android:min` 的 SeekBar，`progress` 就是绝对刻度，写 `progress = value - MIN` 会让拇指位置与右侧数值不符且取值范围整体偏移（曾导致「向后页数」取不到 1 且能到 11）
 - **即显示**：右下角翻译浮层组（**圆角矩形**背景）：翻译/重翻按钮（成功态变 `ic_refresh`）+ 三态按钮（**并入同一背景组件**、有结果才出现）+ 失败感叹号。**显示经「页图提供者 + notifyItemChanged 重绑」按页槽位取图**（`ReaderAdapters.Shared.pageImage`），⚠️ **绝不写 `visibleImage`**（它指向最近绑定页 → 错图/串页）
@@ -117,7 +114,7 @@
 - ⚠️ **取消并行 OCR 后必须先 join 再回收裁剪图**（`IncrementalBatchPipeline.cancelAndJoinQuietly`）：`cancel()` 只置协程标志，而引擎的 `recognizeBatchWithCls` 是**同步 native 调用**，不会在调用中途响应取消 —— worker 可能仍在读像素缓冲，此时 `recycle()` 就是 use-after-recycle（native 崩溃，Java 层捕获不到）
 - ⚠️ **状态浮层是进程级单例 + 系统窗口**：`TranslationStatusOverlay` 用 `TYPE_APPLICATION_OVERLAY`，**退出阅读器必须在 `onDestroy` 调 `dismiss()`**，否则「检测中…／翻译中…」会挂在桌面/其它页面上且无入口可消（直到下次翻译成功或失败）
 
-### 导入编排 / 占位进度 / 删除清理（2026-09-19）
+### 导入流程与清理
 
 - ⚠️ **图片扩展名判定与自然排序只有一个来源：`mangaimport/data/ArchivedMangaReader`**（`IMAGE_EXTS` + `naturalComparator`）。
   导入侧（`MangaImporter`）与阅读侧（`ReaderPageSource`）都调它 —— 这是「导入顺序 = 阅读顺序」的唯一保证，
@@ -134,7 +131,7 @@
 - ⚠️ **取消竞态文案**：`ImportManager.cancel()` 返回 false（任务恰好跑完）时提示「已经导入完成了」，不能报「已取消」。
 - 入口只有两个：**导入文件（zip/cbz，可多选）** 与 **导入文件夹（整个夹 = 一部）**。第三个「导入多个漫画文件夹」是假的（同一个 `OpenDocumentTree`，SAF 不给多选目录），已删；文件夹模式**不认夹里的压缩包**，子目录递归且按「先目录名、再夹内页名」自然排序。
 
-### 章节系统 + cbr/7z 导入（2026-10）
+### 章节与压缩包格式
 
 - **章节切分只有一个来源**：`mangaimport/data/MangaChapter.kt` 的 `MangaChapterSplitter`。
   它**同时**决定「章区间」与**权威页序**（按章分组 + 章内自然排序）—— 导入侧（`MangaImporter`）与
@@ -217,7 +214,7 @@
     `webtoonLru`）+ 内存行，带误删确认弹窗；**不做整本清理入口**（用户口径）。
 
 
-### PDF 导入（2026-10，改动前必读）
+### PDF 导入
 
 > 用户口径：漫画要能**直接导入 PDF**（含扫描 PDF），「你要清楚找到分页的位置」；
 > 方案由用户在三个选项里选定：**保留 PDF + 按需栅格化**（不是导入即转图，也不是转图后删 PDF）。
@@ -376,7 +373,7 @@
   CJK 注释会吞掉后一个换行（曾把一条赋值吞进注释里，脚本静默走错分支）。
 
 
-### 章节批量翻译：应用级后台任务 + 并发流水线（2026-10 大改，改动前必读）
+### 章节批量翻译
 
 > 用户口径：翻译本章要像模型下载一样**能在后台跑、通知栏看进度、可暂停/取消**，
 > 「翻译本章」按钮从面板挪到**章节卡片**上；漫画因为要 OCR，OCR 串行、翻译请求并发。
@@ -507,7 +504,7 @@
 - ⚠️ **字号行的「自动」胶囊必须紧跟标题**（`字体大小 [自动] …… 12sp`，用户口径 2026-09-28）：
   它是这个设置的开关，不是"又一个值"。守卫：`ReaderPanelLayoutTest`（读**真实布局**断言相邻）
 
-### 阅读器提示：**唯一出口 `notifyUser`**（2026-10 统一，用户口径「阅读器所有的提示报错信息全部使用顶部系统弹窗」）
+### 阅读器提示
 
 阅读器里所有**给人看的提示**（点击反馈 / 结果 / 报错）都从 `MangaReaderActivity.notifyUser(text, style)`
 发出，样式四选一（`AppNotice.Style`，定义在 `utils/AppNotice.kt`）：
@@ -552,7 +549,7 @@
 `ReaderIncrementalConcurrencyGuardTest`（增量窗口必须走并发信号量）、`ReaderPanelLayoutTest`（「自动」紧跟标题）、
 `ReaderMenuSheetTranslateTest`、`MangaChapterSplitterTest`。
 
-### 超分记录系统 + 超分本章（2026-10 新增）
+### 超分记录与章节任务
 
 **用户口径**：「给超分面板也设计一个类似翻译面板那样的记录系统（**直接复用相关 UI 和代码逻辑**）……
 显示超分的完成/进行中/失败状态，支持超分本章、查看详情（超分模型、原始和超分后尺寸和大小、时间）、
@@ -634,7 +631,7 @@
 离开阅读器停任务 / 逐页回收）+ `ReaderBusyExclusionGuardTest`（优先级顺序 / 只关一个 / 入口接线 /
 与自动超分开关无关）。
 
-### ⚠️ 「翻译时自动超分」的作用范围（用户口径 2026-10-01）
+### 翻译时自动超分
 
 > 「翻译本章或者超分本章都不受开启翻译自动超分开关的影响，这个开关**只影响手动/自动/增量**这三个模式」
 
@@ -647,7 +644,7 @@
 - 守卫：`ReaderBusyExclusionGuardTest.onlyTranslateAheadAutoUpscales` + 既有的
   `ReaderIncrementalConcurrencyGuardTest`（后者的源码匹配只取到 `label = "增量"` 为止，别写全参数）。
 
-### ⚠️ 弹窗 / 面板配色：**唯一入口**，新增控件不许漏登记（2026-09-28）
+### 弹窗与面板主题
 
 用户口径：「你加的页面或者弹窗一个都没有适配主题配色」。
 
@@ -684,7 +681,7 @@
 
 
 
-### 压缩包元数据 → 自动填简介（2026-10）
+### 压缩包元数据
 
 - **只做一件事**：导入时读包里的 `ComicInfo.xml`（ComicRack 标准）与 `meta.json`（nhentai 等下载器），
   生成简介写进 `ImportedManga.description`。⚠️ **不改书名**（书名仍取文件名）、不改阅读方向、
@@ -716,7 +713,7 @@
   `COMIC_METADATA_REAL_FILE=<路径>` 环境变量 opt-in，默认 skip）。
 
 
-### 译文文本规则 + 底图/译文分层（2026-09-19）
+### 译文与底图分层
 
 - **分层存储是既有约定**（见 `data/CLAUDE.md`）：`originalImagePath` + `bubbleRects` + `sourceText/translatedText` 是唯一事实来源，渲染后的 `imagePath` 已停止写入（仅旧行回退）。**因此「改设置/改规则即时生效、不必重翻」在架构上是被这条保证的** —— 文案里也别写成"渲染图缓存"。
 - **`TranslationTextRules`（`manga/config/`）有两件事**，别混：
@@ -727,7 +724,7 @@
 - ⚠️ **`BitmapLruCache`（截图查看器）的 key 要带规则指纹**（`MangaViewerActivity.overlayCacheKey`，且必须以 `${entryId}_` 开头——`retainEntries` 靠它认 id）；重翻失效用的也是同一个函数。
 - **排版层**（`LayoutEngine`）：竖排直接去掉 `\r`/`\n`（竖排是连续竖流，换行只占一个空白格）+ 横排断行/竖排分列的**切点绝不落在点串中间**（`pullBackToDotRunStart`，点串比整行还长才硬切）。守卫：`LayoutEngineTest`（含竖排硬切兜底）、`TranslateUtilsNumberedParseTest`、`TranslationTextRulesTest`。
 
-### 悬浮球大小 / 不透明度（2026-09-19）
+### 悬浮球尺寸与透明度
 
 - `FloatingBallStyle`（`utils/`）是**唯一来源**：`Floating_Ball_Size`（50–200%）/ `Floating_Ball_Alpha`（10–100%），**游戏与漫画共用一份**；两个 Service 建球时与 `prefChangeListener` 收到这两个 key 时都调 `apply`。
 - ⚠️ **尺寸改子视图 `layoutParams`，不走 `scaleX/scaleY`**：点击脉冲/双击/长按反馈动画收尾都会把 scale 收回 `1f` → 走 scale 的话"点一下球，用户设的大小就没了"。同理**长按动画的收尾 alpha 必须用用户设置值**（`ballAlpha`），否则一次长按把不透明度抹成 1。

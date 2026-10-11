@@ -29,6 +29,7 @@ data class ImportedNovel(
     val lastReadChapter: Int = 0,
     val lastReadParaIndex: Int = 0,
     val lastReadPage: Int = 0,
+    val lastReadAt: Long = 0,
     val lost: Boolean = false,
     val importing: Boolean = false,
     val importPhase: ImportPhase? = null,

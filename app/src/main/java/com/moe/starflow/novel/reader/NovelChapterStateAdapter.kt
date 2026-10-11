@@ -507,8 +507,30 @@ class NovelChapterStateAdapter(
                 setTextColor(labelColor)
             }
             item.findViewById<TextView>(R.id.tv_detail_list).apply {
-                text = failed.joinToString("\n") {
-                    "#${it.paraIndex}  ${NovelFailCode.label(ctx, it.failCode)}  ${it.sourceText.take(20)}"
+                text = failed.joinToString("\n\n") { failure ->
+                    buildList {
+                        add("#${failure.paraIndex}")
+                        if (failure.updatedAt > 0L) {
+                            val time = java.text.SimpleDateFormat(
+                                "yyyy-MM-dd HH:mm:ss", Locale.getDefault(),
+                            ).format(java.util.Date(failure.updatedAt))
+                            add(ctx.getString(R.string.text_translate_detail_time, time))
+                        }
+                        failure.translatorName?.takeIf { it.isNotBlank() }?.let {
+                            add(ctx.getString(R.string.text_translate_detail_model, it))
+                        }
+                        if (!failure.sourceLang.isNullOrBlank() || !failure.targetLang.isNullOrBlank()) {
+                            add(ctx.getString(
+                                R.string.novel_translate_failure_languages,
+                                failure.sourceLang.orEmpty(),
+                                failure.targetLang.orEmpty(),
+                            ))
+                        }
+                        add(ctx.getString(R.string.novel_translate_failure_reason, NovelFailCode.label(ctx, failure.failCode)))
+                        if (failure.sourceText.isNotBlank()) {
+                            add(ctx.getString(R.string.novel_translate_failure_source, failure.sourceText.take(120)))
+                        }
+                    }.joinToString("\n")
                 }
                 setTextColor(subColor)
             }

@@ -19,6 +19,7 @@ import com.moe.starflow.databinding.FragmentNovelShelfBinding
 import com.moe.starflow.mangaimport.data.ImportFormat
 import com.moe.starflow.mangaimport.ui.DisplayMode
 import com.moe.starflow.mangaimport.ui.DisplayOptionsSheet
+import com.moe.starflow.mangaimport.ui.DisplaySortOrder
 import com.moe.starflow.novel.data.ImportedNovel
 import com.moe.starflow.novel.data.NovelImportEvent
 import com.moe.starflow.novel.data.NovelImportFailureReason
@@ -57,6 +58,7 @@ class NovelShelfFragment : Fragment() {
         const val KEY_DISPLAY_MODE = "display_mode"
         const val KEY_GRID_SIZE = "grid_size"
         const val KEY_SORT_ADDED = "sort_by_added"
+        const val KEY_SORT_RECENT_READ = "sort_recent_read"
     }
 
     private var _binding: FragmentNovelShelfBinding? = null
@@ -66,7 +68,7 @@ class NovelShelfFragment : Fragment() {
 
     private var displayMode = DisplayMode.GRID
     private var gridSize = 3
-    private var sortByAdded = false
+    private var sortOrder = DisplaySortOrder.TITLE
 
     /** 最近一次渲染的清单（长按菜单要拿完整条目）。 */
     private var rendered: List<ImportedNovel> = emptyList()
@@ -117,7 +119,12 @@ class NovelShelfFragment : Fragment() {
 
         // 顶部栏 / 多选操作栏
         binding.novelTvSettings.setOnClickListener {
-            DisplayOptionsSheet(displayMode, gridSize, sortByAdded) { m, s, sa -> applyDisplay(m, s, sa) }
+            DisplayOptionsSheet(
+                displayMode,
+                gridSize,
+                sortOrder,
+                supportsRecentlyRead = true,
+            ) { m, s, order -> applyDisplay(m, s, order) }
                 .show(parentFragmentManager, DisplayOptionsSheet.TAG)
         }
         binding.novelTvCloseSelection.setOnClickListener { adapter.exitSelection() }
@@ -152,18 +159,35 @@ class NovelShelfFragment : Fragment() {
         displayMode = runCatching { DisplayMode.valueOf(p.getString(KEY_DISPLAY_MODE, DisplayMode.DETAILED_LIST.name)!!) }
             .getOrDefault(DisplayMode.DETAILED_LIST)
         gridSize = p.getInt(KEY_GRID_SIZE, 3)
-        sortByAdded = p.getBoolean(KEY_SORT_ADDED, false)
+        val novelPrefs = requireContext().getSharedPreferences("novel_shelf", Context.MODE_PRIVATE)
+        sortOrder = if (novelPrefs.getBoolean(KEY_SORT_RECENT_READ, false)) {
+            DisplaySortOrder.RECENTLY_READ
+        } else if (p.getBoolean(KEY_SORT_ADDED, false)) {
+            DisplaySortOrder.ADDED
+        } else {
+            DisplaySortOrder.TITLE
+        }
     }
 
-    private fun applyDisplay(mode: DisplayMode, size: Int, sortAdded: Boolean) {
+    private fun applyDisplay(mode: DisplayMode, size: Int, order: DisplaySortOrder) {
         displayMode = mode
         gridSize = size
-        sortByAdded = sortAdded
+        sortOrder = order
         requireContext().getSharedPreferences(PREFS, Context.MODE_PRIVATE)
             .edit()
             .putString(KEY_DISPLAY_MODE, mode.name)
             .putInt(KEY_GRID_SIZE, size)
-            .putBoolean(KEY_SORT_ADDED, sortAdded)
+            // Title/added retain the existing shared sort behavior. Recently read is novel-specific.
+            .apply()
+        if (order != DisplaySortOrder.RECENTLY_READ) {
+            requireContext().getSharedPreferences(PREFS, Context.MODE_PRIVATE)
+                .edit()
+                .putBoolean(KEY_SORT_ADDED, order == DisplaySortOrder.ADDED)
+                .apply()
+        }
+        requireContext().getSharedPreferences("novel_shelf", Context.MODE_PRIVATE)
+            .edit()
+            .putBoolean(KEY_SORT_RECENT_READ, order == DisplaySortOrder.RECENTLY_READ)
             .apply()
         refresh()
     }
@@ -291,7 +315,7 @@ class NovelShelfFragment : Fragment() {
                 .filter { it.format == ImportFormat.NOVEL }
                 .map { it.toNovelPlaceholder() }
             val all = placeholders + stored.filterNot { s -> placeholders.any { it.id == s.id } }
-            val list = if (sortByAdded) all.sortedByDescending { it.addedAt } else all.sortedBy { it.title }
+            val list = NovelShelfSort.sort(all, sortOrder)
             val cols = if (displayMode == DisplayMode.GRID) gridSize else 1
             // ⚠️ 只在列数变化时重建 LayoutManager：refresh 会被进度回调高频调用，
             // 每次换 LayoutManager 会把列表滚回顶部
@@ -464,6 +488,12 @@ class NovelShelfFragment : Fragment() {
         dialog.window?.setBackgroundDrawableResource(R.drawable.dialog_background)
 
         adapter.exitSelection()
+    }
+
+    override fun onResume() {
+        super.onResume()
+        // 阅读器在另一个 Activity 中写入 lastReadAt；回来时立刻重排并刷新进度。
+        if (_binding != null) refresh()
     }
 
     override fun onDestroyView() {

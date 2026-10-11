@@ -1,4 +1,4 @@
-﻿{
+{
   "version": "1.0",
   "models": [
     {
@@ -353,7 +353,7 @@
       "family": "generic",
       "scale": 2,
       "noise": 0,
-      "prepad": 18,
+      "prepad": 10,
       "fp16Arithmetic": true,
       "blobIn": "data",
       "blobOut": "output",
@@ -405,7 +405,7 @@
       "family": "generic",
       "scale": 2,
       "noise": 0,
-      "prepad": 18,
+      "prepad": 10,
       "fp16Arithmetic": true,
       "blobIn": "data",
       "blobOut": "output",

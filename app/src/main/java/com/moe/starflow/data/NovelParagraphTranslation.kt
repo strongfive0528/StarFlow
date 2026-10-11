@@ -66,6 +66,10 @@ data class NovelFailureRow(
     val paraIndex: Int,
     val failCode: String?,
     val sourceText: String,
+    val translatorName: String? = null,
+    val sourceLang: String? = null,
+    val targetLang: String? = null,
+    val updatedAt: Long = 0L,
 )
 
 /** 章级聚合，目录面板的状态徽章用。 */
@@ -164,7 +168,8 @@ interface NovelParagraphTranslationDao {
 
     /** 失败明细（章行展开显示原因用）：只取 FAILED 行。 */
     @Query(
-        "SELECT chapterIndex, paraIndex, failCode, sourceText FROM novel_paragraph_translation " +
+        "SELECT chapterIndex, paraIndex, failCode, sourceText, translatorName, sourceLang, targetLang, updatedAt " +
+            "FROM novel_paragraph_translation " +
             "WHERE novelId = :novelId AND novelKey = :novelKey AND splitVersion = :splitVersion " +
             "AND state = 3 ORDER BY chapterIndex, paraIndex"
     )
@@ -220,6 +225,7 @@ interface NovelParagraphTranslationDao {
      */
     @Query(
         "UPDATE novel_paragraph_translation SET state = 1, translatorName = :translatorName, " +
+            "sourceLang = :sourceLang, targetLang = :targetLang, " +
             "failCode = NULL, updatedAt = :now " +
             "WHERE novelId = :novelId AND novelKey = :novelKey AND chapterIndex = :chapterIndex " +
             "AND splitVersion = :splitVersion AND paraIndex IN (:paraIndexes) AND state != 2"
@@ -231,6 +237,8 @@ interface NovelParagraphTranslationDao {
         splitVersion: Int,
         paraIndexes: List<Int>,
         translatorName: String,
+        sourceLang: String,
+        targetLang: String,
         now: Long,
     )
 

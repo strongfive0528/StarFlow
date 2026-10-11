@@ -299,6 +299,10 @@ class NovelReaderActivity : AppCompatActivity() {
      * 存在的唯一理由是防死循环：补刷 → `setText` → `requestLayout` → 又一次布局 → 又补刷……
      */
     private var lastLayoutScrollItem = -1
+    private var lastLayoutScrollLastItem = -1
+
+    /** Visible adapter range last used to calculate the scroll-mode translate controls. */
+    private var lastScrollChromeRange: IntRange? = null
 
     /**
      * **选择模式**（长按正文进入）里选中的段号，按选中顺序。
@@ -881,8 +885,10 @@ class NovelReaderActivity : AppCompatActivity() {
         binding.novelScroll.addOnLayoutChangeListener { _, _, _, _, _, _, _, _, _ ->
             if (!isScrollMode()) return@addOnLayoutChangeListener
             val first = firstVisibleScrollItem()
-            if (first == lastLayoutScrollItem) return@addOnLayoutChangeListener
+            val last = lastVisibleScrollItem()
+            if (first == lastLayoutScrollItem && last == lastLayoutScrollLastItem) return@addOnLayoutChangeListener
             lastLayoutScrollItem = first
+            lastLayoutScrollLastItem = last
             binding.novelScroll.post { updateFromScroll() }
         }
         // 手势：⚠️ 挂到 ViewPager2 **内部那个真正消费触摸的 RecyclerView** 上。
@@ -1896,6 +1902,8 @@ class NovelReaderActivity : AppCompatActivity() {
                 scrollAdapter.submit(loaded, style, textColor, bgColor)
                 // 换章/重排后一定要让 layout listener 再补刷一次进度条（防死循环的闸门要复位）
                 lastLayoutScrollItem = -1
+                lastLayoutScrollLastItem = -1
+                lastScrollChromeRange = null
                 val pos = if (atLastPage) {
                     (scrollAdapter.itemCount - 1).coerceAtLeast(0)
                 } else {
@@ -2162,6 +2170,8 @@ class NovelReaderActivity : AppCompatActivity() {
         val lm = binding.novelScroll.layoutManager as? LinearLayoutManager ?: return
         val first = lm.findFirstVisibleItemPosition()
         if (first == RecyclerView.NO_POSITION) return
+        val last = lm.findLastVisibleItemPosition().takeIf { it != RecyclerView.NO_POSITION }
+            ?.coerceAtLeast(first) ?: first
         val c = content ?: return
         val para = NovelScrollMapping.paraIndexOf(c, first) ?: return
         // ⚠️ 锚点必须带**段内比例**（首可见项已经滚过多少）：段可以长到跨屏，
@@ -2169,12 +2179,15 @@ class NovelReaderActivity : AppCompatActivity() {
         val v = lm.findViewByPosition(first)
         val scrolledPx = if (v != null) -v.top else 0
         val anchor = NovelAnchors.ofScroll(para, scrolledPx, v?.height ?: 0)
-        val moved = anchor.paraIndex != pendingAnchor.paraIndex
         pendingAnchor = anchor
         refreshOverlay()
-        // 三态按钮的判据是「当前屏幕有没有译文」—— 滚到有/没译文的区域必须跟着变。
-        // ⚠️ 只在**首可见段真的变了**时算：判据要遍历可见段（滚动回调是每帧一次的）
-        if (moved) refreshTranslationChrome()
+        // 可见范围的末尾也会变化：长段一直占着首位时，新的段仍会从屏幕底部进入/离开。
+        // 三态与翻译按钮都按整段可见范围判断，因此只盯首段会让按钮状态过期。
+        val visibleRange = first..last
+        if (visibleRange != lastScrollChromeRange) {
+            lastScrollChromeRange = visibleRange
+            refreshTranslationChrome()
+        }
     }
 
     /**
@@ -2355,7 +2368,11 @@ class NovelReaderActivity : AppCompatActivity() {
             val pages = content?.pages ?: return
             binding.novelProgress.setPage(currentPage(), pages.size)
             binding.novelProgress.setTranslatedPages(
-                translatedPagesOf(pages, content?.translatableIndexes.orEmpty(), translations.keys),
+                translatedPagesOf(
+                    pages,
+                    content?.let(::translatableIndexesOf).orEmpty(),
+                    translations.keys + imageTranslations.keys,
+                ),
             )
         }
         updateChapterTocLabel()
@@ -2367,21 +2384,29 @@ class NovelReaderActivity : AppCompatActivity() {
             ?.findFirstVisibleItemPosition()
             ?.takeIf { it != RecyclerView.NO_POSITION } ?: 0
 
+    private fun lastVisibleScrollItem(): Int =
+        (binding.novelScroll.layoutManager as? LinearLayoutManager)
+            ?.findLastVisibleItemPosition()
+            ?.takeIf { it != RecyclerView.NO_POSITION } ?: firstVisibleScrollItem()
+
     /**
      * 滚动模式下的「已翻译」格集合（进度条上的绿色区间），值与 [loadChapter] 同步刷新。
      *
      * ⚠️ 不能每次滚动都现算：滚动回调是每帧一次的，几百段遍历会白烧 CPU。
      * 单位与 [refreshOverlay] 推进度条时一致（[NovelScrollProgress] 的格）。
      */
+    private fun translatableIndexesOf(c: ChapterContent): Set<Int> =
+        if (imagesEnabled()) c.translatableIndexes + c.images.keys
+        else c.translatableIndexes - c.images.keys
+
     private fun computeScrollTranslated(c: ChapterContent): Set<Int> {
-        if (translations.isEmpty()) return emptySet()
+        val translatable = translatableIndexesOf(c)
+        val translated = translations.keys + imageTranslations.keys
         val visible = c.visibleParas
         val hits = mutableSetOf<Int>()
         for (i in visible.indices) {
             val pi = visible[i].index
-            // ⚠️ 图片段（`📷 [图片]`）与过短段按设计**永不翻译**，要求它们「有译文」的话，
-            // 含插图的书进度条永远差几格绿 —— 与 `translatedPagesOf` 同一条判据
-            if (pi !in c.translatableIndexes || translations.containsKey(pi)) hits += i
+            if (pi !in translatable || pi in translated) hits += i
         }
         return NovelScrollProgress.stepsOfItems(hits, visible.size)
     }
@@ -2458,6 +2483,8 @@ class NovelReaderActivity : AppCompatActivity() {
         binding.btnFailTranslate.visibility = if (showFail) View.VISIBLE else View.GONE
         if (showToggle) {
             binding.ivToggleTranslate.setImageResource(displayModeIcon(NovelPanelStyle.displayMode(prefs)))
+            binding.btnToggleTranslate.contentDescription = getString(R.string.novel_display_toggle_desc)
+            binding.ivToggleTranslate.contentDescription = getString(R.string.novel_display_toggle_desc)
         }
     }
 
@@ -3296,6 +3323,9 @@ class NovelReaderActivity : AppCompatActivity() {
                         focusedImagePara = null
                         refreshImageChrome()
                     }
+                    content?.let { scrollTranslated = computeScrollTranslated(it) }
+                    refreshOverlay()
+                    refreshTranslationChrome()
                 },
                 currentTranslateMode = { NovelPanelStyle.translateMode(prefs) },
                 // ⚠️ 章卡片的主按钮（用户口径）：没任务 = 翻译本章；跑着 = 暂停；暂停了 = 继续。
@@ -3486,6 +3516,7 @@ class NovelReaderActivity : AppCompatActivity() {
             lastReadChapter = chapterIndex,
             lastReadParaIndex = pendingAnchor.paraIndex,
             lastReadPage = if (isScrollMode()) 0 else currentPage(),
+            lastReadAt = System.currentTimeMillis(),
         )
         book = updated
         NovelStore.update(this, updated)

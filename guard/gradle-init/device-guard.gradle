@@ -16,19 +16,15 @@
  *   - anything starting with "connected" -> UTP uninstalls the app under test
  *   - anything containing "manageddevice" -> same semantics
  *
- * To deliberately run one (e.g. on a disposable test device), opt in explicitly:
- *   PowerShell : $env:ALLOW_DEVICE_UNINSTALL='1'
- *   bash       : ALLOW_DEVICE_UNINSTALL=1
- * Opting in still prints a loud warning listing what is about to be destroyed.
+ * There is no environment-variable bypass. Use an emulator with a separate
+ * applicationId for device tests; this guard must never uninstall this package.
  *
  * NOTE: text is intentionally English -- the Windows Gradle console is GBK and
  *       mangles Chinese, and a safety message that cannot be read is useless.
  *
- * This script never breaks the build on its own errors: failures are downgraded
- * to warnings, so a bug here cannot brick every Gradle build on the machine.
+ * This script fails closed: if the guard itself cannot inspect the task graph,
+ * Gradle stops rather than risk running an uninstalling task.
  */
-
-def ALLOW = System.getenv('ALLOW_DEVICE_UNINSTALL') == '1'
 
 def reasonOf = { String name ->
     def n = name.toLowerCase()
@@ -43,38 +39,21 @@ gradle.taskGraph.whenReady { graph ->
         def risky = graph.allTasks.findAll { reasonOf(it.name) != null }
         if (risky.isEmpty()) return
 
-        if (!ALLOW) {
-            def sb = new StringBuilder()
-            sb.append('\n')
-            sb.append('=' * 78).append('\n')
-            sb.append('  BLOCKED: this task uninstalls the app and deletes its data\n')
-            sb.append('=' * 78).append('\n')
-            risky.each { t ->
-                sb.append("  task   : ${t.path}\n")
-                sb.append("  reason : ${reasonOf(t.name)}\n")
-            }
-            sb.append('\n')
-            sb.append('  Real incident 2026-09-30: running this against a phone with real data\n')
-            sb.append('  wiped the shelf, translation history and all settings, with no backup.\n')
-            sb.append('  AGP uninstalls first; when the install was blocked there was no rollback.\n')
-            sb.append('\n')
-            sb.append('  If you really need it:\n')
-            sb.append('    1) use a device with no real data, or\n')
-            sb.append('    2) back up first:  pwsh guard/backup-app.ps1\n')
-            sb.append('    3) then opt in:    ALLOW_DEVICE_UNINSTALL=1   (env var) and re-run\n')
-            sb.append('=' * 78).append('\n')
-            throw new GradleException(sb.toString())
+        def sb = new StringBuilder()
+        sb.append('\n')
+        sb.append('=' * 72).append('\n')
+        sb.append('  BLOCKED: this Gradle task may uninstall the app and erase its data\n')
+        sb.append('=' * 72).append('\n')
+        risky.each { t ->
+            sb.append("  ${t.path} — ${reasonOf(t.name)}\n")
         }
-
-        logger.lifecycle('\n' + '!' * 78)
-        logger.lifecycle('  ALLOW_DEVICE_UNINSTALL=1 -> proceeding with DESTRUCTIVE task(s):')
-        risky.each { t -> logger.lifecycle("    ${t.path}") }
-        logger.lifecycle("  ${reasonOf(risky[0].name)}")
-        logger.lifecycle('  This WILL remove app data and cannot be undone.')
-        logger.lifecycle('!' * 78 + '\n')
+        sb.append('\n  Use local JVM tests or a disposable emulator with a separate package.\n')
+        sb.append('  This guard has no bypass.\n')
+        sb.append('=' * 72).append('\n')
+        throw new GradleException(sb.toString())
     } catch (GradleException ge) {
         throw ge
     } catch (Throwable t) {
-        logger.warn("device-guard.gradle internal error (ignored, build continues): ${t}")
+        throw new GradleException("device-guard failed closed; refusing to run the task graph: ${t}", t)
     }
 }

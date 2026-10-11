@@ -24,9 +24,9 @@
 
 ---
 
-# 一、快速了解
+## 一、快速了解
 
-## 这是什么
+### 这是什么
 
 StarFlow 是一个 Android 端的 OCR 翻译应用：识别画面或图片中的文字，翻译后把译文渲染回原来的位置。
 
@@ -39,7 +39,7 @@ StarFlow 是一个 Android 端的 OCR 翻译应用：识别画面或图片中的
 
 前两者属于**截屏翻译**（截图后处理当前画面）；阅读器与文本翻译直接处理文件或输入内容，与截图无关。四种场景共用同一套 OCR 引擎与翻译引擎，见「[三、机制说明](#三机制说明)」。
 
-## 下载安装
+### 下载安装
 
 | 方式 | 链接 |
 |------|------|
@@ -51,7 +51,7 @@ Android 10 及以上、64 位 ARM 设备。PP-OCRv6 small 已内置在 APK 中�
 
 首次启动会引导授予截图 / 悬浮窗权限并配置翻译 API；应用内可检查 GitHub Releases 更新（也可从上面的网盘下载）；启动时会检查开发者公告；常见问题见应用内 FAQ 页面。
 
-## 亮点速览
+### 亮点速览
 
 1. **开源无广告** — 采用 LGPL 协议，源码公开、可自行编译审计；不含广告、内购与账号体系，亦未集成统计 SDK。
 2. **日漫专用识别** — 集成 manga-ocr，面向日漫竖排文本训练，与 RT-DETR-V2 气泡检测配合使用。
@@ -66,9 +66,9 @@ Android 10 及以上、64 位 ARM 设备。PP-OCRv6 small 已内置在 APK 中�
 
 ---
 
-# 二、使用指南
+## 二、使用指南
 
-## 游戏 / 视频翻译
+### 游戏 / 视频翻译
 
 <p align="center">
   <img src="images/game_demo.gif" width="360" alt="游戏翻译">
@@ -105,7 +105,7 @@ Android 10 及以上、64 位 ARM 设备。PP-OCRv6 small 已内置在 APK 中�
 | **MediaProjection**（默认） | 弹窗授权，重启应用后需重新授权 | 日常使用 |
 | **AccessibilityService** | 手动开启，授权长期有效 | 需要频繁截图时 |
 
-## 漫画翻译
+### 漫画翻译
 
 漫画与游戏使用不同的处理路径：漫画需要气泡级检测、竖排文字识别，并按气泡区域排版回填，还要处理同一句话被切成多行 / 多列的情况。
 
@@ -144,7 +144,7 @@ Android 10 及以上、64 位 ARM 设备。PP-OCRv6 small 已内置在 APK 中�
   <em>漫画翻译 &nbsp;|&nbsp; 稳定性检测 &nbsp;|&nbsp; 缓存命中</em>
 </p>
 
-## 漫画书架与阅读器
+### 漫画书架与阅读器
 
 **书架**：导入 zip / cbz 或图片目录（复制到应用专属目录），自动生成封面；支持简介、重命名、换封面、已读标记、多选删除、下拉刷新，以及列表 / 网格两种显示。导入有进度卡片可取消；文件被外部删除会标记「文件丢失」；删除含译文的漫画前会提示并可先去导出。
 
@@ -163,7 +163,7 @@ Android 10 及以上、64 位 ARM 设备。PP-OCRv6 small 已内置在 APK 中�
 
 **打包下载**：原文 / 译文（仅已翻译页）/ 双语三种压缩包，命名沿用原压缩包中的页序号。
 
-## 文本与对话翻译
+### 文本与对话翻译
 
 独立文本翻译页面：流式输出实时显示翻译进度，最近记录分页与快速复制，语言选择跨页面保留。源语言不受 OCR 引擎限制（30 种全部可选），目标语言按所选翻译模型过滤。
 
@@ -171,11 +171,11 @@ Android 10 及以上、64 位 ARM 设备。PP-OCRv6 small 已内置在 APK 中�
 
 ---
 
-# 三、机制说明
+## 三、机制说明
 
 四种翻译场景共用同一套翻译引擎与 OCR 引擎，也共用「译文文本 + 气泡坐标」这一份数据模型与全局渲染设置。**图片缓存与历史记录只属于截屏路径**（游戏 / 视频翻译、漫画浮窗），阅读器与文本翻译不使用它们。
 
-## 翻译引擎
+### 翻译引擎
 
 **本地引擎**（离线推理，文本不离开设备）
 
@@ -205,7 +205,7 @@ Android 10 及以上、64 位 ARM 设备。PP-OCRv6 small 已内置在 APK 中�
 - **AI 上下文** — 游戏模式可携带最近若干轮（5–20，可配置）的历史翻译对，提升剧情连贯性；漫画模式仅在增量渲染的两批之间使用
 - 思考模式三态可配置（跟随模型 / 强制关闭 / 强制开启），避免部分网关因不支持的参数返回错误
 
-## OCR 引擎
+### OCR 引擎
 
 | 模型 | 用途 | 大小 | 来源 |
 |------|------|------|------|
@@ -219,7 +219,7 @@ Android 10 及以上、64 位 ARM 设备。PP-OCRv6 small 已内置在 APK 中�
 
 只内置 PP-OCRv6 small，其余模型在模型管理页按需下载（支持断点续传、自动重试与 MD5 校验）；下载页按「引擎组合」分组，未下载的组合置灰并提示所需模型。PP-OCRv5 / v6 的检测参数（置信度阈值、扩展比例、大框过滤等）可在开发者选项的调试面板中实时调节。
 
-## 缓存与翻译历史
+### 缓存与翻译历史
 
 本节属于截屏路径（游戏 / 视频翻译、漫画浮窗）。阅读器内嵌翻译不走截图，它按页把翻译结果写入数据库，并使用独立的内存渲染缓存。
 
@@ -249,7 +249,7 @@ Android 10 及以上、64 位 ARM 设备。PP-OCRv6 small 已内置在 APK 中�
 - **重新翻译** — 加载原始截图重新 OCR → 翻译 → 渲染，替换原有变体，无需启动翻译服务
 - **打包下载** — 按进程组导出 ZIP 到系统「下载」目录（写入失败时回退系统文件选择器）
 
-## 译文数据与渲染
+### 译文数据与渲染
 
 截屏路径与阅读器内嵌翻译都只持久化「译文文本 + 每页气泡坐标」（分别写入历史库与每页翻译记录），不落盘渲染后的译文位图。因此：
 
@@ -264,7 +264,7 @@ Android 10 及以上、64 位 ARM 设备。PP-OCRv6 small 已内置在 APK 中�
 - **重叠白块合并** — 译文白块互相重叠时合并为一个块（默认关闭）
 - **省略号不拆行** — 模型偶尔会把译文写成多行（`.\n.\n.`），渲染前会将这些换行接回同一行，且排版时点串整体不拆分，避免「每行一个点」占满气泡、导致字号被压缩
 
-## 全局设置项
+### 全局设置项
 
 | 设置 | 位置 | 说明 |
 |------|------|------|
@@ -275,7 +275,7 @@ Android 10 及以上、64 位 ARM 设备。PP-OCRv6 small 已内置在 APK 中�
 | 悬浮球手势 | 个性化设置 → 悬浮球 | 单击 / 双击 / 长按的动作分配、长按判定时间 |
 | 自动翻译参数 | 个性化设置 → 自动翻译 | 像素变化阈值与检测间隔 |
 
-## 自动翻译与稳定性检测
+### 自动翻译与稳定性检测
 
 - **像素驱动检测** — 按 YIQ 感知色彩差异判断画面变化，画面稳定的页面不重复 OCR
 - **翻页稳定性检测** — 检测到画面变化后等待画面静止再触发翻译，适用于游戏与漫画翻页
@@ -285,9 +285,9 @@ Android 10 及以上、64 位 ARM 设备。PP-OCRv6 small 已内置在 APK 中�
 
 ---
 
-# 四、开发
+## 四、开发
 
-## 环境要求
+### 环境要求
 
 | 项 | 版本 | 说明 |
 |----|------|------|
@@ -297,7 +297,7 @@ Android 10 及以上、64 位 ARM 设备。PP-OCRv6 small 已内置在 APK 中�
 | CMake | 3.22.1 | 在 SDK Manager 中勾选安装 |
 | 架构 | **仅 arm64-v8a** | 64 位 ARM 真机；x86 模拟器无法运行 |
 
-## 首次配置
+### 首次配置
 
 1. **`local.properties`**（已 gitignore，指向本机的 Android SDK，路径使用正斜杠）：
    ```properties
@@ -316,7 +316,7 @@ Android 10 及以上、64 位 ARM 设备。PP-OCRv6 small 已内置在 APK 中�
    详见「原生代码与模型」一节。
 4. 验证：`./gradlew assembleDebug`
 
-## 常用命令
+### 常用命令
 
 ```bash
 ./gradlew assembleDebug                    # debug APK（首次需编译 C++，之后为增量构建）
@@ -336,7 +336,7 @@ adb logcat --pid=$(adb shell pidof com.moe.starflow)      # 实时日志
 
 应用内提供**开发者选项**（4 个引擎的调试浮窗与参数实时调节、缓存命中标记开关）与**日志导出**，便于定位问题。
 
-## 单元测试
+### 单元测试
 
 ```bash
 ./gradlew test                                    # 全部单元测试（JUnit + Robolectric）
@@ -345,11 +345,11 @@ adb logcat --pid=$(adb shell pidof com.moe.starflow)      # 实时日志
 
 Robolectric 的 SDK 统一配置在 `app/src/test/resources/robolectric.properties`（`sdk=34`）。
 
-## 原生代码与模型
+### 原生代码与模型
 
 原生代码分两个模块：
 
-- **`:llamacpp`** — llama.cpp 源码随 submodule 一起编译，产出 `libllamacpp.so`。**首次编译前必须在仓库根目录执行 `llamacpp/setup-submodule.ps1`**：llama.cpp 是**官方仓库**（pin 在 `1e411d8f`），源码不进本仓库；脚本会在 `llamacpp/src/main/cpp/llama.cpp` 放一份独立 clone，并配好 `core.longpaths` 与 sparse-checkout（排除 `tools/ examples/ docs/ tests/`，否则 Windows 下路径过长会 checkout 失败）。⚠️ 不要改用 `git submodule update --init`（同样会因长路径失败）；`git submodule status` 显示 `-<sha>` 是正常的，不影响构建。
+- **`:llamacpp`** — llama.cpp 由固定 gitlink 记录提交，构建产出 `libllamacpp.so`。首次构建前运行 `pwsh llamacpp/setup-submodule.ps1`；脚本在 gitlink 路径创建上游源码的稀疏检出，并启用 Windows 长路径支持。该目录由脚本维护，不要先运行 `git submodule update`，以免产生不兼容的 `.git` 布局。
 - **`:app`** — `app/src/main/cpp/` 走 CMake，保留 ONNX Runtime 与 sentencepiece 桥接。
 
 其余：
@@ -358,11 +358,11 @@ Robolectric 的 SDK 统一配置在 `app/src/test/resources/robolectric.properti
 - release 构建启用了 `minifyEnabled` 与 `shrinkResources`，JNI 回调接口由 `proguard-rules.pro` 的 `-keep` 规则保护 —— **修改 native 回调接口名时需同步修改 keep 规则**，否则会出现 debug 正常、release 崩溃
 - release 包只含 `libllamacpp.so` 与 `libc++_shared.so` 两个 native 库
 
-## 发布
+### 发布
 
-`app/build.gradle` 的 release 目前复用 debug 签名（无需额外 keystore），`./gradlew assembleRelease` 即可产出可安装包；正式发布走 GitHub Releases（应用内「检查更新」依赖 Release 的 APK 资产与说明中的网盘链接）。
+构建 APK/AAB 前需按 [`guard/README.md`](guard/README.md) 配置共享 keystore；debug 和 release 使用同一签名，未配置时构建会失败。正式发布走 GitHub Releases，应用内「检查更新」依赖 Release 的 APK 资产与说明中的网盘链接。
 
-## 项目结构
+### 项目结构
 
 ```
 app/src/main/java/
@@ -405,11 +405,11 @@ app/src/main/java/
 
 ---
 
-# 致谢
+## 致谢
 
 本项目 forked 自 [MoeTranslate](https://github.com/murangogo/MoeTranslate)。
 
-## 参考项目
+### 参考项目
 
 - [RapidOCR](https://github.com/RapidAI/RapidOCR) — 跨平台 OCR 推理
 - [RT-DETR](https://github.com/lyuwenyu/RT-DETR) — 实时目标检测 Transformer
@@ -422,6 +422,6 @@ app/src/main/java/
 
 ---
 
-# 许可证
+## 许可证
 
 LGPL — 详见 [licenses/](licenses/) 目录。第三方库许可证见各项目主页。

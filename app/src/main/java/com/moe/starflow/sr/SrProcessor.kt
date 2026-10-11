@@ -30,13 +30,23 @@ object SrProcessor {
     }
     suspend fun enhanceAndStore(context: Context,mangaId: Long,page: Int,src: Bitmap,mangaKey: String,
         request: SrRequest=SrRequest.capture(context,PreferenceManager.getDefaultSharedPreferences(context)),
-        runId: Long=SrRequest.nextRunId.incrementAndGet(),execution: JSONObject=request.describe()): SrOutcome = withContext(Dispatchers.IO) {
+        runId: Long=SrRequest.nextRunId.incrementAndGet(),execution: JSONObject=request.describe(),
+        expectedGeneration: Long=SrStore.generation(mangaId,page,mangaKey)): SrOutcome = withContext(Dispatchers.IO) {
         val begin=System.nanoTime()
         val k=key(mangaId,page,mangaKey)
         val job=currentCoroutineContext()[Job]!!
-        val generation=SrStore.generation(mangaId,page,mangaKey)
         execution.put("runId",runId).put("srcWidth",src.width).put("srcHeight",src.height)
+        // The generation belongs to the decoded source. A page deletion between decode and
+        // engine registration must invalidate this request instead of letting it adopt the new generation.
+        if(SrStore.generation(mangaId,page,mangaKey)!=expectedGeneration)
+            return@withContext SrOutcome.fail(SrFailReason.CANCELLED)
         if(inFlight.putIfAbsent(k,job)!=null)return@withContext SrOutcome.fail(SrFailReason.BUSY)
+        // Pair with deletePage's generation bump followed by cancelPage: if deletion landed
+        // just before registration, reject here; if it lands after, cancelPage sees this job.
+        if(SrStore.generation(mangaId,page,mangaKey)!=expectedGeneration) {
+            inFlight.remove(k,job)
+            return@withContext SrOutcome.fail(SrFailReason.CANCELLED)
+        }
         var feed: Bitmap=src
         var output: Bitmap?=null
         var engine: NcnnSrEngine?=null
@@ -87,7 +97,7 @@ object SrProcessor {
             stage="saving";time=System.nanoTime()
             execution.put("totalMs",elapsed(begin)+execution.optLong("decodeMs"))
             val saved=SrStore.save(context,mangaId,page,product,request.model!!.name,mangaKey,
-                prefs.getInt(KEY_CACHE_LIMIT_MB,SrStore.DEFAULT_LIMIT_MB),request.fingerprint,execution,generation) {job.isActive}
+                prefs.getInt(KEY_CACHE_LIMIT_MB,SrStore.DEFAULT_LIMIT_MB),request.fingerprint,execution,expectedGeneration) {job.isActive}
             execution.put("saveMs",elapsed(time))
             if(!saved) {ensureActive();return@withContext SrOutcome.fail(SrFailReason.SAVE_FAILED,"atomic output commit failed")}
             SrOutcome.stored()

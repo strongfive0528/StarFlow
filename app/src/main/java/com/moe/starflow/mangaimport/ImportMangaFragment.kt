@@ -31,6 +31,7 @@ import com.moe.starflow.mangaimport.data.StorageDirStore
 import com.moe.starflow.mangaimport.reader.MangaReaderActivity
 import com.moe.starflow.mangaimport.ui.DisplayMode
 import com.moe.starflow.mangaimport.ui.DisplayOptionsSheet
+import com.moe.starflow.mangaimport.ui.DisplaySortOrder
 import com.moe.starflow.mangaimport.ui.ImportDialog
 import com.moe.starflow.mangaimport.ui.MangaGridAdapter
 import com.moe.starflow.novel.shelf.NovelShelfFragment
@@ -159,8 +160,12 @@ class ImportMangaFragment : Fragment() {
         }
 
         binding.tvSettings.setOnClickListener {
-            DisplayOptionsSheet(displayMode, gridSize, sortByAdded) { m, s, sa ->
-                applyDisplay(m, s, sa)
+            DisplayOptionsSheet(
+                displayMode,
+                gridSize,
+                if (sortByAdded) DisplaySortOrder.ADDED else DisplaySortOrder.TITLE,
+            ) { m, s, sort ->
+                applyDisplay(m, s, sort == DisplaySortOrder.ADDED)
             }.show(parentFragmentManager, DisplayOptionsSheet.TAG)
         }
 

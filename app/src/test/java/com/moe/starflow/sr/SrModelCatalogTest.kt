@@ -135,7 +135,7 @@ class SrModelCatalogTest {
         val familyOf = mapOf(
             ModelKey.SR_REALCUGAN_SE to "realcugan",
             ModelKey.SR_REALCUGAN_PRO to "realcugan",
-            ModelKey.SR_REALCUGAN_NOSE to "generic",
+            ModelKey.SR_REALCUGAN_NOSE to "realcugan",
             ModelKey.SR_WAIFU2X_CUNET to "waifu2x",
             ModelKey.SR_WAIFU2X_FAST to "waifu2x",
             ModelKey.SR_REALESRGAN to "realesrgan",
@@ -164,7 +164,7 @@ class SrModelCatalogTest {
                 assertTrue("$n 同时属于 $prev 与 $key —— 同一目录会互相覆盖", prev == null)
             }
         }
-        // 参数逐档核对：Nose 走通用入口、SPAN padding 24、W2xEX/sudo padding 10（都是参照项目的值）
+        // 参数逐档核对：CUGAN Nose padding 18、SPAN padding 24、W2xEX/sudo padding 10（参照项目的值）
         assertEquals(18, byKey.getValue(ModelKey.SR_REALCUGAN_NOSE.name).getInt("prepad"))
         assertEquals(24, byKey.getValue(ModelKey.SR_SPAN_NOMOSUNI.name).getInt("prepad"))
         for (k in listOf(ModelKey.SR_W2XEX_UNIVERSAL_FAST, ModelKey.SR_W2XEX_OMNI_MINI_V2,

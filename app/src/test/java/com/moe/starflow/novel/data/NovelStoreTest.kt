@@ -48,6 +48,7 @@ class NovelStoreTest {
             lastReadChapter = 2,
             lastReadParaIndex = 500,
             lastReadPage = 7,
+            lastReadAt = 1_700_000_000_000,
         )
         NovelStore.save(ctx, listOf(n))
         assertEquals(listOf(n), NovelStore.load(ctx))
@@ -117,6 +118,17 @@ class NovelStoreTest {
                 """[{"id":1,"title":"x","localRoot":"/tmp/1","format":"MOBI","addedAt":5,"chapterCount":1}]""",
             ).apply()
         assertEquals(NovelFormat.TXT, NovelStore.load(ctx).single().format)
+    }
+
+    @Test
+    fun `旧书架条目没有最近阅读时间时回退为零`() {
+        ctx.getSharedPreferences("novel_shelf", Context.MODE_PRIVATE)
+            .edit().putString(
+                "imported_novel_list",
+                """[{"id":1,"title":"x","localRoot":"/tmp/1","format":"TXT","addedAt":5,"chapterCount":1}]""",
+            ).apply()
+
+        assertEquals(0, NovelStore.load(ctx).single().lastReadAt)
     }
 
     /**

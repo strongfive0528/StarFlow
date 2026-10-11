@@ -60,6 +60,7 @@
 
         <RadioButton android:id="@+id/rb_sort_title" android:layout_width="0dp" android:layout_height="wrap_content" android:layout_weight="1" android:text="@string/sort_title"/>
         <RadioButton android:id="@+id/rb_sort_added" android:layout_width="0dp" android:layout_height="wrap_content" android:layout_weight="1" android:text="@string/sort_added"/>
+        <RadioButton android:id="@+id/rb_sort_recent_read" android:layout_width="0dp" android:layout_height="wrap_content" android:layout_weight="1" android:text="@string/sort_recent_read"/>
 
     </RadioGroup>
 

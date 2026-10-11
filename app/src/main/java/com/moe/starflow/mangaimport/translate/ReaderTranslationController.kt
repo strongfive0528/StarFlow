@@ -257,6 +257,8 @@ class ReaderTranslationController(
     private val srRows = MutableStateFlow<Map<Int, ImportedPageSr>>(emptyMap())
     /** 串行化超分记录的初次载入与运行中写入，避免旧 DB 快照覆盖刚完成的页。 */
     private val srRowsMutex = Mutex()
+    /** 串行化超分开始/解码失败记录与删除，避免删除后迟到任务重新写入记录。 */
+    private val srLifecycleMutex = Mutex()
 
     // No neighbour preload. SR is submitted only by a page action, its OCR/translation, or a chapter action.
 
@@ -618,39 +620,46 @@ class ReaderTranslationController(
      * 用户口径（2026-10）：「超分之后…同样可以删除超分结果」。
      */
     suspend fun deleteSrResult(pageIndex: Int, dropRecord: Boolean = false): Boolean {
-        srAttemptIds.remove(pageIndex)
-        autoSrJobs.remove(pageIndex)?.cancel()
-        SrProcessor.cancelPage(manga.id,pageIndex,mangaKey)
-        val deleted = withContext(Dispatchers.IO) { SrStore.deletePage(context, manga.id, pageIndex, mangaKey) }
-        if(!deleted) {
-            upsertSrRow(pageIndex) {it.copy(state=ImportedPageSr.STATE_FAILED,failCode="DELETE_FAILED",failMessage=context.getString(R.string.sr_fail_delete),finishedAtMs=System.currentTimeMillis())}
-            withContext(Dispatchers.Main){onSrNotice(context.getString(R.string.sr_fail_delete),true)}
-            return false
-        }
-        srArtifacts.remove(pageIndex)
-        srBaseLru.remove(pageIndex)
-        srModelByPage.remove(pageIndex)
-        // 没有超分结果了 → 自然回落原图（留着 true 也没用，但没有结果时 baseSig 本来就是 o）
-        srVisualByPage.remove(pageIndex)
-        evictPageRenders(pageIndex)
-        clearWebtoonCache()
-        // 记录同步：面板行内的「删除」要连记录一起清掉（否则删完文件还留着一行「完成」）；
-        // 右下角那枚删除按钮走默认（记录退回「未超分」，面板上仍能看到"这页超过、现在没了"）。
-        if (dropRecord) {
-            srRowsMutex.withLock {
-                srRows.update { it - pageIndex }
-                runCatching { srDao.deletePage(manga.id, mangaKey, pageIndex) }
-                    .onFailure { LogCollector.e(TAG, "删除超分记录失败 page=$pageIndex", it) }
-                srVersion.value += 1
+        srLifecycleMutex.lock()
+        try {
+            // Invalidate storage first, then cancel. SrProcessor checks the captured generation
+            // after registering itself, closing the gap where cancellation used to miss a new job.
+            srAttemptIds.remove(pageIndex)
+            autoSrJobs.remove(pageIndex)?.cancel()
+            val deleted = withContext(Dispatchers.IO) { SrStore.deletePage(context, manga.id, pageIndex, mangaKey) }
+            SrProcessor.cancelPage(manga.id,pageIndex,mangaKey)
+            if(!deleted) {
+                upsertSrRow(pageIndex) {it.copy(state=ImportedPageSr.STATE_FAILED,failCode="DELETE_FAILED",failMessage=context.getString(R.string.sr_fail_delete),finishedAtMs=System.currentTimeMillis())}
+                withContext(Dispatchers.Main){onSrNotice(context.getString(R.string.sr_fail_delete),true)}
+                return false
             }
-        } else {
-            upsertSrRow(pageIndex) {
-                it.copy(state = ImportedPageSr.STATE_IDLE, failCode = null, failMessage = null)
+            srArtifacts.remove(pageIndex)
+            srBaseLru.remove(pageIndex)
+            srModelByPage.remove(pageIndex)
+            // 没有超分结果了 → 自然回落原图（留着 true 也没用，但没有结果时 baseSig 本来就是 o）
+            srVisualByPage.remove(pageIndex)
+            evictPageRenders(pageIndex)
+            clearWebtoonCache()
+            // 记录同步：面板行内的「删除」要连记录一起清掉（否则删完文件还留着一行「完成」）；
+            // 右下角那枚删除按钮走默认（记录退回「未超分」，面板上仍能看到"这页超过、现在没了"）。
+            if (dropRecord) {
+                srRowsMutex.withLock {
+                    srRows.update { it - pageIndex }
+                    runCatching { srDao.deletePage(manga.id, mangaKey, pageIndex) }
+                        .onFailure { LogCollector.e(TAG, "删除超分记录失败 page=$pageIndex", it) }
+                    srVersion.value += 1
+                }
+            } else {
+                upsertSrRow(pageIndex) {
+                    it.copy(state = ImportedPageSr.STATE_IDLE, failCode = null, failMessage = null)
+                }
             }
+            withContext(Dispatchers.Main) { if (uiAttached) onVisual() }
+            LogCollector.d(TAG, "删除超分结果 page=$pageIndex ok=$deleted dropRecord=$dropRecord")
+            return deleted
+        } finally {
+            srLifecycleMutex.unlock()
         }
-        withContext(Dispatchers.Main) { if (uiAttached) onVisual() }
-        LogCollector.d(TAG, "删除超分结果 page=$pageIndex ok=$deleted dropRecord=$dropRecord")
-        return deleted
     }
 
     /**
@@ -718,18 +727,14 @@ class ReaderTranslationController(
     private suspend fun enhancePage(pageIndex: Int, request: SrRequest=SrRequest.capture(context,appPrefs)): SrOutcome {
         if (!SrSettings.isEnabledForReader(appPrefs)) return SrOutcome.fail(SrFailReason.DISABLED)
         val decodeStarted=System.currentTimeMillis()
-        val src = loadSrSource(pageIndex,request,decodeStarted) ?: return SrOutcome.fail(
+        val expectedGeneration=captureSrStoreGeneration(pageIndex)
+        val src = loadSrSource(pageIndex,request,decodeStarted,expectedGeneration) ?: return SrOutcome.fail(
             runCatching {SrFailReason.valueOf(srRows.value[pageIndex]?.failCode.orEmpty())}.getOrDefault(SrFailReason.PAGE_LOAD_FAILED))
         val outcome = try {
-            runSr(pageIndex, src,request,(System.currentTimeMillis()-decodeStarted).coerceAtLeast(0L))
+            runSr(pageIndex, src,request,(System.currentTimeMillis()-decodeStarted).coerceAtLeast(0L),expectedGeneration)
         } finally {
             // 原图是本次现解码的（`loadFull` 纯解码）→ 用完必须回收
             if (!src.isRecycled) src.recycle()
-        }
-        if (outcome.ok) {
-            // 超分完成后默认显示在超分底图上（用户口径）
-            srVisualByPage[pageIndex] = true
-            srModelByPage[pageIndex] = SrStore.storedModelOrNull(context,manga.id,pageIndex,mangaKey).orEmpty()
         }
         return outcome
     }
@@ -747,6 +752,10 @@ class ReaderTranslationController(
     private val autoSrJobs=ConcurrentHashMap<Int,Job>()
     private fun bindSrPages() {
         SrStore.bindPages(manga.id,mangaKey,(0 until ownSource.size).map { ownSource.key(it) ?: "page:$it" })
+    }
+    private fun captureSrStoreGeneration(page: Int): Long {
+        bindSrPages()
+        return SrStore.generation(manga.id,page,mangaKey)
     }
     private suspend fun refreshSrArtifacts() = withContext(Dispatchers.IO) {
         if(srRows.value.isEmpty() && srModelByPage.isEmpty() && !SrStore.bookHasArtifacts(context,manga.id,mangaKey))return@withContext
@@ -781,17 +790,27 @@ class ReaderTranslationController(
         if(srStoreObserver?.isActive==true)return
         srStoreObserver=scope.launch(Dispatchers.IO) {SrStore.version.collect {refreshSrArtifacts()} }
     }
-    private suspend fun runSr(page: Int,src: Bitmap,request: SrRequest=SrRequest.capture(context,appPrefs),decodeMs: Long=0L): SrOutcome {
+    private suspend fun runSr(page: Int,src: Bitmap,request: SrRequest=SrRequest.capture(context,appPrefs),decodeMs: Long=0L,
+        expectedGeneration: Long): SrOutcome {
         bindSrPages()
         val runId=SrRequest.nextRunId.incrementAndGet()
-        if(srAttemptIds.putIfAbsent(page,runId)!=null)return SrOutcome.fail(SrFailReason.BUSY)
         val started=System.currentTimeMillis()
         val execution=request.describe().put("runId",runId).put("startedAtMs",started).put("decodeMs",decodeMs)
         var outcome=SrOutcome.fail(SrFailReason.CANCELLED)
+        var registered=false
         try {
-            markSrRunning(page,src,started,request,execution)
+            srLifecycleMutex.lock()
+            try {
+                if(SrStore.generation(manga.id,page,mangaKey)!=expectedGeneration)
+                    return SrOutcome.fail(SrFailReason.CANCELLED)
+                if(srAttemptIds.putIfAbsent(page,runId)!=null)return SrOutcome.fail(SrFailReason.BUSY)
+                registered=true
+                markSrRunning(page,src,started,request,execution)
+            } finally {
+                srLifecycleMutex.unlock()
+            }
             outcome=withSrRunningNotice(page) {
-                SrProcessor.enhanceAndStore(context,manga.id,page,src,mangaKey,request,runId,execution)
+                SrProcessor.enhanceAndStore(context,manga.id,page,src,mangaKey,request,runId,execution,expectedGeneration)
             }
             return outcome
         } catch(e: CancellationException) {
@@ -799,34 +818,47 @@ class ReaderTranslationController(
             if(committed)outcome=SrOutcome.stored()
             throw e
         } finally {
-            withContext(NonCancellable) {
-                if(srAttemptIds[page]==runId) {
-                    markSrFinished(page,outcome,started,execution)
-                    val info=SrStore.infoOf(context,manga.id,page,mangaKey)
-                    if(info!=null) {srArtifacts[page]=info;srModelByPage[page]=info.model}
-                    if(outcome.ok) {srVisualByPage[page]=true;onBaseChanged(page)}
-                    srVersion.value+=1
-                    srAttemptIds.remove(page,runId)
+            if(registered)withContext(NonCancellable) {
+                srLifecycleMutex.lock()
+                try {
+                    if(srAttemptIds[page]==runId) {
+                        markSrFinished(page,outcome,started,execution)
+                        val info=SrStore.infoOf(context,manga.id,page,mangaKey)
+                        if(info!=null) {srArtifacts[page]=info;srModelByPage[page]=info.model}
+                        if(outcome.ok)srVisualByPage[page]=true
+                        srVersion.value+=1
+                        srAttemptIds.remove(page,runId)
+                        if(outcome.ok)onBaseChanged(page)
+                    }
+                } finally {
+                    srLifecycleMutex.unlock()
                 }
             }
         }
     }
-    private suspend fun loadSrSource(page: Int,request: SrRequest,started: Long): Bitmap? {
+    private suspend fun loadSrSource(page: Int,request: SrRequest,started: Long,expectedGeneration: Long): Bitmap? {
         var decoded: Bitmap?=null
         try {
             withContext(Dispatchers.IO) {ensureActive();decoded=loadFull(page);ensureActive()}
-            if(decoded==null)recordSrLoadFailure(page,request,started)
+            if(decoded==null)recordSrLoadFailure(page,request,started,expectedGeneration=expectedGeneration)
             return decoded
         } catch(e: CancellationException) {decoded?.let {if(!it.isRecycled)it.recycle()};throw e}
-          catch(e: OutOfMemoryError) {recordSrLoadFailure(page,request,started,"decoding: memory allocation failed",SrFailReason.OUT_OF_MEMORY);return null}
-          catch(e: Exception) {recordSrLoadFailure(page,request,started,"${e.javaClass.simpleName}: ${e.message}");return null}
+          catch(e: OutOfMemoryError) {recordSrLoadFailure(page,request,started,"decoding: memory allocation failed",SrFailReason.OUT_OF_MEMORY,expectedGeneration);return null}
+          catch(e: Exception) {recordSrLoadFailure(page,request,started,"${e.javaClass.simpleName}: ${e.message}",expectedGeneration=expectedGeneration);return null}
     }
-    private suspend fun recordSrLoadFailure(page: Int,request: SrRequest,started: Long,detail: String?=null,reason: SrFailReason=SrFailReason.PAGE_LOAD_FAILED) {
+    private suspend fun recordSrLoadFailure(page: Int,request: SrRequest,started: Long,detail: String?=null,
+        reason: SrFailReason=SrFailReason.PAGE_LOAD_FAILED,expectedGeneration: Long) {
         val elapsed=(System.currentTimeMillis()-started).coerceAtLeast(0L)
-        upsertSrRow(page) {it.copy(state=ImportedPageSr.STATE_FAILED,modelName=request.model?.name,
-            failCode=reason.name,failMessage=context.getString(reason.messageRes)+(detail?.let { "\n$it" } ?: ""),
-            startedAtMs=started,finishedAtMs=System.currentTimeMillis(),sourcePageKey=ownSource.key(page),
-            executionJson=request.describe().put("totalMs",elapsed).put("decodeMs",elapsed).put("stage","decoding").toString())}
+        srLifecycleMutex.lock()
+        try {
+            if(SrStore.generation(manga.id,page,mangaKey)!=expectedGeneration)return
+            upsertSrRow(page) {it.copy(state=ImportedPageSr.STATE_FAILED,modelName=request.model?.name,
+                failCode=reason.name,failMessage=context.getString(reason.messageRes)+(detail?.let { "\n$it" } ?: ""),
+                startedAtMs=started,finishedAtMs=System.currentTimeMillis(),sourcePageKey=ownSource.key(page),
+                executionJson=request.describe().put("totalMs",elapsed).put("decodeMs",elapsed).put("stage","decoding").toString())}
+        } finally {
+            srLifecycleMutex.unlock()
+        }
     }
 
     // ========== 超分记录（面板的「超分记录」列表） ==========
@@ -1578,6 +1610,7 @@ class ReaderTranslationController(
      * ⚠️ **离开阅读器必须调 [cancelSrChapterJob]**（见 [onReaderClosed]）：超分本章没有通知栏入口，
      * 而它的进行中提示是**系统级浮层**，跟着跑到后台会把芯片贴到别的应用上且无人能消。
      */
+    @Synchronized
     fun startSrChapterJob(chapterIndex: Int, pages: List<Int>, request: SrRequest = SrRequest.capture(context,appPrefs)) {
         val targets = pages.filter { it >= 0 }
         if (targets.isEmpty()) return
@@ -1585,43 +1618,52 @@ class ReaderTranslationController(
         if (srBatchBlockedByTranslate()) return     // 互斥：宿主已经给过提示
         _srChapterJob.value = SrChapterJob(chapterIndex, done = 0, total = targets.size, page = 0)
         val gen = ++srChapterGeneration
-        srChapterJobTask = scope.launch(Dispatchers.IO) {
+        lateinit var task: Job
+        task = scope.launch(Dispatchers.IO,start=CoroutineStart.LAZY) {
             var done = 0
-            try {
-                for (p in targets) {
-                    // 代次对不上 = 已经被取消过（可能又开了一轮）→ 立刻收手，别和新的那轮抢同一页
-                    if (!isActive || gen != srChapterGeneration) break
-                    // ⚠️ 一页一张全尺寸位图：**逐页取、逐页还**，绝不整章装进内存
-                    //    （2x 一页就 40MB，整章必 OOM）。
-                    val decodeStarted=System.currentTimeMillis()
-                    val src = loadSrSource(p,request,decodeStarted)
-                    if (src != null) {
-                        try {
-                            runSr(p, src,request,(System.currentTimeMillis()-decodeStarted).coerceAtLeast(0L))
-                        } finally {
-                            if (!src.isRecycled) src.recycle()
-                        }
+            for (p in targets) {
+                // 代次对不上 = 已经被取消过（可能又开了一轮）→ 立刻收手，别和新的那轮抢同一页
+                if (!isActive || gen != srChapterGeneration) break
+                // ⚠️ 一页一张全尺寸位图：**逐页取、逐页还**，绝不整章装进内存
+                //    （2x 一页就 40MB，整章必 OOM）。
+                val expectedGeneration=captureSrStoreGeneration(p)
+                val decodeStarted=System.currentTimeMillis()
+                val src = loadSrSource(p,request,decodeStarted,expectedGeneration)
+                if (src != null) {
+                    try {
+                        runSr(p, src,request,(System.currentTimeMillis()-decodeStarted).coerceAtLeast(0L),expectedGeneration)
+                    } finally {
+                        if (!src.isRecycled) src.recycle()
                     }
-                    done++
-                    _srChapterJob.value = SrChapterJob(chapterIndex, done, targets.size, p + 1)
                 }
-            } finally {
-                // ⚠️ 收尾必须 `NonCancellable`：取消时普通 finally 里的挂起会被再次取消，
-                //    任务状态就会永久停在「超分中」（面板上那章再也点不动）。
-                // ⚠️ 并且**只有当代次仍是自己那一轮**才清状态：取消后用户立刻重开一轮时，
-                //    旧协程的 finally 会把**新任务**的状态清掉（面板上"刚点就开始"变回没在跑）。
-                withContext(NonCancellable) {
-                    if (gen == srChapterGeneration) _srChapterJob.value = null
-                    srVersion.value += 1
-                }
+                done++
+                _srChapterJob.value = SrChapterJob(chapterIndex, done, targets.size, p + 1)
             }
         }
+        srChapterJobTask=task
+        task.invokeOnCompletion {
+            synchronized(this@ReaderTranslationController) {
+                if(srChapterJobTask===task) {
+                    srChapterJobTask=null
+                    _srChapterJob.value=null
+                }
+                srVersion.value+=1
+            }
+        }
+        task.start()
     }
 
     /** 取消「超分本章」（丢还没跑的页，**已超好的产物保留** —— 与取消章节翻译同一口径）。 */
+    @Synchronized
     fun cancelSrChapterJob() {
+        val task=srChapterJobTask
+        if(task==null) {
+            _srChapterJob.value=null
+            return
+        }
+        srChapterGeneration++
         _srChapterJob.value=_srChapterJob.value?.copy(stopping=true)
-        srChapterJobTask?.cancel()
+        task.cancel()
         // Keep the job visible and prevent restart until the native tile actually exits.
         srVersion.value+=1
     }
@@ -2193,6 +2235,7 @@ class ReaderTranslationController(
                 translatorName = TranslateUtils.buildTranslatorDisplayName(translator, prep.det, prep.ocr, appPrefs),
                 sourceLang = prep.srcLang,
                 targetLang = prep.tgtLang,
+                ocrModel = prep.ocr.name,
             )
             rows.update { it + (page to row) }
             dao.upsert(row)
@@ -2274,14 +2317,12 @@ class ReaderTranslationController(
         // ⚠️ 这里**不再自己预判**"模型下没下载/选没选"：判断集中在 `SuperResolutionEngines`，
         //    它才能给出**具体原因**。预判成 return null 的话用户什么都看不到。
         val request=SrRequest.capture(context,appPrefs)
+        val expectedGeneration=captureSrStoreGeneration(page)
         return launchAutoSr(page) {
             // ⚠️ 走 runSr（不是直接调 SrProcessor）：它顺带挂「正在超分第 N 页…」的进行中提示。
             //    整章批量时**每页都会发一对**（用户口径 2026-10：「每一页都提示」）。
-            val outcome = runSr(page, prep.bitmap,request)
+            val outcome = runSr(page, prep.bitmap,request,expectedGeneration=expectedGeneration)
             if (outcome.ok) {
-                // 超分完成后默认显示在超分底图上（用户口径）
-                srVisualByPage[page] = true
-                srModelByPage[page] = SrStore.storedModelOrNull(context,manga.id,page,mangaKey).orEmpty()
                 // 底图换了 → 该页渲染缓存 + 底图缓存一起作废，并刷新上屏
                 onBaseChanged(page)
                 LogCollector.d(TAG, "翻译时自动超分完成 page=$page")
@@ -2766,6 +2807,7 @@ class ReaderTranslationController(
                 translatorName = TranslateUtils.buildTranslatorDisplayName(translator, det, ocr, appPrefs),
                 sourceLang = srcLang,
                 targetLang = tgtLang,
+                ocrModel = ocr.name,
             )
             rows.update { it + (page to row) }
             dao.upsert(row)
@@ -3646,6 +3688,7 @@ class ReaderTranslationController(
             // 漏掉就等于「任何一次状态流转（翻译中 / 退回未翻译）都清空翻译器与语言元数据」，
             // 详情面板那行会变空且不可恢复（fail() 的注释同样依赖这一点）
             translatorName = old?.translatorName, sourceLang = old?.sourceLang, targetLang = old?.targetLang,
+            ocrModel = old?.ocrModel,
         )
         // ⚠️ 用 update{} 而非 `rows.value = rows.value + x`：
         // 后者是「读-改-写」，与取消清理协程并发时会丢更新。
@@ -3669,6 +3712,7 @@ class ReaderTranslationController(
             failCode = code, failMessage = message, updatedAtMs = System.currentTimeMillis(),
             mangaKey = mangaKey,
             translatorName = old?.translatorName, sourceLang = old?.sourceLang, targetLang = old?.targetLang,
+            ocrModel = old?.ocrModel,
         )
         // ⚠️ 必须 upsert 局部变量 row，不能写 `dao.upsert(rows.value.getValue(pageIndex))`：
         // 并发写入下 rows.value 可能已被别的协程换成不含本页的新 map → NoSuchElementException 崩溃。

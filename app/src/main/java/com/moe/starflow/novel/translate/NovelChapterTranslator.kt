@@ -258,6 +258,8 @@ class NovelChapterTranslator(
             splitVersion = splitVersion,
             paraIndexes = inBatch,
             translatorName = translatorName,
+            sourceLang = sourceLang,
+            targetLang = targetLang,
             now = System.currentTimeMillis(),
         )
     }

@@ -10,6 +10,8 @@ import com.google.android.material.bottomsheet.BottomSheetDialog
 import com.google.android.material.bottomsheet.BottomSheetDialogFragment
 import com.moe.starflow.R
 
+enum class DisplaySortOrder { TITLE, ADDED, RECENTLY_READ }
+
 /**
  * 显示选项底部弹窗：4 种列表模式 + 网格尺寸 + 排序。
  * 各选项切换即生效（无需点「应用」），通过回调实时持久化并刷新书架。
@@ -17,8 +19,9 @@ import com.moe.starflow.R
 class DisplayOptionsSheet(
     private val currentMode: DisplayMode,
     private val currentGridSize: Int,
-    private val sortByAdded: Boolean,
-    private val onApply: (DisplayMode, Int, Boolean) -> Unit
+    private val currentSortOrder: DisplaySortOrder,
+    private val supportsRecentlyRead: Boolean = false,
+    private val onApply: (DisplayMode, Int, DisplaySortOrder) -> Unit,
 ) : BottomSheetDialogFragment() {
 
     override fun onStart() {
@@ -35,6 +38,8 @@ class DisplayOptionsSheet(
         val modeView = view.findViewById<RadioGroup>(R.id.rg_mode)
         val sizeView = view.findViewById<SeekBar>(R.id.seek_grid_size)
         val sortView = view.findViewById<RadioGroup>(R.id.rg_sort)
+        val recentReadView = view.findViewById<View>(R.id.rb_sort_recent_read)
+        recentReadView.visibility = if (supportsRecentlyRead) View.VISIBLE else View.GONE
 
         fun modeToId(mode: DisplayMode): Int = when (mode) {
             DisplayMode.DETAILED_LIST -> R.id.rb_detailed
@@ -43,8 +48,21 @@ class DisplayOptionsSheet(
 
         modeView.check(modeToId(currentMode))
         sizeView.progress = currentGridSize
+        fun sortOrderFor(id: Int): DisplaySortOrder = when (id) {
+            R.id.rb_sort_added -> DisplaySortOrder.ADDED
+            R.id.rb_sort_recent_read -> DisplaySortOrder.RECENTLY_READ
+            else -> DisplaySortOrder.TITLE
+        }
+
+        val initialSort = currentSortOrder.takeIf {
+            supportsRecentlyRead || it != DisplaySortOrder.RECENTLY_READ
+        } ?: DisplaySortOrder.TITLE
         sortView.check(
-            if (sortByAdded) R.id.rb_sort_added else R.id.rb_sort_title
+            when (initialSort) {
+                DisplaySortOrder.ADDED -> R.id.rb_sort_added
+                DisplaySortOrder.RECENTLY_READ -> R.id.rb_sort_recent_read
+                DisplaySortOrder.TITLE -> R.id.rb_sort_title
+            }
         )
 
         // 各选项切换即生效
@@ -54,7 +72,7 @@ class DisplayOptionsSheet(
                 R.id.rb_detailed -> DisplayMode.DETAILED_LIST
                 else -> DisplayMode.GRID
             }
-            onApply(selectedMode, sizeView.progress, sortView.checkedRadioButtonId == R.id.rb_sort_added)
+            onApply(selectedMode, sizeView.progress, sortOrderFor(sortView.checkedRadioButtonId))
         }
 
         var gridSize = currentGridSize
@@ -68,15 +86,13 @@ class DisplayOptionsSheet(
 
                 // 拖动结束时自动应用（避免拖动中反复刷新）
                 override fun onStopTrackingTouch(seekBar: SeekBar?) {
-                    onApply(selectedMode, gridSize, sortView.checkedRadioButtonId == R.id.rb_sort_added)
+                    onApply(selectedMode, gridSize, sortOrderFor(sortView.checkedRadioButtonId))
                 }
             }
         )
 
-        var sortAdded = sortByAdded
         sortView.setOnCheckedChangeListener { _, checkedId ->
-            sortAdded = checkedId == R.id.rb_sort_added
-            onApply(selectedMode, sizeView.progress, sortAdded)
+            onApply(selectedMode, sizeView.progress, sortOrderFor(checkedId))
         }
 
         return view

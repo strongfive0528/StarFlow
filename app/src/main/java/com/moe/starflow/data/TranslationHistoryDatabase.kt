@@ -10,7 +10,7 @@ import androidx.sqlite.db.SupportSQLiteDatabase
 
 @Database(
     entities = [HistoryEntity::class, PageCacheEntity::class, TextTranslateRecord::class, ChatMessageEntity::class, ImportedPageTranslation::class, NovelParagraphTranslation::class, ImportedPageSr::class],
-    version = 23,
+    version = 24,
     exportSchema = false
 )
 abstract class TranslationHistoryDatabase : RoomDatabase() {
@@ -352,13 +352,49 @@ abstract class TranslationHistoryDatabase : RoomDatabase() {
             }
         }
 
+        /**
+         * v23 → v24：修复不同开发分支都使用 v23、但 Room schema hash 不同导致的升级崩溃。
+         *
+         * 这些分支已在数据库 v23 上分别加入 sourcePageKey / executionJson；旧库可能已有其中一个、
+         * 两个都有但 identity_hash 来自另一分支，或仍缺列。迁移逐列检查并补齐，保留已有记录，
+         * Room 随后会写入当前 schema hash。不要改成 destructive migration。
+         */
+        val MIGRATION_23_24 = object : Migration(23, 24) {
+            override fun migrate(db: SupportSQLiteDatabase) {
+                val columns = mutableSetOf<String>()
+                db.query("PRAGMA table_info(imported_page_sr)").use { cursor ->
+                    val nameIndex = cursor.getColumnIndexOrThrow("name")
+                    while (cursor.moveToNext()) columns += cursor.getString(nameIndex)
+                }
+                if (columns.isEmpty()) {
+                    db.execSQL(
+                        "CREATE TABLE IF NOT EXISTS imported_page_sr (" +
+                            "mangaId INTEGER NOT NULL, pageIndex INTEGER NOT NULL, state INTEGER NOT NULL, " +
+                            "modelName TEXT, srcWidth INTEGER NOT NULL, srcHeight INTEGER NOT NULL, " +
+                            "srcBytes INTEGER NOT NULL, outWidth INTEGER NOT NULL, outHeight INTEGER NOT NULL, " +
+                            "outBytes INTEGER NOT NULL, failCode TEXT, failMessage TEXT, " +
+                            "startedAtMs INTEGER NOT NULL, finishedAtMs INTEGER NOT NULL, " +
+                            "updatedAtMs INTEGER NOT NULL, mangaKey TEXT, sourcePageKey TEXT, executionJson TEXT, " +
+                            "PRIMARY KEY(mangaId, pageIndex))"
+                    )
+                } else {
+                    if ("sourcePageKey" !in columns) {
+                        db.execSQL("ALTER TABLE imported_page_sr ADD COLUMN sourcePageKey TEXT")
+                    }
+                    if ("executionJson" !in columns) {
+                        db.execSQL("ALTER TABLE imported_page_sr ADD COLUMN executionJson TEXT")
+                    }
+                }
+            }
+        }
+
         fun getInstance(context: Context): TranslationHistoryDatabase {
             return instance ?: synchronized(this) {
                 instance ?: Room.databaseBuilder(
                     context.applicationContext,
                     TranslationHistoryDatabase::class.java,
                     "translation_history.db"
-                ).addMigrations(MIGRATION_2_3, MIGRATION_3_4, MIGRATION_4_5, MIGRATION_5_6, MIGRATION_6_7, MIGRATION_7_8, MIGRATION_8_9, MIGRATION_9_10, MIGRATION_10_11, MIGRATION_11_12, MIGRATION_12_13, MIGRATION_13_14, MIGRATION_14_15, MIGRATION_15_16, MIGRATION_16_17, MIGRATION_17_18, MIGRATION_18_19, MIGRATION_19_20, MIGRATION_20_21, MIGRATION_21_22, MIGRATION_22_23)
+                ).addMigrations(MIGRATION_2_3, MIGRATION_3_4, MIGRATION_4_5, MIGRATION_5_6, MIGRATION_6_7, MIGRATION_7_8, MIGRATION_8_9, MIGRATION_9_10, MIGRATION_10_11, MIGRATION_11_12, MIGRATION_12_13, MIGRATION_13_14, MIGRATION_14_15, MIGRATION_15_16, MIGRATION_16_17, MIGRATION_17_18, MIGRATION_18_19, MIGRATION_19_20, MIGRATION_20_21, MIGRATION_21_22, MIGRATION_22_23, MIGRATION_23_24)
                 .fallbackToDestructiveMigration()
                 .build().also { instance = it }
             }

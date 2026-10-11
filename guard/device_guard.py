@@ -81,7 +81,7 @@ RULES = [
 
     # ══ CAUTION：不删 app 数据,但会改设备状态 / 降安全等级 / 覆盖文件 ══════
     (r"\badb\b[^\n]*\binstall\b", CAUTION,
-     "adb install —— 正常覆盖安装会保留数据;但**签名不一致时可能触发卸载重装**。装前先备份"),
+     "adb install —— 只能用 guard/install_safe.py 做包名/签名预检；签名不符应停止，禁止先卸载再装"),
     (r"\binstall(?:Debug|Release)\b", CAUTION,
      "Gradle install 任务 —— 同上"),
     (r"\bsettings\s+put\b", CAUTION,
@@ -106,7 +106,12 @@ READONLY = [
     r"\badb\b[^\n]*\b(?:logcat|dumpsys|getprop|pidof|bugreport)\b",
     r"\badb\b[^\n]*\b(?:pull)\b",
     r"\badb\b[^\n]*\bshell\s+(?:ls|cat|stat|du|df|wc|grep|find|head|tail|md5sum|sha256sum|settings\s+get|pm\s+list|dumpsys)\b",
-    r"\bgradlew?\b[^\n]*\b(?:assemble|test|compile|lint|tasks|dependencies|build)\b",
+    r"\bgradlew?\b[^\n]*\b(?:assemble|test|compile|lint)[A-Za-z0-9]*\b",
+    r"\bgradlew?\b[^\n]*\b(?:tasks|dependencies|build)\b",
+    r"^\s*python(?:\.exe)?\s+guard[/\\]backup_app\.py(?:\s|$)",
+    r"^\s*python(?:\.exe)?\s+tools[/\\]sr-research[/\\]verify_sr_wiring\.py(?:\s|$)",
+    r"^\s*git\s+status(?:\s|$)",
+    r"\badb\b[^\n]*\bexec-out\s+run-as\s+\S+\s+tar\s+-[a-z]*c[a-z]*\s+-",
 ]
 
 
@@ -114,9 +119,21 @@ def classify(cmd: str):
     c = " ".join(cmd.split())
     low = c.lower()
 
-    # 先看只读白名单：这些永远安全（但若同时含危险 token 则不放过）
-    danger_tokens = ("uninstall", "clear", "rm ", "wipe", "erase", "format")
-    if any(re.search(p, low) for p in READONLY) and not any(t in low for t in danger_tokens):
+    # 只读命令才直接放行；未知命令和组合命令默认需要人工确认。
+    danger_tokens = (
+        "uninstall", "clear", "rm ", "wipe", "erase", "format", "install",
+        "push", "force-stop", "input", "settings put", "reset-permissions",
+        "revoke", "trim-caches",
+    )
+    has_command_chain = bool(re.search(r"(?:;|&&|\|\||\n)", c))
+    parts = [part.strip() for part in c.split("|")]
+    safe_pipe = len(parts) == 1 or all(
+        re.match(r"^(?:grep|egrep|findstr|select-string|head|tail|wc|sort)(?:\s|$)", part, re.IGNORECASE)
+        for part in parts[1:]
+    )
+    first_is_readonly = any(re.search(p, parts[0], re.IGNORECASE) for p in READONLY)
+    if (not has_command_chain and safe_pipe and first_is_readonly
+            and not any(t in low for t in danger_tokens)):
         return SAFE, "只读查询（列设备/日志/dumpsys/pull/构建产物）"
 
     hits = []
@@ -124,7 +141,7 @@ def classify(cmd: str):
         if re.search(pat, c, re.IGNORECASE):
             hits.append((lvl, why))
     if not hits:
-        return SAFE, "未命中任何危险模式"
+        return CAUTION, "未识别为只读命令；默认不自动放行"
     lvl = max(h[0] for h in hits)
     return lvl, "；".join(h[1] for h in hits if h[0] == lvl)
 
@@ -133,6 +150,11 @@ LABEL = {BLOCKED: "⛔ BLOCKED", CAUTION: "⚠️  CAUTION", SAFE: "✅ SAFE"}
 
 
 def main(argv):
+    for stream in (sys.stdout, sys.stderr):
+        try:
+            stream.reconfigure(encoding="utf-8", errors="replace")
+        except (AttributeError, OSError):
+            pass
     if len(argv) < 2:
         print(__doc__)
         return SAFE

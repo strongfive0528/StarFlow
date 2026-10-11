@@ -35,6 +35,8 @@ data class ImportedPageTranslation(
     val sourceLang: String? = null,
     /** 目标语言（如 zh）。 */
     val targetLang: String? = null,
+    /** 产出原文的 OCR 引擎（Room v21 起保存，使用 OcrEngine.name）。 */
+    val ocrModel: String? = null,
 ) {
     companion object {
         const val STATE_IDLE = 0          // 未翻译

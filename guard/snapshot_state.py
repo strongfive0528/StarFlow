@@ -37,20 +37,27 @@ def sh(adb, serial, cmd):
     return (r.stdout + r.stderr).strip()
 
 
-def pick(adb):
+def pick(adb, requested=None):
     r = subprocess.run([adb, "devices"], capture_output=True, text=True,
                        encoding="utf-8", errors="replace")
+    devices = []
     for line in r.stdout.splitlines()[1:]:
         if "\t" in line:
             s, st = line.split("\t", 1)
             if st.strip() == "device":
-                return s
-    return None
+                devices.append(s)
+    if requested:
+        if requested not in devices:
+            raise RuntimeError(f"指定设备不在线: {requested}；在线设备: {devices or '无'}")
+        return requested
+    if len(devices) > 1:
+        raise RuntimeError("有多个设备在线，请用 --serial 指定: " + ", ".join(devices))
+    return devices[0] if devices else None
 
 
-def snapshot():
+def snapshot(requested_serial=None):
     adb = adb_path()
-    serial = pick(adb)
+    serial = pick(adb, requested_serial)
     if not serial:
         return {"ts": time.strftime("%Y%m%d-%H%M%S"), "state": "OFFLINE"}
 
@@ -76,11 +83,21 @@ def snapshot():
 
 
 def main():
+    for stream in (sys.stdout, sys.stderr):
+        try:
+            stream.reconfigure(encoding="utf-8", errors="replace")
+        except (AttributeError, OSError):
+            pass
     ap = argparse.ArgumentParser()
     ap.add_argument("--diff", action="store_true", help="与上一次快照对比")
+    ap.add_argument("-s", "--serial", help="指定设备；多设备时必填")
     a = ap.parse_args()
 
-    cur = snapshot()
+    try:
+        cur = snapshot(a.serial)
+    except RuntimeError as error:
+        print(f"无法生成快照: {error}", file=sys.stderr)
+        return 2
     os.makedirs(SNAP_DIR, exist_ok=True)
     prevs = sorted(f for f in os.listdir(SNAP_DIR) if f.endswith(".json"))
     prev_file = os.path.join(SNAP_DIR, prevs[-1]) if prevs else None
